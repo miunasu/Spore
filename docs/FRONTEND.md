@@ -13,7 +13,7 @@
 - Spore 主 Agent 行动日志
 - 前端日志
 
-![左栏概览](../img/left.png)
+![左栏概览](../img/Left.png)
 
 ### 查看日志详情
 

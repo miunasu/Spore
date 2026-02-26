@@ -23,7 +23,7 @@
 ## 界面预览
 
 <div align="center">
-  <img src="img/spore.png" alt="Spore 界面预览" width="100%">
+  <img src="img/Spore.png" alt="Spore 界面预览" width="100%">
   <p><i>让你完全掌控整个流程</i></p>
 </div>
 

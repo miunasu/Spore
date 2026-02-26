@@ -1,0 +1,188 @@
+# Remcos RAT 检测规则集
+
+## 1. Suricata/Snort 规则
+
+### 1.1 协议头检测
+alert tcp $HOME_NET any -> $EXTERNAL_NET 2019 (msg:"ET TROJAN Remcos RAT Protocol Header Detected"; flow:established,to_server; content:"|24 04 ff 00|"; depth:4; fast_pattern; reference:url,www.remcos.com; classtype:trojan-activity; sid:2025120501; rev:1;)
+
+### 1.2 心跳包检测
+alert tcp $HOME_NET any -> $EXTERNAL_NET 2019 (msg:"ET TROJAN Remcos RAT Heartbeat Pattern"; flow:established,to_server; content:"|24 04 ff 00 0c 00 00 00 01 00 00 00 30 7c 1e 1e 1f 7c 33 30|"; depth:20; reference:malware,Remcos; classtype:command-and-control; sid:2025120502; rev:1;)
+
+### 1.3 上线包检测
+alert tcp $HOME_NET any -> $EXTERNAL_NET 2019 (msg:"ET TROJAN Remcos RAT Check-in Packet"; flow:established,to_server; content:"EVANGELIST"; nocase; content:"|7c 1e 1e 1f 7c|"; distance:0; within:50; content:"remcos"; nocase; distance:0; within:100; classtype:trojan-activity; sid:2025120503; rev:1;)
+
+### 1.4 进程注入检测
+alert tcp $HOME_NET any -> $EXTERNAL_NET any (msg:"ET TROJAN Remcos Process Injection - SndVol.exe"; flow:established,to_server; content:"SndVol.exe"; nocase; content:"|00 5c 00 57 00 69 00 6e 00 64 00 6f 00 77 00 73 00 5c 00 53 00 79 00 73 00 57 00 4f 00 57 00 36 00 34 00 5c 00 53 00 6e 00 64 00 56 00 6f 00 6c 00 2e 00 65 00 78 00 65|"; classtype:trojan-activity; sid:2025120504; rev:1;)
+
+### 1.5 通用端口检测
+alert tcp $HOME_NET any -> $EXTERNAL_NET 2019 (msg:"ET TROJAN Possible Remcos RAT Communication"; flow:established,to_server; dsize:>50; dsize:<600; classtype:trojan-activity; sid:2025120505; rev:1;)
+
+## 2. YARA 规则
+
+rule Remcos_RAT_EVANGELIST {
+    meta:
+        description = "Detects Remcos RAT variant EVANGELIST"
+        author = "Spore Security Analysis"
+        date = "2025-12-05"
+        threat_level = 8
+        reference = "Remcos commercial RAT"
+    
+    strings:
+        $magic = { 24 04 ff 00 }
+        $name = "EVANGELIST" wide
+        $version = "7.0.3 Pro" wide
+        $log_path = "C:\\ProgramData\\remcos\\logs.dat" wide
+        $process = "SndVol.exe" wide
+        $separator = "|" wide
+        $c2_ip = "93.127.160.198" wide
+    
+    condition:
+        3 of them and filesize < 10MB
+}
+
+rule Remcos_Network_Traffic {
+    meta:
+        description = "Detects Remcos RAT network traffic patterns"
+        author = "Spore Security Analysis"
+        date = "2025-12-05"
+    
+    strings:
+        $protocol_header = { 24 04 ff 00 }
+        $heartbeat = { 24 04 ff 00 0c 00 00 00 01 00 00 00 30 7c 1e 1e 1f 7c 33 30 }
+        $checkin_pattern = "EVANGELIST" wide
+        $separator_pattern = { 7c 1e 1e 1f 7c }
+    
+    condition:
+        2 of them
+}
+
+## 3. Sigma 规则
+
+title: Remcos RAT Network Activity
+id: 20251205-remcos-network
+status: experimental
+description: Detects network traffic patterns associated with Remcos RAT
+author: Spore
+date: 2025/12/05
+references:
+    - https://attack.mitre.org/software/S0332/
+    - https://www.remcos.com/
+logsource:
+    category: firewall
+detection:
+    selection:
+        DestinationPort: 2019
+        Protocol: TCP
+    condition: selection
+falsepositives:
+    - Legitimate remote administration tools using port 2019
+level: high
+tags:
+    - attack.command_and_control
+    - attack.t1043
+
+title: Remcos RAT Process Injection
+id: 20251205-remcos-process
+status: experimental
+description: Detects Remcos RAT process injection into SndVol.exe
+author: Spore
+date: 2025/12/05
+logsource:
+    category: process_creation
+detection:
+    selection:
+        Image|endswith: '\SndVol.exe'
+        ParentImage|endswith: '\remcos.exe'
+    condition: selection
+falsepositives:
+    - Legitimate volume control application
+level: medium
+tags:
+    - attack.process_injection
+    - attack.t1055
+
+## 4. Windows 事件日志检测
+
+### 4.1 PowerShell 检测脚本
+```powershell
+# 检测Remcos相关进程
+Get-Process | Where-Object {$_.ProcessName -eq "SndVol" -and $_.Path -like "*SysWOW64*"} | Select-Object Id, ProcessName, Path
+
+# 检测Remcos文件
+Test-Path "C:\ProgramData\remcos\logs.dat"
+Test-Path "C:\ProgramData\remcos\remcos.exe"
+
+# 检测网络连接
+netstat -ano | findstr ":2019"
+```
+
+### 4.2 Windows Defender ATP 查询
+```
+DeviceNetworkEvents
+| where RemotePort == 2019
+| where ActionType == "ConnectionSuccess"
+| project Timestamp, DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName
+```
+
+## 5. 应急响应检查清单
+
+### 5.1 立即行动
+- [ ] 隔离受影响主机
+- [ ] 阻断到93.127.160.198的出站连接
+- [ ] 收集内存转储
+- [ ] 收集磁盘镜像
+
+### 5.2 取证检查
+- [ ] 检查进程: SndVol.exe (PID检查)
+- [ ] 检查文件: C:\ProgramData\remcos\
+- [ ] 检查注册表: HKCU\Software\Remcos
+- [ ] 检查计划任务: Remcos相关任务
+- [ ] 检查网络连接: 端口2019
+
+### 5.3 清除步骤
+1. 终止恶意进程
+2. 删除相关文件和目录
+3. 清理注册表项
+4. 删除计划任务
+5. 重置网络配置
+6. 重启系统
+
+## 6. IOC (Indicators of Compromise)
+
+### 6.1 网络IOC
+- IP地址: 93.127.160.198
+- 端口: TCP/2019
+- 域名: geoplugin.net (用于地理位置获取)
+
+### 6.2 文件IOC
+- 文件路径: C:\ProgramData\remcos\logs.dat
+- 文件路径: C:\ProgramData\remcos\remcos.exe
+- 进程路径: C:\Windows\SysWOW64\SndVol.exe
+
+### 6.3 行为IOC
+- 心跳间隔: 28-30秒
+- 协议头: 24 04 ff 00
+- 数据分隔符: 7c1e1e1f7c
+- 系统信息收集格式
+
+## 7. 部署说明
+
+### 7.1 Suricata部署
+1. 将规则添加到 `/etc/suricata/rules/remcos.rules`
+2. 重新加载规则: `suricatasc -c reload-rules`
+3. 验证规则加载: `suricatasc -c list-rules`
+
+### 7.2 Snort部署
+1. 将规则添加到 `local.rules`
+2. 重新加载配置
+3. 测试规则: `snort -c snort.conf -R local.rules`
+
+### 7.3 YARA部署
+1. 将规则保存为 `remcos.yar`
+2. 扫描内存: `yara remcos.yar /proc/*/maps`
+3. 扫描文件: `yara -r remcos.yar /`
+
+---
+*规则生成时间: 2025-12-05*
+*威胁等级: 高危*
+*恶意软件: Remcos RAT v7.0.3 Pro (EVANGELIST变种)*

@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Build output
+release/
+spore_backend.exe
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# 日志文件
+logs/
+desktop_app/log/
+*.log
+
+# 临时文件
+temp/
+*.tmp
+*.bak
+
+# 对话历史和输出
+history/
+output/
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+.hypothesis/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Rust/Tauri 编译产物
+desktop_app/frontend/src-tauri/target/
+desktop_app/frontend/src-tauri/Cargo.lock
+
+# Node.js
+desktop_app/frontend/node_modules/
+desktop_app/frontend/dist/
+desktop_app/frontend/.vite/
+desktop_app/frontend/package-lock.json
+desktop_app/frontend/yarn.lock
+desktop_app/frontend/pnpm-lock.yaml
+
+# PyInstaller spec 生成的文件
+*.spec.bak

@@ -1,0 +1,94 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Spore",
+    "version": "1.0.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "shell": {
+        "all": false,
+        "open": true
+      },
+      "window": {
+        "all": false,
+        "close": true,
+        "hide": true,
+        "show": true,
+        "maximize": true,
+        "minimize": true,
+        "unmaximize": true,
+        "unminimize": true,
+        "startDragging": true,
+        "setSize": true,
+        "setMinSize": true,
+        "setMaxSize": true,
+        "setPosition": true,
+        "setFullscreen": true,
+        "setFocus": true,
+        "setIcon": true,
+        "setSkipTaskbar": true,
+        "setTitle": true,
+        "setResizable": true,
+        "setDecorations": true,
+        "setAlwaysOnTop": true
+      }
+    },
+    "bundle": {
+      "active": true,
+      "targets": [
+        "nsis"
+      ],
+      "identifier": "com.spore.desktop",
+      "icon": [
+        "icons/icon.ico",
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/256x256.png"
+      ],
+      "resources": [
+        "prompt/**/*",
+        "skills/**/*",
+        "characters/**/*",
+        ".env",
+        "rg.exe"
+      ],
+      "externalBin": [
+        "binaries/spore_backend"
+      ],
+      "windows": {
+        "nsis": {
+          "installMode": "both",
+          "installerIcon": "icons/icon.ico",
+          "license": null,
+          "languages": [
+            "English"
+          ],
+          "displayLanguageSelector": false
+        }
+      }
+    },
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "resizable": true,
+        "title": "Spore",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 600,
+        "decorations": false,
+        "transparent": true
+      }
+    ]
+  }
+}

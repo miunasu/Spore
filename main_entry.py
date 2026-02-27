@@ -73,7 +73,7 @@ def start_desktop_mode() -> None:
         run_desktop_app()
     except ImportError as e:
         logging.error(f"桌面模式依赖未安装: {e}")
-        logging.error("请先安装桌面模式依赖: pip install fastapi uvicorn websockets")
+        logging.error("请先使用 uv 安装依赖: uv sync")
         logging.error("回退到 CLI 模式...")
         start_cli_mode()
 

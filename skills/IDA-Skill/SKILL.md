@@ -1,6 +1,6 @@
 ---
 name: IDA-Skill
-description: IDA Pro 逆向分析。生成IDA数据包i64， 通过 IDA 获取反汇编、反编译、字符串、导入表、交叉引用等信息。
+description: IDA Pro 逆向分析。通过 IDAPython 脚本获取反汇编、反编译、字符串、导入表、交叉引用等信息。
 ---
 
 # IDA Pro 逆向分析

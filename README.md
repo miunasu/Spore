@@ -146,6 +146,24 @@
 
 ---
 
+## 构建与依赖
+
+### 必需环境（源码运行/构建）
+
+- Python 3.10+
+- uv（Python 依赖同步与运行管理）
+- Node.js 18.x / 20.x LTS
+- Rust + Cargo
+- Visual Studio Build Tools（Windows，含 C++ 工具链）
+
+### 外部工具说明
+
+- `rg.exe`：不再放在仓库中。`build_installer.bat` 会在构建时自动下载、校验（SHA256）并打包到安装目录，终端用户无需手动安装。
+- `NSIS`：用于生成 Windows 安装包（setup.exe），由 Tauri 的 `nsis` 打包目标使用。
+- `UPX`：在 `spore_backend.spec` 中用于 PyInstaller 压缩后端可执行文件，非基础运行必需。
+
+---
+
 ## 许可证
 
 **CC BY-NC 4.0 (署名-非商业性使用 4.0 国际)**

@@ -5,11 +5,13 @@
 import React, { useRef } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import sporeIcon from '@icons/32x32.png';
+import { useSettingsStore } from '../../stores/settingsStore';
 
 export const TitleBar: React.FC = () => {
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
   const isDragging = useRef(false);
   const lastClickTime = useRef(0);
+  const { theme, toggleTheme } = useSettingsStore();
 
   const handleMinimize = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -27,6 +29,12 @@ export const TitleBar: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     await appWindow.close();
+  };
+
+  const handleToggleTheme = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleTheme();
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -88,6 +96,27 @@ export const TitleBar: React.FC = () => {
 
       {/* 右侧 - 窗口控制按钮 */}
       <div className="flex items-center -mr-3">
+        <button
+          onClick={handleToggleTheme}
+          className="w-10 h-8 flex items-center justify-center hover:bg-spore-accent/50 transition-colors"
+          title={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+        >
+          {theme === 'dark' ? (
+            <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.5}
+                d="M12 3v2m0 14v2m7-9h2M3 12H5m11.364 6.364l1.414 1.414M6.222 6.222l1.414 1.414m0 8.728l-1.414 1.414m11.142-11.142l-1.414 1.414M12 8a4 4 0 100 8 4 4 0 000-8z"
+              />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4 text-spore-muted" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M21.752 15.002a9.718 9.718 0 01-3.434.63c-5.385 0-9.75-4.365-9.75-9.75 0-1.199.217-2.347.614-3.408A9.751 9.751 0 1021.752 15z" />
+            </svg>
+          )}
+        </button>
+
         <button
           onClick={handleMinimize}
           className="w-12 h-8 flex items-center justify-center hover:bg-spore-accent/50 transition-colors"

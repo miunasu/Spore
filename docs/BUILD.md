@@ -6,10 +6,10 @@
 
 ```bash
 # 安装 Python 依赖
-pip install -r requirements.txt
+uv sync
 ```
 
-> 📌 **注意**：其他外部工具依赖请查看 `requirements.txt` 中的 **External Tool Dependencies** 章节。
+> 📌 **注意**：其他外部工具依赖请查看 `README.md` 的 **构建与依赖** 章节。
 
 ### 2. 配置环境
 
@@ -19,13 +19,13 @@ pip install -r requirements.txt
 
 ```bash
 # CLI 模式
-python main.py
+uv run python main.py
 
 # 桌面模式
 编译成功后双击release文件夹中的Spore.exe
 编译成功后通过release文件夹中的安装程序进行安装
 # 或
-python main_entry.py
+uv run python main_entry.py
 ```
 
 ---
@@ -38,7 +38,24 @@ python main_entry.py
 - Node.js 18.x / 20.x LTS
 - Rust + Cargo
 - Visual Studio Build Tools（Windows）
-- PyInstaller：`pip install pyinstaller`
+- uv（用于 Python 依赖与运行管理）
+
+> 首次构建需要联网访问 GitHub Releases（用于下载 ripgrep）。
+
+### 最简顺序（推荐）
+
+```bash
+# 1) 后端依赖（uv）
+uv sync
+
+# 2) 前端依赖（npm）
+cd desktop_app/frontend
+npm install
+cd ../..
+
+# 3) 一键构建安装包
+build_installer.bat
+```
 
 ### 一键构建
 
@@ -47,10 +64,10 @@ build_installer.bat
 ```
 
 该脚本会自动完成以下步骤：
-1. 使用 PyInstaller 构建后端（onefile 模式，单文件可执行程序）
+1. 检测后端依赖，缺失时自动执行 `uv sync`，然后构建后端 onefile 可执行程序
 2. 准备 Tauri sidecar（复制后端 exe 并重命名为 `spore_backend-x86_64-pc-windows-msvc.exe`）
-3. 准备资源文件（prompt/skills/characters/.env/rg.exe）
-4. 构建 Tauri 前端并打包 NSIS 安装包
+3. 准备资源文件（prompt/skills/characters/.env）并自动下载、校验、解压 `rg.exe`
+4. 检测前端依赖，缺失时自动执行 `npm install`，并打包 NSIS 安装包
 5. 复制所有构建产物到 `release/` 目录
 
 ### 输出文件
@@ -81,6 +98,27 @@ release/
 
 ---
 
+## 技能子仓库维护（IDA-Skill）
+
+`skills/IDA-Skill` 使用 Git subtree 方式接入上游仓库：`https://github.com/miunasu/IDA-Skill`
+
+常用命令：
+
+```bash
+# 首次接入（本仓库已完成）
+git subtree add --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main --squash
+
+# 从上游同步更新
+git subtree pull --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main --squash
+
+# （可选）向上游推送本仓库在该子目录的改动
+git subtree push --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main
+```
+
+> 如果你使用 SSH，可将仓库地址替换为 `git@github.com:miunasu/IDA-Skill.git`。
+
+---
+
 ## 手动构建（高级）
 
 如果需要单独构建各个组件：
@@ -88,11 +126,11 @@ release/
 ### 1. 构建后端
 
 ```bash
-# 安装 PyInstaller
-pip install pyinstaller
+# 同步依赖（包含 PyInstaller）
+uv sync
 
 # 构建单文件可执行程序（onefile 模式）
-pyinstaller spore_backend.spec --noconfirm
+uv run pyinstaller spore_backend.spec --noconfirm
 ```
 
 输出位置：`dist/spore_backend.exe`（单文件，约 50-80MB）
@@ -163,9 +201,10 @@ npm run tauri build
 ### Q: build_installer.bat 执行失败？
 
 1. 检查是否缺少 `.env` 文件（必需）
-2. 检查是否缺少 `rg.exe`（ripgrep，必需）
-3. 确保 PyInstaller 已安装：`pip install pyinstaller`
-4. 查看错误信息，确认是哪个步骤失败
+2. 检查网络/代理是否可访问 GitHub（ripgrep 由脚本自动下载并校验）
+3. 删除 `.tool-cache/ripgrep/` 后重试，排除损坏缓存
+4. 确保依赖已同步：`uv sync`
+5. 查看错误信息，确认是哪个步骤失败
 
 ### Q: 安装包体积太大？
 
@@ -192,7 +231,7 @@ npm run dev
 ### 后端开发
 
 ```bash
-python main_entry.py
+uv run python main_entry.py
 ```
 
 后端 API 在 `http://127.0.0.1:8765` 启动。

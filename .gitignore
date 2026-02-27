@@ -24,12 +24,15 @@ MANIFEST
 # Build output
 release/
 spore_backend.exe
+rg.exe
+.tool-cache/
 
 # Virtual Environment
 venv/
 ENV/
 env/
 .venv
+.uv-cache/
 
 # IDE
 .vscode/
@@ -67,6 +70,14 @@ desktop.ini
 # Rust/Tauri 编译产物
 desktop_app/frontend/src-tauri/target/
 desktop_app/frontend/src-tauri/Cargo.lock
+
+# Tauri 打包前复制的运行时资源
+desktop_app/frontend/src-tauri/.env
+desktop_app/frontend/src-tauri/rg.exe
+desktop_app/frontend/src-tauri/binaries/
+desktop_app/frontend/src-tauri/prompt/
+desktop_app/frontend/src-tauri/skills/
+desktop_app/frontend/src-tauri/characters/
 
 # Node.js
 desktop_app/frontend/node_modules/

@@ -5,6 +5,78 @@
     <link rel="icon" type="image/png" href="./src-tauri/icons/32x32.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Spore Desktop</title>
+    <script>
+      (() => {
+        const STORAGE_KEY = 'spore-settings';
+        let theme = 'dark';
+        const THEME_VARS = {
+          dark: {
+            '--spore-bg-rgb': '15 15 15',
+            '--spore-panel-rgb': '26 26 26',
+            '--spore-card-rgb': '36 36 36',
+            '--spore-accent-rgb': '45 45 45',
+            '--spore-border-rgb': '61 61 61',
+            '--spore-highlight-rgb': '16 163 127',
+            '--spore-highlight-hover-rgb': '26 127 100',
+            '--spore-text-rgb': '236 236 236',
+            '--spore-muted-rgb': '142 142 142',
+            '--spore-error-rgb': '239 68 68',
+            '--spore-warning-rgb': '245 158 11',
+            '--spore-info-rgb': '59 130 246',
+            '--spore-success-rgb': '16 185 129',
+            '--spore-scrollbar-rgb': '61 61 61',
+            '--spore-scrollbar-hover-rgb': '77 77 77',
+            '--spore-glass-rgb': '26 26 26',
+            '--spore-card-hover-rgb': '45 45 45',
+          },
+          light: {
+            '--spore-bg-rgb': '243 244 246',
+            '--spore-panel-rgb': '243 244 246',
+            '--spore-card-rgb': '235 237 240',
+            '--spore-accent-rgb': '221 224 229',
+            '--spore-border-rgb': '186 192 201',
+            '--spore-highlight-rgb': '14 116 144',
+            '--spore-highlight-hover-rgb': '15 87 95',
+            '--spore-text-rgb': '15 23 42',
+            '--spore-muted-rgb': '100 116 139',
+            '--spore-error-rgb': '220 38 38',
+            '--spore-warning-rgb': '217 119 6',
+            '--spore-info-rgb': '37 99 235',
+            '--spore-success-rgb': '5 150 105',
+            '--spore-scrollbar-rgb': '139 146 157',
+            '--spore-scrollbar-hover-rgb': '92 101 116',
+            '--spore-glass-rgb': '243 244 246',
+            '--spore-card-hover-rgb': '235 237 240',
+          },
+        };
+
+        try {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const config = JSON.parse(saved);
+            if (config?.theme === 'light' || config?.theme === 'dark') {
+              theme = config.theme;
+            }
+          }
+        } catch (_) {}
+
+        const root = document.documentElement;
+        const vars = THEME_VARS[theme];
+        Object.entries(vars).forEach(([name, value]) => {
+          root.style.setProperty(name, value);
+        });
+
+        root.setAttribute('data-theme', theme);
+        root.setAttribute('data-theme-preloaded', '1');
+        root.style.colorScheme = theme;
+        root.style.backgroundColor = `rgb(${vars['--spore-bg-rgb']})`;
+
+        const preloadStyle = document.createElement('style');
+        preloadStyle.id = 'spore-theme-preload-style';
+        preloadStyle.textContent = `html, body, #root { background-color: rgb(${vars['--spore-bg-rgb']}); }`;
+        document.head.appendChild(preloadStyle);
+      })();
+    </script>
     <style>
       html, body, #root {
         margin: 0;
@@ -12,6 +84,11 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
+      }
+
+      html,
+      body {
+        background-color: inherit;
       }
     </style>
   </head>

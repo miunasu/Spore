@@ -24,6 +24,8 @@ MANIFEST
 # Build output
 release/
 spore_backend.exe
+rg.exe
+.tool-cache/
 
 # Virtual Environment
 venv/

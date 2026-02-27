@@ -22,6 +22,16 @@ set "PROJECT_ROOT=%cd%"
 set "FRONTEND_DIR=%PROJECT_ROOT%\desktop_app\frontend"
 set "TAURI_DIR=%FRONTEND_DIR%\src-tauri"
 set "UV_CACHE_DIR=%PROJECT_ROOT%\.uv-cache"
+set "TOOLS_CACHE_DIR=%PROJECT_ROOT%\.tool-cache"
+set "RG_VERSION=14.1.1"
+set "RG_PACKAGE_NAME=ripgrep-%RG_VERSION%-x86_64-pc-windows-msvc.zip"
+set "RG_PACKAGE_SHA256=%RG_PACKAGE_NAME%.sha256"
+set "RG_RELEASE_BASE_URL=https://github.com/BurntSushi/ripgrep/releases/download/%RG_VERSION%"
+set "RG_CACHE_DIR=%TOOLS_CACHE_DIR%\ripgrep\%RG_VERSION%"
+set "RG_ARCHIVE_PATH=%RG_CACHE_DIR%\%RG_PACKAGE_NAME%"
+set "RG_SHA256_PATH=%RG_CACHE_DIR%\%RG_PACKAGE_SHA256%"
+set "RG_EXTRACT_DIR=%RG_CACHE_DIR%\ripgrep-%RG_VERSION%-x86_64-pc-windows-msvc"
+set "RG_EXE_PATH=%RG_EXTRACT_DIR%\rg.exe"
 
 REM ----------------------------------------
 REM Environment Check
@@ -44,6 +54,12 @@ if %ERRORLEVEL% neq 0 (
 where cargo >nul 2>nul
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Rust/Cargo not found
+    goto :error
+)
+
+where powershell >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] PowerShell not found
     goto :error
 )
 
@@ -162,12 +178,16 @@ if exist "%PROJECT_ROOT%\.env" (
     goto :error
 )
 
-REM Copy ripgrep (rg.exe) - copy directly from project directory
-echo Copying rg.exe (ripgrep)...
-if exist "%PROJECT_ROOT%\rg.exe" (
-    copy /y "%PROJECT_ROOT%\rg.exe" "%TAURI_DIR%\rg.exe" >nul
-) else (
-    echo [ERROR] rg.exe does not exist, please place ripgrep in project root
+REM Ensure ripgrep exists (download + SHA256 verify + cache)
+echo Preparing rg.exe (ripgrep)...
+call :ensure_ripgrep
+if %ERRORLEVEL% neq 0 (
+    goto :error
+)
+
+copy /y "%RG_EXE_PATH%" "%TAURI_DIR%\rg.exe" >nul
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to copy rg.exe to Tauri resources
     goto :error
 )
 
@@ -289,6 +309,51 @@ echo.
 
 cd "%PROJECT_ROOT%"
 goto :end
+
+:ensure_ripgrep
+if exist "%RG_EXE_PATH%" (
+    echo [OK] Using cached ripgrep: %RG_EXE_PATH%
+    exit /b 0
+)
+
+echo [INFO] Downloading ripgrep %RG_VERSION%...
+if not exist "%RG_CACHE_DIR%" mkdir "%RG_CACHE_DIR%"
+
+if exist "%RG_ARCHIVE_PATH%" del /f /q "%RG_ARCHIVE_PATH%" >nul 2>nul
+if exist "%RG_SHA256_PATH%" del /f /q "%RG_SHA256_PATH%" >nul 2>nul
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri '%RG_RELEASE_BASE_URL%/%RG_PACKAGE_NAME%' -OutFile '%RG_ARCHIVE_PATH%'"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to download ripgrep package
+    exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing -Uri '%RG_RELEASE_BASE_URL%/%RG_PACKAGE_SHA256%' -OutFile '%RG_SHA256_PATH%'"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to download ripgrep SHA256 file
+    exit /b 1
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$expected = (Select-String -Path '%RG_SHA256_PATH%' -Pattern '^[a-fA-F0-9]{64}$' | Select-Object -First 1).Line.ToLower(); if (-not $expected) { Write-Error 'Unable to parse SHA256 value from checksum file'; exit 1 }; $actual = (Get-FileHash -Path '%RG_ARCHIVE_PATH%' -Algorithm SHA256).Hash.ToLower(); if ($expected -ne $actual) { Write-Error ('SHA256 mismatch: expected ' + $expected + ', actual ' + $actual); exit 1 }"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] ripgrep package SHA256 verification failed
+    exit /b 1
+)
+
+if exist "%RG_EXTRACT_DIR%" rmdir /s /q "%RG_EXTRACT_DIR%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '%RG_ARCHIVE_PATH%' -DestinationPath '%RG_CACHE_DIR%' -Force"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to extract ripgrep archive
+    exit /b 1
+)
+
+if not exist "%RG_EXE_PATH%" (
+    echo [ERROR] ripgrep extracted, but rg.exe not found: %RG_EXE_PATH%
+    exit /b 1
+)
+
+echo [OK] ripgrep ready: %RG_EXE_PATH%
+exit /b 0
 
 :error
 echo.

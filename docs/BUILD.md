@@ -40,6 +40,8 @@ uv run python main_entry.py
 - Visual Studio Build Tools（Windows）
 - uv（用于 Python 依赖与运行管理）
 
+> 首次构建需要联网访问 GitHub Releases（用于下载 ripgrep）。
+
 ### 一键构建
 
 ```bash
@@ -49,7 +51,7 @@ build_installer.bat
 该脚本会自动完成以下步骤：
 1. 使用 PyInstaller 构建后端（onefile 模式，单文件可执行程序）
 2. 准备 Tauri sidecar（复制后端 exe 并重命名为 `spore_backend-x86_64-pc-windows-msvc.exe`）
-3. 准备资源文件（prompt/skills/characters/.env/rg.exe）
+3. 准备资源文件（prompt/skills/characters/.env）并自动下载、校验、解压 `rg.exe`
 4. 构建 Tauri 前端并打包 NSIS 安装包
 5. 复制所有构建产物到 `release/` 目录
 
@@ -184,9 +186,10 @@ npm run tauri build
 ### Q: build_installer.bat 执行失败？
 
 1. 检查是否缺少 `.env` 文件（必需）
-2. 检查是否缺少 `rg.exe`（ripgrep，必需）
-3. 确保依赖已同步：`uv sync`
-4. 查看错误信息，确认是哪个步骤失败
+2. 检查网络/代理是否可访问 GitHub（ripgrep 由脚本自动下载并校验）
+3. 删除 `.tool-cache/ripgrep/` 后重试，排除损坏缓存
+4. 确保依赖已同步：`uv sync`
+5. 查看错误信息，确认是哪个步骤失败
 
 ### Q: 安装包体积太大？
 

@@ -216,11 +216,14 @@ class ActionParser:
         char = text[start]
         
         # 1. 多行内容 @SPORE:CONTENT...@SPORE:CONTENT_END
-        # 检查是否以 @SPORE:CONTENT 开头（后面可能是换行或空格）
+        # 检查是否以 @SPORE:CONTENT 开头
         if text[start:start+14] == '@SPORE:CONTENT':
-            # 确保后面是换行符或空格，避免误匹配 @SPORE:CONTENT_END
-            if start + 14 >= len(text) or text[start+14] in '\n \t':
-                return self._parse_multiline_value(text, start)
+            # 检查后面是否是 @SPORE:CONTENT_END（紧跟的情况）
+            if start + 14 < len(text) and text[start+14:start+32] == '@SPORE:CONTENT_END':
+                # 空内容的情况：@SPORE:CONTENT@SPORE:CONTENT_END
+                return "", start + 32
+            # 正常情况：后面应该是换行符、空格或其他内容
+            return self._parse_multiline_value(text, start)
         
         # 2. 双引号字符串
         if char == '"':
@@ -247,18 +250,21 @@ class ActionParser:
         # 跳过开头的 @SPORE:CONTENT (14个字符)
         i = start + 14
         
-        # 跳过可能的换行
-        if i < len(text) and text[i] == '\n':
+        # 跳过可能的空格和换行
+        while i < len(text) and text[i] in ' \t\n':
             i += 1
         
         content_start = i
-        end_marker = text.find('@SPORE:CONTENT_END', i)
+        
+        # 查找最后一个 @SPORE:CONTENT_END
+        end_marker = text.rfind('@SPORE:CONTENT_END', i)
         
         if end_marker == -1:
             # 没有找到结束标记，取到文本结束
             return text[content_start:].rstrip(), len(text)
         
-        content = text[content_start:end_marker].rstrip('\n')
+        # 提取内容（去除末尾的换行符和空格）
+        content = text[content_start:end_marker].rstrip('\n \t')
         return content, end_marker + 18
     
     def _parse_quoted_value(self, text: str, start: int, quote: str) -> tuple:

@@ -2,7 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-:root,
 html[data-theme='dark'] {
   --spore-bg-rgb: 15 15 15;
   --spore-panel-rgb: 26 26 26;
@@ -210,4 +209,3 @@ textarea::-webkit-scrollbar-thumb,
 textarea::-webkit-scrollbar-track {
   cursor: default;
 }
-

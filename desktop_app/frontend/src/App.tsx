@@ -16,6 +16,26 @@ import { useConfirmStore } from './stores/confirmStore';
 import { useSettingsStore } from './stores/settingsStore';
 import type { WSEvent, LogType, AgentStatus, OldLogType } from './types';
 
+const PRELOADED_THEME_VAR_KEYS = [
+  '--spore-bg-rgb',
+  '--spore-panel-rgb',
+  '--spore-card-rgb',
+  '--spore-accent-rgb',
+  '--spore-border-rgb',
+  '--spore-highlight-rgb',
+  '--spore-highlight-hover-rgb',
+  '--spore-text-rgb',
+  '--spore-muted-rgb',
+  '--spore-error-rgb',
+  '--spore-warning-rgb',
+  '--spore-info-rgb',
+  '--spore-success-rgb',
+  '--spore-scrollbar-rgb',
+  '--spore-scrollbar-hover-rgb',
+  '--spore-glass-rgb',
+  '--spore-card-hover-rgb',
+] as const;
+
 function App() {
   const { addLog, setActiveConversation } = useLogStore();
   const { addAgent, updateAgentStatus, addAgentLog } = useAgentStore();
@@ -25,8 +45,15 @@ function App() {
   const theme = useSettingsStore((state) => state.theme);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    document.documentElement.style.colorScheme = theme;
+    const root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    root.style.colorScheme = theme;
+
+    if (root.getAttribute('data-theme-preloaded') === '1') {
+      PRELOADED_THEME_VAR_KEYS.forEach((key) => root.style.removeProperty(key));
+      root.removeAttribute('data-theme-preloaded');
+      document.getElementById('spore-theme-preload-style')?.remove();
+    }
   }, [theme]);
 
   // 同步活跃对话到日志 store

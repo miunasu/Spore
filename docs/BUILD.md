@@ -6,10 +6,10 @@
 
 ```bash
 # 安装 Python 依赖
-pip install -r requirements.txt
+uv sync
 ```
 
-> 📌 **注意**：其他外部工具依赖请查看 `requirements.txt` 中的 **External Tool Dependencies** 章节。
+> 📌 **注意**：其他外部工具依赖请查看 `README.md` 的 **构建与依赖** 章节。
 
 ### 2. 配置环境
 
@@ -19,13 +19,13 @@ pip install -r requirements.txt
 
 ```bash
 # CLI 模式
-python main.py
+uv run python main.py
 
 # 桌面模式
 编译成功后双击release文件夹中的Spore.exe
 编译成功后通过release文件夹中的安装程序进行安装
 # 或
-python main_entry.py
+uv run python main_entry.py
 ```
 
 ---
@@ -38,7 +38,7 @@ python main_entry.py
 - Node.js 18.x / 20.x LTS
 - Rust + Cargo
 - Visual Studio Build Tools（Windows）
-- PyInstaller：`pip install pyinstaller`
+- uv（用于 Python 依赖与运行管理）
 
 ### 一键构建
 
@@ -88,11 +88,11 @@ release/
 ### 1. 构建后端
 
 ```bash
-# 安装 PyInstaller
-pip install pyinstaller
+# 同步依赖（包含 PyInstaller）
+uv sync
 
 # 构建单文件可执行程序（onefile 模式）
-pyinstaller spore_backend.spec --noconfirm
+uv run pyinstaller spore_backend.spec --noconfirm
 ```
 
 输出位置：`dist/spore_backend.exe`（单文件，约 50-80MB）
@@ -164,7 +164,7 @@ npm run tauri build
 
 1. 检查是否缺少 `.env` 文件（必需）
 2. 检查是否缺少 `rg.exe`（ripgrep，必需）
-3. 确保 PyInstaller 已安装：`pip install pyinstaller`
+3. 确保依赖已同步：`uv sync`
 4. 查看错误信息，确认是哪个步骤失败
 
 ### Q: 安装包体积太大？
@@ -192,7 +192,7 @@ npm run dev
 ### 后端开发
 
 ```bash
-python main_entry.py
+uv run python main_entry.py
 ```
 
 后端 API 在 `http://127.0.0.1:8765` 启动。

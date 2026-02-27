@@ -24,11 +24,11 @@ html[data-theme='dark'] {
 }
 
 html[data-theme='light'] {
-  --spore-bg-rgb: 248 250 252;
-  --spore-panel-rgb: 255 255 255;
-  --spore-card-rgb: 241 245 249;
-  --spore-accent-rgb: 226 232 240;
-  --spore-border-rgb: 203 213 225;
+  --spore-bg-rgb: 243 244 246;
+  --spore-panel-rgb: 243 244 246;
+  --spore-card-rgb: 235 237 240;
+  --spore-accent-rgb: 221 224 229;
+  --spore-border-rgb: 186 192 201;
   --spore-highlight-rgb: 14 116 144;
   --spore-highlight-hover-rgb: 15 87 95;
   --spore-text-rgb: 15 23 42;
@@ -37,10 +37,10 @@ html[data-theme='light'] {
   --spore-warning-rgb: 217 119 6;
   --spore-info-rgb: 37 99 235;
   --spore-success-rgb: 5 150 105;
-  --spore-scrollbar-rgb: 148 163 184;
-  --spore-scrollbar-hover-rgb: 100 116 139;
-  --spore-glass-rgb: 255 255 255;
-  --spore-card-hover-rgb: 241 245 249;
+  --spore-scrollbar-rgb: 139 146 157;
+  --spore-scrollbar-hover-rgb: 92 101 116;
+  --spore-glass-rgb: 243 244 246;
+  --spore-card-hover-rgb: 235 237 240;
 }
 
 * {

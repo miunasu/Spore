@@ -318,8 +318,9 @@ fn start_backend(spore_root: &PathBuf) -> Option<Child> {
             return None;
         }
     } else {
-        // 开发环境：用 python 启动 main_entry.py
+        // 开发环境：用 uv 启动 main_entry.py
         let script = spore_root.join("main_entry.py");
+        let uv_cache_dir = spore_root.join(".uv-cache");
         
         #[cfg(target_os = "windows")]
         {
@@ -330,10 +331,12 @@ fn start_backend(spore_root: &PathBuf) -> Option<Child> {
             let stdout_file = File::create(log_dir.join("backend_stdout.log")).ok();
             let stderr_file = File::create(log_dir.join("backend_stderr.log")).ok();
             
-            let mut cmd = Command::new("python");
-            cmd.arg(&script)
+            let mut cmd = Command::new("uv");
+            cmd.args(["run", "python"])
+                .arg(&script)
                 .current_dir(spore_root)
                 .env("SPORE_DESKTOP_MODE", "1")
+                .env("UV_CACHE_DIR", &uv_cache_dir)
                 .creation_flags(CREATE_NO_WINDOW);
             
             if let Some(f) = stdout_file {
@@ -383,10 +386,12 @@ fn start_backend(spore_root: &PathBuf) -> Option<Child> {
             let stdout_file = File::create(log_dir.join("backend_stdout.log")).ok();
             let stderr_file = File::create(log_dir.join("backend_stderr.log")).ok();
             
-            let mut cmd = Command::new("python3");
-            cmd.arg(&script)
+            let mut cmd = Command::new("uv");
+            cmd.args(["run", "python"])
+                .arg(&script)
                 .current_dir(spore_root)
-                .env("SPORE_DESKTOP_MODE", "1");
+                .env("SPORE_DESKTOP_MODE", "1")
+                .env("UV_CACHE_DIR", &uv_cache_dir);
             
             if let Some(f) = stdout_file {
                 cmd.stdout(f);

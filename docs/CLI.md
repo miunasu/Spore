@@ -6,10 +6,10 @@
 
 ```bash
 # 方式 1：通过统一入口
-python main_entry.py
+uv run python main_entry.py
 
 # 方式 2：直接启动
-python main.py
+uv run python main.py
 ```
 
 ## CLI 命令列表

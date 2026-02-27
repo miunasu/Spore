@@ -21,21 +21,17 @@ cd /d "%~dp0"
 set "PROJECT_ROOT=%cd%"
 set "FRONTEND_DIR=%PROJECT_ROOT%\desktop_app\frontend"
 set "TAURI_DIR=%FRONTEND_DIR%\src-tauri"
+set "UV_CACHE_DIR=%PROJECT_ROOT%\.uv-cache"
 
 REM ----------------------------------------
 REM Environment Check
 REM ----------------------------------------
 echo [CHECK] Checking build environment...
 
-where python >nul 2>nul
+where uv >nul 2>nul
 if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Python not found
-    goto :error
-)
-
-where pyinstaller >nul 2>nul
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] PyInstaller not found, please run: pip install pyinstaller
+    echo [ERROR] uv not found
+    echo [ERROR] Install uv first: https://docs.astral.sh/uv/getting-started/installation/
     goto :error
 )
 
@@ -75,8 +71,15 @@ if exist "build\spore_backend" (
     rmdir /s /q "build\spore_backend"
 )
 
-echo Executing PyInstaller (onefile mode)...
-pyinstaller spore_backend.spec --noconfirm
+echo Syncing Python dependencies with uv...
+call uv sync
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] uv sync failed
+    goto :error
+)
+
+echo Executing PyInstaller (uv run, onefile mode)...
+call uv run pyinstaller spore_backend.spec --noconfirm
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] PyInstaller packaging failed
     goto :error

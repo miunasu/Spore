@@ -42,6 +42,21 @@ uv run python main_entry.py
 
 > 首次构建需要联网访问 GitHub Releases（用于下载 ripgrep）。
 
+### 最简顺序（推荐）
+
+```bash
+# 1) 后端依赖（uv）
+uv sync
+
+# 2) 前端依赖（npm）
+cd desktop_app/frontend
+npm install
+cd ../..
+
+# 3) 一键构建安装包
+build_installer.bat
+```
+
 ### 一键构建
 
 ```bash
@@ -49,10 +64,10 @@ build_installer.bat
 ```
 
 该脚本会自动完成以下步骤：
-1. 使用 PyInstaller 构建后端（onefile 模式，单文件可执行程序）
+1. 检测后端依赖，缺失时自动执行 `uv sync`，然后构建后端 onefile 可执行程序
 2. 准备 Tauri sidecar（复制后端 exe 并重命名为 `spore_backend-x86_64-pc-windows-msvc.exe`）
 3. 准备资源文件（prompt/skills/characters/.env）并自动下载、校验、解压 `rg.exe`
-4. 构建 Tauri 前端并打包 NSIS 安装包
+4. 检测前端依赖，缺失时自动执行 `npm install`，并打包 NSIS 安装包
 5. 复制所有构建产物到 `release/` 目录
 
 ### 输出文件

@@ -63,6 +63,12 @@ if %ERRORLEVEL% neq 0 (
     goto :error
 )
 
+if not exist "%PROJECT_ROOT%\pyproject.toml" (
+    echo [ERROR] pyproject.toml not found
+    echo [HINT] Please sync latest branch code before building.
+    goto :error
+)
+
 echo [OK] Build environment check passed
 echo.
 
@@ -87,11 +93,20 @@ if exist "build\spore_backend" (
     rmdir /s /q "build\spore_backend"
 )
 
-echo Syncing Python dependencies with uv...
-call uv sync
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] uv sync failed
-    goto :error
+set "PYINSTALLER_EXE=%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe"
+set "NEED_UV_SYNC=0"
+if not exist "%PYINSTALLER_EXE%" set "NEED_UV_SYNC=1"
+if /I "%FORCE_UV_SYNC%"=="1" set "NEED_UV_SYNC=1"
+
+if "%NEED_UV_SYNC%"=="1" (
+    echo [INFO] Backend dependencies missing, running uv sync...
+    call uv sync
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] uv sync failed
+        goto :error
+    )
+) else (
+    echo [OK] Backend dependencies already installed ^(skip uv sync^)
 )
 
 echo Executing PyInstaller (uv run, onefile mode)...
@@ -208,12 +223,19 @@ if exist "dist" rmdir /s /q "dist"
 if exist ".vite" rmdir /s /q ".vite"
 if exist "node_modules\.vite" rmdir /s /q "node_modules\.vite"
 
-REM Install dependencies
-echo Installing frontend dependencies...
-call npm install
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] npm install failed
-    goto :error
+set "NEED_NPM_INSTALL=0"
+if not exist "node_modules" set "NEED_NPM_INSTALL=1"
+if /I "%FORCE_NPM_INSTALL%"=="1" set "NEED_NPM_INSTALL=1"
+
+if "%NEED_NPM_INSTALL%"=="1" (
+    echo Installing frontend dependencies...
+    call npm install
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] npm install failed
+        goto :error
+    )
+) else (
+    echo [OK] Frontend dependencies already installed ^(skip npm install^)
 )
 
 REM Build Tauri (will automatically build frontend first)

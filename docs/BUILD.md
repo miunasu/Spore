@@ -81,6 +81,27 @@ release/
 
 ---
 
+## 技能子仓库维护（IDA-Skill）
+
+`skills/IDA-Skill` 使用 Git subtree 方式接入上游仓库：`https://github.com/miunasu/IDA-Skill`
+
+常用命令：
+
+```bash
+# 首次接入（本仓库已完成）
+git subtree add --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main --squash
+
+# 从上游同步更新
+git subtree pull --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main --squash
+
+# （可选）向上游推送本仓库在该子目录的改动
+git subtree push --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main
+```
+
+> 如果你使用 SSH，可将仓库地址替换为 `git@github.com:miunasu/IDA-Skill.git`。
+
+---
+
 ## 手动构建（高级）
 
 如果需要单独构建各个组件：

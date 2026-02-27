@@ -2,14 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 现代化全局样式 */
+:root,
+html[data-theme='dark'] {
+  --spore-bg-rgb: 15 15 15;
+  --spore-panel-rgb: 26 26 26;
+  --spore-card-rgb: 36 36 36;
+  --spore-accent-rgb: 45 45 45;
+  --spore-border-rgb: 61 61 61;
+  --spore-highlight-rgb: 16 163 127;
+  --spore-highlight-hover-rgb: 26 127 100;
+  --spore-text-rgb: 236 236 236;
+  --spore-muted-rgb: 142 142 142;
+  --spore-error-rgb: 239 68 68;
+  --spore-warning-rgb: 245 158 11;
+  --spore-info-rgb: 59 130 246;
+  --spore-success-rgb: 16 185 129;
+  --spore-scrollbar-rgb: 61 61 61;
+  --spore-scrollbar-hover-rgb: 77 77 77;
+  --spore-glass-rgb: 26 26 26;
+  --spore-card-hover-rgb: 45 45 45;
+}
+
+html[data-theme='light'] {
+  --spore-bg-rgb: 248 250 252;
+  --spore-panel-rgb: 255 255 255;
+  --spore-card-rgb: 241 245 249;
+  --spore-accent-rgb: 226 232 240;
+  --spore-border-rgb: 203 213 225;
+  --spore-highlight-rgb: 14 116 144;
+  --spore-highlight-hover-rgb: 15 87 95;
+  --spore-text-rgb: 15 23 42;
+  --spore-muted-rgb: 100 116 139;
+  --spore-error-rgb: 220 38 38;
+  --spore-warning-rgb: 217 119 6;
+  --spore-info-rgb: 37 99 235;
+  --spore-success-rgb: 5 150 105;
+  --spore-scrollbar-rgb: 148 163 184;
+  --spore-scrollbar-hover-rgb: 100 116 139;
+  --spore-glass-rgb: 255 255 255;
+  --spore-card-hover-rgb: 241 245 249;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   width: 100%;
   height: 100%;
   margin: 0;
@@ -19,15 +61,14 @@ html, body, #root {
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-  background-color: #0f0f0f;
-  color: #ececec;
+  background-color: rgb(var(--spore-bg-rgb));
+  color: rgb(var(--spore-text-rgb));
   font-size: 14px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* 现代滚动条 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -38,22 +79,21 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3d3d3d;
+  background: rgb(var(--spore-scrollbar-rgb));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4d4d4d;
+  background: rgb(var(--spore-scrollbar-hover-rgb));
 }
 
-/* 文本选择 */
 ::selection {
-  background: rgba(16, 163, 127, 0.3);
+  background: rgb(var(--spore-highlight-rgb) / 0.3);
   color: white;
 }
 
-/* 输入框样式 */
-input, textarea {
+input,
+textarea {
   font-family: inherit;
   font-size: inherit;
 }
@@ -63,7 +103,6 @@ textarea:focus {
   outline: none;
 }
 
-/* 按钮基础样式 */
 button {
   font-family: inherit;
   cursor: pointer;
@@ -75,16 +114,14 @@ button:disabled {
   opacity: 0.5;
 }
 
-/* 卡片悬浮效果 */
 .card-hover {
   transition: all 0.2s ease;
 }
 
 .card-hover:hover {
-  background-color: #2d2d2d;
+  background-color: rgb(var(--spore-card-hover-rgb));
 }
 
-/* 渐变边框效果 */
 .gradient-border {
   position: relative;
 }
@@ -95,7 +132,11 @@ button:disabled {
   inset: 0;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(135deg, #10a37f, #3b82f6);
+  background: linear-gradient(
+    135deg,
+    rgb(var(--spore-highlight-rgb)),
+    rgb(var(--spore-info-rgb))
+  );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
@@ -108,37 +149,40 @@ button:disabled {
   opacity: 1;
 }
 
-/* 消息气泡动画 */
 .message-enter {
   animation: slideUp 0.3s ease-out;
 }
 
-/* 加载动画 */
 .loading-dots::after {
   content: '';
   animation: dots 1.5s infinite;
 }
 
 @keyframes dots {
-  0%, 20% { content: '.'; }
-  40% { content: '..'; }
-  60%, 100% { content: '...'; }
+  0%,
+  20% {
+    content: '.';
+  }
+  40% {
+    content: '..';
+  }
+  60%,
+  100% {
+    content: '...';
+  }
 }
 
-/* 玻璃效果 */
 .glass {
-  background: rgba(26, 26, 26, 0.8);
+  background: rgb(var(--spore-glass-rgb) / 0.8);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
 }
 
-/* 禁用拖拽 */
 img {
   -webkit-user-drag: none;
   user-select: none;
 }
 
-/* 隐藏滚动条但保持滚动功能 */
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -148,7 +192,6 @@ img {
   display: none;
 }
 
-/* 拖拽文件时的全局光标样式 */
 body.dragging-file {
   cursor: grabbing !important;
 }
@@ -157,15 +200,14 @@ body.dragging-file * {
   cursor: grabbing !important;
 }
 
-/* 拖拽时的文件项样式 */
 .dragging-item {
   opacity: 0.5;
   transform: scale(0.98);
 }
 
-/* 滚动条光标样式 - 确保滚动条区域使用默认光标 */
 textarea::-webkit-scrollbar,
 textarea::-webkit-scrollbar-thumb,
 textarea::-webkit-scrollbar-track {
   cursor: default;
 }
+

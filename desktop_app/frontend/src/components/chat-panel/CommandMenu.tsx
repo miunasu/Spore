@@ -472,8 +472,14 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [envError, setEnvError] = useState<string | null>(null);
   const [modalContent, setModalContent] = useState<{ title: string; content: string } | null>(null);
   const { newConversation } = useChatStore();
-  const { autoCleanShortLogs, autoCleanMinLines, setAutoCleanShortLogs, setAutoCleanMinLines } =
-    useSettingsStore();
+  const {
+    autoCleanShortLogs,
+    autoCleanMinLines,
+    theme,
+    setTheme,
+    setAutoCleanShortLogs,
+    setAutoCleanMinLines,
+  } = useSettingsStore();
 
   // ESC 关闭菜单
   useEffect(() => {
@@ -798,6 +804,31 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
             <div className="flex-1 overflow-y-auto p-5">
               {settingsTab === 'general' ? (
                 <div className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="text-sm text-spore-text">主题</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setTheme('dark')}
+                        className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                          theme === 'dark'
+                            ? 'bg-spore-highlight/20 text-spore-highlight border-spore-highlight/60'
+                            : 'bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text hover:bg-spore-accent/50'
+                        }`}
+                      >
+                        暗色
+                      </button>
+                      <button
+                        onClick={() => setTheme('light')}
+                        className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                          theme === 'light'
+                            ? 'bg-spore-highlight/20 text-spore-highlight border-spore-highlight/60'
+                            : 'bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text hover:bg-spore-accent/50'
+                        }`}
+                      >
+                        亮色
+                      </button>
+                    </div>
+                  </div>
                   {/* 自动清理短日志 */}
                   <div className="space-y-3">
                     <label className="flex items-center gap-3 cursor-pointer">

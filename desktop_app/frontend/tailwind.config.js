@@ -1,31 +1,30 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
   ],
   theme: {
     extend: {
       colors: {
-        // 现代深色主题
-        'spore-bg': '#0f0f0f',
-        'spore-panel': '#1a1a1a',
-        'spore-card': '#242424',
-        'spore-accent': '#2d2d2d',
-        'spore-border': '#3d3d3d',
-        'spore-highlight': '#10a37f',
-        'spore-highlight-hover': '#1a7f64',
-        'spore-text': '#ececec',
-        'spore-muted': '#8e8e8e',
-        'spore-error': '#ef4444',
-        'spore-warning': '#f59e0b',
-        'spore-info': '#3b82f6',
-        'spore-success': '#10b981',
+        'spore-bg': 'rgb(var(--spore-bg-rgb) / <alpha-value>)',
+        'spore-panel': 'rgb(var(--spore-panel-rgb) / <alpha-value>)',
+        'spore-card': 'rgb(var(--spore-card-rgb) / <alpha-value>)',
+        'spore-accent': 'rgb(var(--spore-accent-rgb) / <alpha-value>)',
+        'spore-border': 'rgb(var(--spore-border-rgb) / <alpha-value>)',
+        'spore-highlight': 'rgb(var(--spore-highlight-rgb) / <alpha-value>)',
+        'spore-highlight-hover': 'rgb(var(--spore-highlight-hover-rgb) / <alpha-value>)',
+        'spore-text': 'rgb(var(--spore-text-rgb) / <alpha-value>)',
+        'spore-muted': 'rgb(var(--spore-muted-rgb) / <alpha-value>)',
+        'spore-error': 'rgb(var(--spore-error-rgb) / <alpha-value>)',
+        'spore-warning': 'rgb(var(--spore-warning-rgb) / <alpha-value>)',
+        'spore-info': 'rgb(var(--spore-info-rgb) / <alpha-value>)',
+        'spore-success': 'rgb(var(--spore-success-rgb) / <alpha-value>)',
       },
       boxShadow: {
-        'glow': '0 0 20px rgba(16, 163, 127, 0.15)',
-        'card': '0 2px 8px rgba(0, 0, 0, 0.3)',
-        'elevated': '0 8px 32px rgba(0, 0, 0, 0.4)',
+        glow: '0 0 20px rgba(16, 163, 127, 0.15)',
+        card: '0 2px 8px rgba(0, 0, 0, 0.3)',
+        elevated: '0 8px 32px rgba(0, 0, 0, 0.4)',
       },
       animation: {
         'fade-in': 'fadeIn 0.2s ease-out',
@@ -49,4 +48,5 @@ export default {
     },
   },
   plugins: [],
-}
+};
+

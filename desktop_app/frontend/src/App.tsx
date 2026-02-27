@@ -13,6 +13,7 @@ import { useAgentStore } from './stores/agentStore';
 import { useChatStore } from './stores/chatStore';
 import { useTodoStore } from './stores/todoStore';
 import { useConfirmStore } from './stores/confirmStore';
+import { useSettingsStore } from './stores/settingsStore';
 import type { WSEvent, LogType, AgentStatus, OldLogType } from './types';
 
 function App() {
@@ -21,6 +22,12 @@ function App() {
   const { loadHistory, activeConversationId } = useChatStore();
   const { setTodos } = useTodoStore();
   const { setPendingRequest, clearRequest } = useConfirmStore();
+  const theme = useSettingsStore((state) => state.theme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.colorScheme = theme;
+  }, [theme]);
 
   // 同步活跃对话到日志 store
   useEffect(() => {

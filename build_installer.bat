@@ -40,9 +40,32 @@ echo [CHECK] Checking build environment...
 
 where uv >nul 2>nul
 if %ERRORLEVEL% neq 0 (
-    echo [ERROR] uv not found
-    echo [ERROR] Install uv first: https://docs.astral.sh/uv/getting-started/installation/
-    goto :error
+    echo [WARN] uv not found
+    echo.
+    
+    REM Check if Python is available
+    where python >nul 2>nul
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] uv is required to build the project
+        echo [ERROR] Install uv first: https://docs.astral.sh/uv/getting-started/installation/
+        goto :error
+    )
+    
+    set /p "INSTALL_UV=Do you want to install uv using Python pip? (Y/N): "
+    if /I "!INSTALL_UV!"=="Y" (
+        echo [INFO] Installing uv via pip...
+        python -m pip install uv
+        if !ERRORLEVEL! neq 0 (
+            echo [ERROR] Failed to install uv via pip
+            echo [ERROR] Please install uv manually: https://docs.astral.sh/uv/getting-started/installation/
+            goto :error
+        )
+        echo [OK] uv installed successfully
+    ) else (
+        echo [ERROR] uv is required to build the project
+        echo [ERROR] Install uv first: https://docs.astral.sh/uv/getting-started/installation/
+        goto :error
+    )
 )
 
 where node >nul 2>nul

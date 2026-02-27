@@ -3,7 +3,7 @@
   
   # Spore AI Agent
   
-  **具有现代GUI透明可控的万能 AI Agent | 在主机上完成任何任务**
+  **具有现代GUI透明可控的 AI Agent | 在主机上完成任何任务**
   
   不只是写代码 - 文档处理、逆向分析、网络流量解析、文件管理、系统操作...
   
@@ -15,7 +15,7 @@
   
   ---
   
-  📖 [配置说明](docs/CONFIGURATION.md) | 💻 [CLI 模式](docs/CLI.md) | 🔨 [构建指南](docs/BUILD.md) | 🎯 [技能开发](docs/SKILLS.md) | 🏗️ [架构设计](docs/ARCHITECTURE.md) | 🎨 [前端指南](docs/FRONTEND.md) | 📦 [Release](https://github.com/miunasu/Spore/releases)
+  📖 [配置说明](docs/CONFIGURATION.md) | 💻 [CLI 模式](docs/CLI.md) | 🔨 [构建指南](docs/BUILD.md) | 🎯 [技能开发](docs/SKILLS.md) | 🏗️ [架构设计](docs/ARCHITECTURE.md) | 📦 [Release](https://github.com/miunasu/Spore/releases)
 </div>
 
 ---
@@ -70,7 +70,9 @@
 - **📊 数据分析**：自动收集网络数据、处理分析、生成可视化报告 [2025-2026全球金融市场综合分析报告](example/MarketReport/)
 - **💾 文件操作**：搜索、读写、批量处理本地文件
 - **⚙️ 系统管理**：执行命令、管理进程、自动化运维任务
-- **💻 代码开发**：当然，也能写代码、调试、重构
+- **💻 代码开发**：当然，也能写代码、调试、重构  
+
+[银狐 SilverFox1 案例快速复现指南](docs/SILVERFOX.md)
 
 **从日常办公到专业领域工作，一个 Agent 搞定所有任务。**
 
@@ -118,9 +120,11 @@
 
 从 [Release 页面](https://github.com/miunasu/Spore/releases) 下载安装包，一键安装即可。
 
-### 2. 配置 API
+### 2. 配置 LLM 参数
 
-启动后点击右侧"设置"按钮，在"环境配置"页面填写 LLM API Key。
+启动后点击右侧"设置"按钮，在"环境配置"页面填写 LLM API Key 与 url。  
+
+在 LLM 参数章节根据使用的模型填写最大输出 Token 和上下文最大 Token（默认为DeepSeek配置）。
 
 或者直接编辑 `.env` 文件，填写配置。
 
@@ -156,6 +160,13 @@
 - Rust + Cargo
 - Visual Studio Build Tools（Windows，含 C++ 工具链）
 
+### 构建
+
+双击 `build_installer.bat` 即可开始快速构建
+
+📖 构建详情请见 [🔨 构建指南](docx/BUILD.md) 
+
+
 ### 外部工具说明
 
 - `rg.exe`：不再放在仓库中。`build_installer.bat` 会在构建时自动下载、校验（SHA256）并打包到安装目录，终端用户无需手动安装。
@@ -164,16 +175,25 @@
 
 ---
 
+### 公众号
+
+![](img/count.jpg)
+
+---
+
+### 交流群
+
+![](img/group.jpg)
+
+---
+
 ## 许可证
 
-**CC BY-NC 4.0 (署名-非商业性使用 4.0 国际)**
+**AGPL-3.0 License (GNU Affero General Public License v3.0)**
 
-本项目采用知识共享署名-非商业性使用 4.0 国际许可协议进行许可。
+本项目采用 GNU Affero 通用公共许可证 v3.0 进行许可。
 
-✅ **允许**：个人学习、研究、教学等非营利性使用  
-❌ **禁止**：任何形式的商业使用（包括但不限于企业内部使用、提供付费服务、集成到商业产品等）
-
-如需商业使用许可，请联系项目作者。
+如需商业使用，请联系 miunasu@foxmail.com
 
 详见 [LICENSE](LICENSE) 文件
 

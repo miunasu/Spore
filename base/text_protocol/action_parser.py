@@ -285,8 +285,8 @@ class ActionParser:
         i = start + 1  # 跳过开头引号
         value_chars = []
         
-        # 检查是否是 command 工具，如果是则不进行转义处理
-        is_command_tool = tool_name.lower() == 'command'
+        # 检查是否是 execute_command 工具，如果是则不进行转义处理
+        is_command_tool = tool_name.lower() == 'execute_command'
         
         while i < len(text):
             char = text[i]

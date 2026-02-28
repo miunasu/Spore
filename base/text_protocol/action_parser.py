@@ -256,8 +256,8 @@ class ActionParser:
         
         content_start = i
         
-        # 查找最后一个 @SPORE:CONTENT_END
-        end_marker = text.rfind('@SPORE:CONTENT_END', i)
+        # 查找第一个（而不是最后一个）@SPORE:CONTENT_END
+        end_marker = text.find('@SPORE:CONTENT_END', i)
         
         if end_marker == -1:
             # 没有找到结束标记，取到文本结束

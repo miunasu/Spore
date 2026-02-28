@@ -277,7 +277,7 @@ class ActionParser:
             text: 完整文本
             start: 开始位置
             quote: 引号类型（单引号或双引号）
-            tool_name: 工具名称（用于特殊处理）
+            tool_name: 工具名称（保留参数以保持接口兼容，但不再使用）
         
         Returns:
             (value, end_position) 元组
@@ -285,28 +285,23 @@ class ActionParser:
         i = start + 1  # 跳过开头引号
         value_chars = []
         
-        # 检查是否是 execute_command 工具，如果是则不进行转义处理
-        is_command_tool = tool_name.lower() == 'execute_command'
-        
         while i < len(text):
             char = text[i]
             
-            if not is_command_tool and char == '\\' and i + 1 < len(text):
-                # 转义字符（仅在非 command 工具时处理）
+            if char == '\\' and i + 1 < len(text):
+                # 转义字符处理
+                # 只处理引号转义，避免路径中的 \t、\n、\\ 等被误解析
+                # - \" -> "
+                # - \' -> '
+                # 其他所有情况（包括 \\、\t、\n 等）都保留原样
                 next_char = text[i + 1]
                 if next_char == quote:
+                    # 转义的引号：\" 或 \'
                     value_chars.append(quote)
                     i += 2
-                elif next_char == 'n':
-                    value_chars.append('\n')
-                    i += 2
-                elif next_char == 't':
-                    value_chars.append('\t')
-                    i += 2
-                elif next_char == '\\':
-                    value_chars.append('\\')
-                    i += 2
                 else:
+                    # 其他情况：保留反斜杠，继续处理下一个字符
+                    # 这样 \\、\t、\n、\r、\S、\P、\A 等都会被保留为原始字符串
                     value_chars.append(char)
                     i += 1
             elif char == quote:

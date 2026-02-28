@@ -126,8 +126,8 @@ class ActionParser:
             else:
                 param_text = remaining_lines
         
-        # 解析参数
-        parameters = self.parse_parameters(param_text)
+        # 解析参数（传入工具名称用于特殊处理）
+        parameters = self.parse_parameters(param_text, tool_name)
         
         return ParsedAction(
             tool_name=tool_name,
@@ -135,7 +135,7 @@ class ActionParser:
             raw_text=raw_text
         )
     
-    def parse_parameters(self, param_text: str) -> Dict[str, Any]:
+    def parse_parameters(self, param_text: str, tool_name: str = "") -> Dict[str, Any]:
         """
         解析参数文本，支持多种格式
         
@@ -147,6 +147,7 @@ class ActionParser:
         
         Args:
             param_text: 参数文本
+            tool_name: 工具名称（用于特殊处理）
             
         Returns:
             参数字典
@@ -185,20 +186,21 @@ class ActionParser:
                 parameters[key] = ""
                 break
             
-            # 解析参数值
-            value, new_i = self._parse_value(text, i)
+            # 解析参数值（传入工具名称用于特殊处理）
+            value, new_i = self._parse_value(text, i, tool_name)
             parameters[key] = value
             i = new_i
         
         return parameters
     
-    def _parse_value(self, text: str, start: int) -> tuple:
+    def _parse_value(self, text: str, start: int, tool_name: str = "") -> tuple:
         """
         从指定位置解析参数值
         
         Args:
             text: 完整文本
             start: 开始位置
+            tool_name: 工具名称（用于特殊处理）
             
         Returns:
             (value, end_position) 元组
@@ -227,11 +229,11 @@ class ActionParser:
         
         # 2. 双引号字符串
         if char == '"':
-            return self._parse_quoted_value(text, start, '"')
+            return self._parse_quoted_value(text, start, '"', tool_name)
         
         # 3. 单引号字符串
         if char == "'":
-            return self._parse_quoted_value(text, start, "'")
+            return self._parse_quoted_value(text, start, "'", tool_name)
         
         # 4. JSON 对象或数组
         if char == '{' or char == '[':
@@ -267,16 +269,30 @@ class ActionParser:
         content = text[content_start:end_marker].rstrip('\n \t')
         return content, end_marker + 18
     
-    def _parse_quoted_value(self, text: str, start: int, quote: str) -> tuple:
-        """解析引号字符串"""
+    def _parse_quoted_value(self, text: str, start: int, quote: str, tool_name: str = "") -> tuple:
+        """
+        解析引号字符串
+        
+        Args:
+            text: 完整文本
+            start: 开始位置
+            quote: 引号类型（单引号或双引号）
+            tool_name: 工具名称（用于特殊处理）
+        
+        Returns:
+            (value, end_position) 元组
+        """
         i = start + 1  # 跳过开头引号
         value_chars = []
+        
+        # 检查是否是 command 工具，如果是则不进行转义处理
+        is_command_tool = tool_name.lower() == 'command'
         
         while i < len(text):
             char = text[i]
             
-            if char == '\\' and i + 1 < len(text):
-                # 转义字符
+            if not is_command_tool and char == '\\' and i + 1 < len(text):
+                # 转义字符（仅在非 command 工具时处理）
                 next_char = text[i + 1]
                 if next_char == quote:
                     value_chars.append(quote)

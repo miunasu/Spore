@@ -623,6 +623,12 @@ def handle_execute_command(args: Dict[str, Any]) -> str:
         # 如果命令中包含路径，建议在构造命令前先规范化路径
         
         timeout = a.get("timeout")  # 获取超时参数
+        # 将 timeout 转换为整数（如果提供）
+        if timeout is not None:
+            try:
+                timeout = int(timeout)
+            except (ValueError, TypeError):
+                raise ValueError(f"timeout 参数必须是整数，收到: {timeout}")
         return execute_command(cmd, timeout=timeout)  # 返回 Dict
     
     return safe_tool_execution("execute_command", _impl, args, return_json=True)

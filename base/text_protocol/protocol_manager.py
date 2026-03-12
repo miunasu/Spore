@@ -18,7 +18,7 @@ def find_standalone_marker(text: str, marker: str) -> int:
     """
     查找独占一行的协议标记位置
     
-    标记必须满足：在行首，且后面是换行符或文本结束
+    标记必须满足：在行首，且后面是换行符、空白字符或文本结束
     
     Args:
         text: 文本内容
@@ -36,10 +36,24 @@ def find_standalone_marker(text: str, marker: str) -> int:
         if found > 0 and text[found - 1] != '\n':
             pos = found + len(marker)
             continue
-        # 检查后面是否是换行符或文本结束
+        # 检查后面是否是换行符、空白字符或文本结束
         end_pos = found + len(marker)
-        if end_pos >= len(text) or text[end_pos] == '\n':
+        if end_pos >= len(text):
+            # 文本结束
             return found
+        # 检查后面的字符
+        next_char = text[end_pos]
+        if next_char == '\n':
+            # 换行符
+            return found
+        # 允许标记后有空白字符（空格、制表符），但必须在行尾
+        if next_char in ' \t':
+            # 跳过所有空白字符，检查是否到达换行符或文本结束
+            i = end_pos
+            while i < len(text) and text[i] in ' \t':
+                i += 1
+            if i >= len(text) or text[i] == '\n':
+                return found
         pos = end_pos
     return -1
 

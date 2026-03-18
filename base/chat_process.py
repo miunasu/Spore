@@ -153,7 +153,20 @@ class ChatProcess:
         temperature: float, 
         system: Optional[str]
     ) -> Dict[str, Any]:
-        """使用 OpenAI SDK 调用 LLM"""
+        """使用 OpenAI SDK 调用 LLM（自动选择 Chat Completions 或 Responses API）"""
+        if self.config.use_responses_api:
+            return self._do_openai_responses_call(request_id, messages, model, temperature, system)
+        return self._do_openai_chat_call(request_id, messages, model, temperature, system)
+
+    def _do_openai_chat_call(
+        self,
+        request_id: str,
+        messages: list,
+        model: str,
+        temperature: float,
+        system: Optional[str]
+    ) -> Dict[str, Any]:
+        """使用 OpenAI Chat Completions API"""
         # 构建最终消息列表
         final_messages = []
         if system:
@@ -188,10 +201,6 @@ class ChatProcess:
             from .utils.token_counter import count_tokens
             token_count = count_tokens(final_messages)
             set_current_token_count(token_count)
-            
-            # message debug
-            # from .logger import log_info
-            # log_info("OPENAI_MESSAGES_DEBUG", f"final_messages: {final_messages}")
 
             completion = self.client.chat.completions.create(
                 model=model,
@@ -213,24 +222,15 @@ class ChatProcess:
             set_current_token_count(current_total + reply_tokens)
             
             # 构建本次发送的消息（不包含历史记忆）
-            # 只包含：system prompt（仅第一次对话） + 最后一条用户消息
             current_sent = []
-            
-            # 判断是否是第一次对话（messages 中只有一条用户消息）
             is_first_conversation = len([m for m in messages if m.get("role") == "user"]) == 1
-            
-            # 只在第一次对话时添加 system prompt
             if is_first_conversation and system:
                 if self.config.system_as_user:
                     current_sent.append({"role": "user", "content": system})
                 else:
                     current_sent.append({"role": "system", "content": system})
-            
-            # 添加最后一条真正的用户消息
-            # 在 system_as_user 模式下，需要跳过可能已经包含 system 的第一条消息
             for msg in reversed(messages):
                 if msg.get("role") == "user":
-                    # 检查是否是 system prompt（避免重复）
                     if self.config.system_as_user and system and msg.get("content") == system:
                         continue
                     current_sent.append(msg)
@@ -239,7 +239,7 @@ class ChatProcess:
             result = {
                 "content": message.content,
                 "role": message.role,
-                "sent_messages": current_sent,  # 只包含本次发送的内容
+                "sent_messages": current_sent,
             }
             
             return {"request_id": request_id, "status": "success", "data": result}
@@ -250,7 +250,94 @@ class ChatProcess:
             
             log_error(
                 "LLM_API_CALL_ERROR",
-                f"OpenAI API call error: {str(exc)}",
+                f"OpenAI Chat API call error: {str(exc)}",
+                exc,
+                context={"request_id": request_id, "model": model}
+            )
+            return {"request_id": request_id, "status": "error", "data": str(exc)}
+
+    def _do_openai_responses_call(
+        self,
+        request_id: str,
+        messages: list,
+        model: str,
+        temperature: float,
+        system: Optional[str]
+    ) -> Dict[str, Any]:
+        """使用 OpenAI Responses API（client.responses.create）"""
+        # Responses API 使用 `input` 字段传消息，`instructions` 传 system prompt
+        # 消息格式与 Chat Completions 相同（role + content）
+        input_messages = []
+
+        if system and self.config.system_as_user:
+            # system_as_user 模式：将 system 拼入第一条 user 消息
+            if _config.memory_continued:
+                _config.memory_continued = False
+                if messages and messages[0].get("role") == "user":
+                    messages[0]["content"] = system + "\n\n" + messages[0]["content"]
+                else:
+                    input_messages.append({"role": "user", "content": system})
+            else:
+                input_messages.append({"role": "user", "content": system})
+
+        input_messages.extend(messages)
+
+        if self.config.system_as_user:
+            input_messages = self._merge_consecutive_messages(input_messages)
+
+        try:
+            from .utils.token_counter import count_tokens
+            token_count = count_tokens(input_messages)
+            set_current_token_count(token_count)
+
+            # 构建请求参数
+            # Responses API 不支持 temperature，instructions 对应 system prompt
+            request_params: Dict[str, Any] = {
+                "model": model,
+                "input": input_messages,
+                "max_output_tokens": self.config.get_max_tokens(),
+            }
+            if system and not self.config.system_as_user:
+                request_params["instructions"] = system
+
+            response = self.client.responses.create(**request_params)
+
+            if self.global_cancel_flag.is_set():
+                return {"request_id": request_id, "status": "cancelled", "data": None}
+
+            reply_content = response.output_text or ""
+
+            reply_tokens = count_tokens(reply_content)
+            current_total = get_current_token_count()
+            set_current_token_count(current_total + reply_tokens)
+
+            # 构建本次发送的消息记录
+            current_sent = []
+            is_first_conversation = len([m for m in messages if m.get("role") == "user"]) == 1
+            if is_first_conversation and system and not self.config.system_as_user:
+                current_sent.append({"role": "system", "content": system})
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    if self.config.system_as_user and system and msg.get("content") == system:
+                        continue
+                    current_sent.append(msg)
+                    break
+
+            result = {
+                "content": reply_content,
+                "role": "assistant",
+                "sent_messages": current_sent,
+            }
+
+            return {"request_id": request_id, "status": "success", "data": result}
+
+        except Exception as exc:
+            if self.global_cancel_flag.is_set():
+                return {"request_id": request_id, "status": "cancelled", "data": None}
+
+            log_error(
+                "LLM_API_CALL_ERROR",
+                f"OpenAI Responses API call error: {str(exc)}",
                 exc,
                 context={"request_id": request_id, "model": model}
             )

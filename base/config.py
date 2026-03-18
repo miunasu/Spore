@@ -26,6 +26,10 @@ class Config:
         self.openai_api_url: Optional[str] = os.getenv("OPENAI_API_URL", "").strip() or None
         self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         
+        # 是否使用 OpenAI Responses API（替代 Chat Completions API）
+        # 启用后使用 client.responses.create，支持 o 系列模型的原生接口
+        self.use_responses_api: bool = os.getenv("USE_RESPONSES_API", "false").lower() == "true"
+
         # 是否清理 SDK 的 x-stainless headers（某些第三方API代理如packyapi需要）
         # 对 OpenAI SDK 和 Anthropic SDK 都生效
         self.clean_sdk_headers: bool = os.getenv("CLEAN_SDK_HEADERS", "false").lower() == "true"

@@ -13,6 +13,7 @@ OPENAI_API_KEY=your_key
 OPENAI_BASE_URL=https://api.deepseek.com  # 可选，用于兼容 DeepSeek 等
 MODEL_MAIN=deepseek-chat                # 主 Agent 模型
 MODEL_SUPERVISOR=deepseek-chat          # 监督 Agent 模型
+USE_RESPONSES_API=true                  # 选择OPENAI API格式  默认使用Completions  推荐使用Responses
 
 # Anthropic Claude 配置
 ANTHROPIC_API_KEY=your_key

@@ -26,6 +26,9 @@ CONTEXT_MAX_TOKENS=128000     # 上下文最大 token 数
 
 ### 4. 配置 IDA-Skill
 
+下载 [最新版 IDA-Skill](https://github.com/miunasu/IDA-Skill)，并放入skills文件夹  
+
+
 编辑 [IDA-Skill 配置文件](../skills/IDA-Skill/config.json)，填写 IDA 目录中的 `idat.exe` 绝对路径。
 
 示例：

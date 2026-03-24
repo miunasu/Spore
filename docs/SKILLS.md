@@ -63,7 +63,7 @@ python scripts/tool1.py --input file.txt --output result.txt
 使用这个技能包时需要注意的事项。
 ```
 
-## 已集成技能包示例
+## 技能包示例
 
 ### IDA-Skill
 
@@ -171,7 +171,6 @@ parameters:
 参考已有的技能包：
 
 - [skill-creator](../skills/skill-creator/SKILL.md) - 技能包创建工具
-- [IDA-Skill](../skills/IDA-Skill/SKILL.md) - IDA Pro 逆向工程
 
 ## 贡献技能包
 

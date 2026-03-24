@@ -96,12 +96,13 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": "在系统中执行cmd命令并返回其输出",
+            "description": "在系统中执行PowerShell命令并返回其输出。命令通过原生PowerShell执行，支持所有PowerShell语法。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "要执行的命令字符串"},
-                    "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"}
+                    "command": {"type": "string", "description": "直接传递给PowerShell的命令字符串，该工具会把命令直接传递给原生的PowerShell终端"},
+                    "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
+                    "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },
                 "required": ["command"],
             },
@@ -629,7 +630,10 @@ def handle_execute_command(args: Dict[str, Any]) -> str:
                 timeout = int(timeout)
             except (ValueError, TypeError):
                 raise ValueError(f"timeout 参数必须是整数，收到: {timeout}")
-        return execute_command(cmd, timeout=timeout)  # 返回 Dict
+        
+        working_dir = a.get("working_dir")  # 获取工作目录参数
+        
+        return execute_command(cmd, timeout=timeout, working_dir=working_dir)  # 返回 Dict
     
     return safe_tool_execution("execute_command", _impl, args, return_json=True)
 

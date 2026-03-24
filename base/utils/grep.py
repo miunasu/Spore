@@ -126,6 +126,14 @@ def grep(params: Dict[str, Any]) -> Dict[str, Any]:
     result["command"] = " ".join(shlex.quote(part) for part in command)
 
     start = time.time()
+    
+    # Windows 创建标志：防止终端闪屏
+    creation_flags = 0
+    if os.name == "nt":
+        # CREATE_NO_WINDOW (0x08000000) 完全隐藏控制台窗口
+        # CREATE_NEW_PROCESS_GROUP (0x00000200) 创建新进程组
+        creation_flags = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
+    
     try:
         proc = subprocess.run(
             command,
@@ -134,6 +142,7 @@ def grep(params: Dict[str, Any]) -> Dict[str, Any]:
             encoding="utf-8",
             errors="replace",
             check=False,
+            creationflags=creation_flags,
         )
     except FileNotFoundError as e:
         result["stderr"] = "未找到 rg (ripgrep) 命令，请确认已安装并在 PATH 中"

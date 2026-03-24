@@ -1051,11 +1051,17 @@ def _validate_c_syntax(content: str, file_path: Path) -> tuple[bool, Optional[st
             f.write(content)
         
         # 运行gcc语法检查
+        # Windows 创建标志：防止终端闪屏
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
+        
         result = subprocess.run(
             ['gcc', '-fsyntax-only', temp_file],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            creationflags=creation_flags,
         )
         
         # 清理临时文件

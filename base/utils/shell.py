@@ -6,67 +6,15 @@ from typing import Optional, Dict, Any, List, Union
 from .encoding import smart_decode
 
 
-def _parse_cd_command(command: str) -> tuple[Optional[str], str]:
+def execute_command(command: Union[str, List[str]], timeout: Optional[int] = None, encoding: str = None, working_dir: Optional[str] = None) -> Dict[str, Any]:
     """
-    解析命令字符串，提取 cd 命令的目标目录和剩余命令。
-    
-    参数:
-        command: 命令字符串，可能包含 cd 命令（如 "cd path && command"）
-    
-    返回:
-        (target_dir, remaining_command): 目标目录（如果存在）和剩余的命令
-        如果未找到 cd 命令，返回 (None, command)
-    """
-    import re
-    import shlex
-    
-    # 去除首尾空白
-    command = command.strip()
-    
-    # 匹配 cd 命令的模式：
-    # - cd "path" && command
-    # - cd path && command
-    # - cd /d "path" && command (Windows CMD)
-    # - cd /d path && command
-    # 支持引号包围的路径，也支持未引号的路径
-    
-    # 尝试匹配 "cd" 开头的命令
-    # 支持: cd path && cmd, cd /d path && cmd, cd "path" && cmd
-    cd_pattern = r'^\s*cd\s+(?:/d\s+)?(.+?)\s+&&\s+(.+)$'
-    match = re.match(cd_pattern, command, re.IGNORECASE)
-    
-    if match:
-        target_dir = match.group(1).strip()
-        remaining_command = match.group(2).strip()
-        
-        # 移除路径周围的引号
-        if (target_dir.startswith('"') and target_dir.endswith('"')) or \
-           (target_dir.startswith("'") and target_dir.endswith("'")):
-            target_dir = target_dir[1:-1]
-        
-        # 展开环境变量（如 %USERPROFILE%）
-        target_dir = os.path.expandvars(target_dir)
-        
-        # 转换为绝对路径
-        if not os.path.isabs(target_dir):
-            # 如果是相对路径，需要相对于当前工作目录
-            target_dir = os.path.abspath(target_dir)
-        else:
-            target_dir = os.path.normpath(target_dir)
-        
-        return target_dir, remaining_command
-    
-    return None, command
-
-
-def execute_command(command: Union[str, List[str]], timeout: Optional[int] = None, encoding: str = None) -> Dict[str, Any]:
-    """
-    执行系统命令。
+    使用原生 PowerShell 执行系统命令。
 
     参数:
-        command: 字符串（经系统 shell 解析）或 参数列表（直接执行）。
+        command: 字符串（经 PowerShell 解析）或 参数列表（直接执行）。
         timeout: 超时时间（秒），None 使用配置默认值。
         encoding: 输出编码，None 时智能检测（Windows优先GBK，Linux/Mac优先UTF-8）。
+        working_dir: 工作目录（可选），指定命令执行的目录。
 
     返回:
         {
@@ -85,19 +33,16 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         - error_detected 仅在 returncode=0 但输出中检测到错误时为True
         - LLM应综合 returncode、error_detected、stderr、stdout 判断执行结果
     """
-    # 命令安全检查：拦截不应该使用的命令（O(n)复杂度）
+    # 命令安全检查：拦截危险的删除命令
     cmd_str = command if isinstance(command, str) else ' '.join(command)
     cmd_lower = cmd_str.strip().lower()
     
-    # 使用正则表达式一次性检测所有危险命令
-    # 模式：(命令开头或分隔符后) + 危险命令 + (空格或命令结尾)
-    # \b 单词边界确保精确匹配
-    dangerous_pattern = r'\b(del|rm|rmdir|rd)\b'
+    # 检测危险命令（包括 PowerShell 的 Remove-Item）
+    dangerous_pattern = r'\b(del|rm|rmdir|rd|remove-item)\b'
     
     match = re.search(dangerous_pattern, cmd_lower)
     if match:
         detected_cmd = match.group(1)
-        # 获取匹配位置的上下文
         start_pos = max(0, match.start() - 20)
         end_pos = min(len(cmd_lower), match.end() + 20)
         context = cmd_lower[start_pos:end_pos].strip()
@@ -111,69 +56,127 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
             "shell_used": isinstance(command, str),
         }
     
+    # 检测交互式命令：这些命令会等待用户输入，导致 agent 卡住
+    # interactive_patterns = [
+    #     # 文本编辑器
+    #     r'\b(vim|vi|nano|emacs|notepad|code|subl)\b',
+    #     # 交互式 shell（单独调用，不带 -c 或脚本文件）
+    #     # 使用 \s*$ 确保是命令末尾，避免误拦截 "bash script.sh"
+    #     r'\b(bash|zsh|fish)\s*$',
+    #     r'\bsh\s*$',  # sh 单独匹配，避免误拦截 bash
+    #     r'\b(cmd|powershell|pwsh)\s*$',
+    #     # 交互式工具
+    #     r'\b(top|htop|less|more|tail\s+-f)\b',
+    #     # 需要输入的 PowerShell 命令
+    #     r'\b(read-host|get-credential)\b',
+    #     # SSH/远程连接
+    #     r'\b(ssh|telnet|ftp|sftp)\b',
+    #     # 调试器
+    #     r'\b(gdb|lldb|pdb|windbg)\b',
+    #     # 数据库客户端（单独调用）
+    #     r'\b(mysql|psql|mongo|redis-cli|sqlite3)\s*$',
+    #     # 交互式安装/配置（没有 -y/--yes 参数）
+    #     r'\b(npm\s+init|yarn\s+init|cargo\s+init)\b(?!.*(-y|--yes))',
+    #     # 文本查看器（不带文件参数）
+    #     r'\b(cat|type)\s*$',
+    # ]
+    
+    # for pattern in interactive_patterns:
+    #     match = re.search(pattern, cmd_lower)
+    #     if match:
+    #         detected_cmd = match.group(1) if match.lastindex else match.group(0)
+    #         return {
+    #             "ok": False,
+    #             "returncode": -1,
+    #             "stdout": "",
+    #             "stderr": f"错误: 不允许执行交互式命令 '{detected_cmd}'。\nAgent 无法处理需要持续交互的命令。\n如需执行脚本，请使用非交互模式（如: python script.py, node script.js）。",
+    #             "duration_sec": 0,
+    #             "shell_used": isinstance(command, str),
+    #         }
+    
     # 从配置获取默认timeout
     if timeout is None:
         from ..config import get_config
         timeout = get_config().shell_command_timeout
     
-    # 确定首选编码（但实际使用字节模式，后续智能解码）
+    # 确定首选编码
     prefer_encoding = encoding if encoding else ('gbk' if os.name == 'nt' else 'utf-8')
     
     start = time.time()
     shell_used = isinstance(command, str)
-    working_dir: Optional[str] = None
+    cwd: Optional[str] = None
     
-    # 如果命令是字符串且包含 cd 命令，解析它
-    if shell_used:
-        target_dir, remaining_cmd = _parse_cd_command(command)
-        if target_dir:
-            # 验证目录是否存在
-            if os.path.isdir(target_dir):
-                working_dir = target_dir
-                command = remaining_cmd
-            else:
-                # 目录不存在，返回错误
-                return {
-                    "ok": False,
-                    "returncode": -1,
-                    "stdout": "",
-                    "stderr": f"错误: 目录不存在: {target_dir}",
-                    "duration_sec": 0,
-                    "shell_used": shell_used,
-                }
+    # 处理 working_dir 参数
+    if working_dir:
+        # 规范化路径
+        if not os.path.isabs(working_dir):
+            working_dir = os.path.abspath(working_dir)
+        else:
+            working_dir = os.path.normpath(working_dir)
+        
+        # 验证目录存在性
+        if os.path.isdir(working_dir):
+            cwd = working_dir
+        else:
+            return {
+                "ok": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"错误: 工作目录不存在: {working_dir}",
+                "duration_sec": 0,
+                "shell_used": isinstance(command, str),
+            }
     
     # 设置环境变量
     env = os.environ.copy()
     env['PYTHONIOENCODING'] = prefer_encoding
     
+    # Windows 创建标志：防止终端闪屏
     creation_flags = 0
+    if os.name == "nt":
+        # CREATE_NO_WINDOW (0x08000000) 完全隐藏控制台窗口
+        # CREATE_NEW_PROCESS_GROUP (0x00000200) 创建新进程组
+        creation_flags = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
+    
+    # Windows 系统：构建 PowerShell 命令
+    # 使用 shell=False 直接调用 powershell.exe，让 PowerShell 自己解析命令
+    ps_args = None
     if os.name == "nt" and shell_used:
-        creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        # 查找 PowerShell 路径
+        import shutil
+        ps_exe = shutil.which('pwsh')  # 优先 PowerShell 7+
+        if not ps_exe:
+            ps_exe = shutil.which('powershell')  # 回退到 PowerShell 5.x
+        
+        if ps_exe:
+            # 构建参数列表：powershell.exe -NoProfile -NonInteractive -Command "原始命令"
+            # 注意：这里 command 是原始字符串，PowerShell 会自己解析
+            ps_args = [ps_exe, '-NoProfile', '-NonInteractive', '-Command', command]
+            shell_used = False  # 改为 False，因为我们直接调用可执行文件
 
     try:
         proc = subprocess.Popen(
-            command,  # type: ignore[arg-type]
-            shell=shell_used,
+            ps_args if ps_args else command,  # type: ignore[arg-type]
+            shell=shell_used,  # PowerShell 模式下为 False
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=False,  # 使用字节模式，后续智能解码
             env=env,
-            cwd=working_dir,
+            cwd=cwd,
             creationflags=creation_flags,
         )
     except Exception as exc:
-        # 返回错误结果，由 execute_tools 统一记录日志
         return {
             "ok": False,
             "returncode": -1,
             "stdout": "",
             "stderr": f"异常: {exc}",
             "duration_sec": 0,
-            "shell_used": shell_used,
+            "shell_used": isinstance(command, str),
         }
 
-    stdout_chunks: List[str] = []
-    stderr_chunks: List[str] = []
+    stdout_chunks: List[bytes] = []
+    stderr_chunks: List[bytes] = []
     
     # 整体超时控制
     deadline = start + timeout if timeout else None
@@ -197,7 +200,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                     "stdout": stdout_output,
                     "stderr": f"命令执行超时 (>{timeout}秒)",
                     "duration_sec": round(dur, 4),
-                    "shell_used": shell_used,
+                    "shell_used": isinstance(command, str),
                 }
             
             try:
@@ -231,13 +234,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     stdout_output = smart_decode(stdout_bytes, prefer_encoding)
     stderr_output = smart_decode(stderr_bytes, prefer_encoding)
     
-    # 错误检测策略：
-    # 1. returncode != 0 → 错误
-    # 2. stderr 包含错误标识 → 错误
-    # 3. stdout 包含错误标识 → 错误
-    # 
-    # 一旦检测到错误，统一设置错误状态：ok=False, returncode非0
-    
+    # 错误检测策略
     original_returncode = proc.returncode
     has_error = False
     
@@ -246,40 +243,35 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         has_error = True
     
     # 条件2和3: 检查输出中的错误标识（仅当returncode=0时）
-    # 用于捕获 a || b 链式命令中 a 失败但 b 成功导致 returncode=0 的情况
     if not has_error:
         # stderr 错误标识列表（宽松检测）
         stderr_error_indicators = [
-            # 英文错误标识 - 带标点（强标识）
+            # 英文错误标识
             'error:', 'exception:', 'failed:', 'fatal:', 'failure:',
             'error -', 'error!', 'errors:',
-            # 英文错误短语（中等强度）
             'cannot', 'could not', 'unable to', 'can\'t',
             'not found', 'no such', 'does not exist', 'doesn\'t exist',
             'access denied', 'permission denied', 'forbidden',
             'invalid', 'illegal', 'traceback', 'stack trace',
-            'is not recognized', 'not recognized as',  # Windows: command not found
+            'is not recognized', 'not recognized as',
             'syntax error', 'runtime error', 'system error',
             'connection refused', 'connection failed',
             # 中文错误标识
             '错误', '异常', '失败', '无法', '不能', '不存在',
             '找不到', '拒绝访问', '权限不足', '非法', '无效',
-            '不是内部或外部命令', '不是可运行的程序', '批处理文件',  # Windows: 命令不存在
-            '无效开关', '此时不应有',  # Windows: 参数/语法错误
+            '不是内部或外部命令', '不是可运行的程序', '批处理文件',
+            '无效开关', '此时不应有',
         ]
         
-        # stdout 错误标识列表（严格检测 - 只检测几乎不可能出现在正常输出中的强错误标识）
-        # 避免误判 npm init 等命令的正常 JSON 输出
+        # stdout 错误标识列表（严格检测）
         stdout_error_indicators = [
-            # 只保留带标点的强错误标识
             'error:', 'exception:', 'fatal:', 'failure:',
             'error!', 'traceback (most recent call last)',
-            # Windows 系统级错误
             '不是内部或外部命令', '不是可运行的程序',
             'is not recognized as an internal or external command',
         ]
         
-        # 检查 stderr 中的错误标识（宽松）
+        # 检查 stderr 中的错误标识
         if stderr_output:
             stderr_lower = stderr_output.lower()
             for indicator in stderr_error_indicators:
@@ -287,7 +279,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                     has_error = True
                     break
             
-            # 额外检查：独立错误词（使用单词边界）
+            # 额外检查：独立错误词
             if not has_error:
                 standalone_errors = ['error', 'fail', 'failed', 'failure', 'exception']
                 for word in standalone_errors:
@@ -296,7 +288,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                         has_error = True
                         break
         
-        # 检查 stdout 中的错误标识（严格 - 用于捕获 a || b 链式命令的错误）
+        # 检查 stdout 中的错误标识（严格）
         if not has_error and stdout_output:
             stdout_lower = stdout_output.lower()
             for indicator in stdout_error_indicators:
@@ -304,18 +296,16 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                     has_error = True
                     break
     
-    # 设置ok字段和error_detected标记
-    # ok: 综合判断（returncode非0 或 检测到错误标识）
-    # error_detected: 是否在输出中检测到错误特征（独立于returncode）
-    error_detected = has_error and original_returncode == 0  # 仅当returncode=0但检测到错误时标记
+    # 设置返回值
+    error_detected = has_error and original_returncode == 0
     ok = not has_error
     
     return {
         "ok": ok,
-        "returncode": original_returncode,  # 保留原始退出码
-        "error_detected": error_detected,   # 是否检测到错误特征（在returncode=0时）
+        "returncode": original_returncode,
+        "error_detected": error_detected,
         "stdout": stdout_output,
         "stderr": stderr_output,
         "duration_sec": round(dur, 4),
-        "shell_used": shell_used,
+        "shell_used": isinstance(command, str),
     }

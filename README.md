@@ -181,12 +181,6 @@
 
 ---
 
-### 交流群
-
-![](img/group.jpg)
-
----
-
 ## 许可证
 
 **AGPL-3.0 License (GNU Affero General Public License v3.0)**

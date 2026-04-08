@@ -72,6 +72,42 @@ def _parse_skill_content(content: str) -> tuple[Dict[str, Any], str]:
     return metadata, body
 
 
+def _scan_skills_recursive(root_dir: str, relative_path: str = "") -> List[Dict[str, Any]]:
+    """递归扫描目录查找所有 SKILL.md 文件"""
+    skills: List[Dict[str, Any]] = []
+    
+    try:
+        for entry in os.scandir(root_dir):
+            if entry.is_dir():
+                # 检查当前目录是否包含 SKILL.md
+                skill_md_path = os.path.join(entry.path, SKILL_FILE_NAME)
+                if os.path.isfile(skill_md_path):
+                    raw_content = _read_text(skill_md_path)
+                    if raw_content is not None:
+                        metadata, body = _parse_skill_content(raw_content)
+                        
+                        # 构建相对路径（用于显示）
+                        skill_relative_path = os.path.join(relative_path, entry.name) if relative_path else entry.name
+                        
+                        skills.append({
+                            "directory": entry.name,
+                            "relative_path": skill_relative_path,  # 完整相对路径
+                            "path": skill_md_path,
+                            "raw": raw_content,
+                            "body": body,
+                            "metadata": metadata,
+                        })
+                
+                # 递归扫描子目录
+                sub_relative_path = os.path.join(relative_path, entry.name) if relative_path else entry.name
+                sub_skills = _scan_skills_recursive(entry.path, sub_relative_path)
+                skills.extend(sub_skills)
+    except Exception as e:
+        log_error("SKILL_SCAN_ERROR", f"Failed to scan directory: {root_dir}", e)
+    
+    return skills
+
+
 def _load_claude_skills() -> List[Dict[str, Any]]:
     from ..config import get_config
     resource_dir = _get_resource_dir()
@@ -84,29 +120,7 @@ def _load_claude_skills() -> List[Dict[str, Any]]:
     skills: List[Dict[str, Any]] = []
 
     try:
-        for entry in os.scandir(skills_root):
-            if not entry.is_dir():
-                continue
-
-            skill_md_path = os.path.join(entry.path, SKILL_FILE_NAME)
-            if not os.path.isfile(skill_md_path):
-                continue
-
-            raw_content = _read_text(skill_md_path)
-            if raw_content is None:
-                continue
-
-            metadata, body = _parse_skill_content(raw_content)
-
-            skills.append(
-                {
-                    "directory": entry.name,
-                    "path": skill_md_path,
-                    "raw": raw_content,
-                    "body": body,
-                    "metadata": metadata,
-                }
-            )
+        skills = _scan_skills_recursive(skills_root)
     except Exception as e:
         log_error("SKILL_SCAN_ERROR", "Failed to scan skills directory", e, 
                  context={"skills_root": skills_root, "loaded_count": len(skills)})

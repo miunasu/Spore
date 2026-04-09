@@ -29,7 +29,6 @@
     - web_browser: 访问网页或搜索
     - Grep: 文件内容搜索
     - character_manage: 角色管理
-    - python_exec: 执行Python代码
     - multi_agent_dispatch: 多Agent任务派发
 """
 
@@ -47,7 +46,6 @@ from .utils import (
     web_browser,
     grep,
     write_text,
-    execute_python,
 )
 from .character_manager import (
     select_character,
@@ -445,45 +443,7 @@ DuckDuckGo 支持以下搜索运算符，直接写在target搜索词中：
             },
         },
     },
-    "character_manage": {
-        "type": "function",
-        "function": {
-            "name": "character_manage",
-            "description": "管理角色系统，支持选择/切换角色、取消当前角色、查看所有可用角色。同一时间只能激活一个角色。请先查询所有可用角色，再进行角色选择。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["select", "remove", "list"],
-                        "description": "操作类型: select(选择/切换角色), remove(取消当前角色), list(查看所有可用角色)"
-                    },
-                    "character_name": {
-                        "type": "string",
-                        "description": "角色名称。当action为select或remove时必需；当action为list时可忽略"
-                    }
-                },
-                "required": ["action"]
-            }
-        }
-    },
-    "python_exec": {
-        "type": "function",
-        "function": {
-            "name": "python_exec",
-            "description": "在当前Python环境中执行Python代码（支持单行或多行代码）。可以执行表达式获取返回值，也可以执行语句块。执行结果包含标准输出、错误输出和返回值。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "要执行的Python代码。多行代码【必须】使用 @SPORE:CONTENT代码@SPORE:CONTENT_END 格式，注意缩进对齐。仅用于执行，不会被写入本地。由于python代码在真实环境上执行，不可执行对windows系统有害的代码。"
-                    }
-                },
-                "required": ["code"]
-            }
-        }
-    },
+
     "multi_agent_dispatch": {
         "type": "function",
         "function": {
@@ -705,65 +665,6 @@ def handle_web_browser(args: Dict[str, Any]) -> str:
     return safe_tool_execution("web_browser", lambda a: web_browser(**a), args)
 
 
-def handle_character_manage(args: Dict[str, Any]) -> str:
-    """角色管理工具处理函数"""
-    def _impl(a):
-        action = a.get("action", "").strip().lower()
-        character_name = a.get("character_name", "").strip()
-        
-        if action == "list":
-            # 查看所有可用角色
-            all_characters = get_all_characters_summary()
-            current_characters = get_selected_characters()
-            current_name = current_characters[0]["name"] if current_characters else "无"
-            
-            return {
-                "success": True,
-                "action": "list",
-                "current_character": current_name,
-                "available_characters": all_characters,
-                "message": f"当前激活角色: {current_name}\n\n可用角色列表:\n{all_characters}"
-            }
-        
-        elif action == "select":
-            # 选择/切换角色
-            if not character_name:
-                raise ValueError("必须提供角色名称（character_name 参数）")
-            
-            result = select_character(character_name)
-            result["action"] = "select"
-            return result
-        
-        elif action == "remove":
-            # 取消当前角色
-            if not character_name:
-                # 如果没有提供角色名，获取当前激活的角色
-                current_characters = get_selected_characters()
-                if not current_characters:
-                    raise ValueError("当前没有激活的角色")
-                character_name = current_characters[0]["name"]
-            
-            result = remove_character(character_name)
-            result["action"] = "remove"
-            return result
-        
-        else:
-            raise ValueError(f"不支持的操作类型: {action}，支持的操作: select, remove, list")
-    
-    return safe_tool_execution("character_manage", _impl, args, return_json=True)
-
-
-def handle_python_exec(args: Dict[str, Any]) -> str:
-    """Python代码执行工具处理函数"""
-    def _impl(a):
-        code = a.get("code", "").strip()
-        if not code:
-            raise ValueError("code 参数缺失")
-        return execute_python(code)
-    
-    return safe_tool_execution("python_exec", _impl, args, return_json=True)
-
-
 def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
     """多Agent派发工具处理函数"""
     def _impl(a):
@@ -903,7 +804,5 @@ TOOL_HANDLERS: Dict[str, Any] = {
     "MultiEdit": handle_multi_edit,
     "Grep": handle_grep,
     "web_browser": handle_web_browser,
-    "character_manage": handle_character_manage,
-    "python_exec": handle_python_exec,
     "multi_agent_dispatch": handle_multi_agent_dispatch,
 }

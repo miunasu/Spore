@@ -13,7 +13,6 @@ from .memory_manager import save_messages, load_messages, get_latest_history_fil
 from .logger import log_error
 from .text_protocol import is_standalone_marker
 from . import config as _config
-from AutoAgent import character_choose_agent
 
 
 class CLICommandHandler:
@@ -38,9 +37,9 @@ class CLICommandHandler:
         print("8.save ->保存当前对话历史")
         print("9.load ->加载对话历史, 会覆盖当前对话历史，格式 load <对话历史文件名>")
         print("A.token ->计算当前记忆使用的token数")
-        print("B.character ->手动触发角色选择分析")
-        print("C.continue ->继续最近保存的历史对话")
-        print("D.mode ->查看或切换上下文处理模式，格式: mode [strong_context|long_context|auto]")
+        print("B.continue ->继续最近保存的历史对话")
+        print("C.mode ->查看或切换上下文处理模式，格式: mode [strong_context|long_context|auto]")
+        print("D.char ->角色管理，格式: char [list|select <角色名>|remove]")
     
     def handle_command(
         self, 
@@ -124,7 +123,7 @@ class CLICommandHandler:
         
         # 角色选择
         if user_input.lower() == "character":
-            self._handle_character_command()
+            print("[提示] 角色推荐功能已移除，请使用 'char' 命令手动管理角色")
             return "", True
         
         # 继续对话
@@ -135,6 +134,11 @@ class CLICommandHandler:
         # 模式切换
         if user_input.lower().startswith("mode"):
             self._handle_mode_command(user_input)
+            return "", True
+        
+        # 角色管理
+        if user_input.lower().startswith("char"):
+            self._handle_char_command(user_input)
             return "", True
         
         # 不是命令，返回原始输入
@@ -238,14 +242,6 @@ class CLICommandHandler:
             log_error("MEMORY_LOAD_ERROR", "Failed to load conversation history", e, 
                     context={"file_path": user_input[5:]})
     
-    def _handle_character_command(self) -> None:
-        """处理角色选择命令"""
-        if not self.state.messages:
-            print("[角色推荐] 没有对话历史，无法分析")
-        else:
-            print("[角色推荐] 正在分析对话历史...")
-            character_choose_agent(self.state.messages)
-    
     def _handle_continue_command(self) -> None:
         """处理继续对话命令 - 加载最近的历史对话"""
         try:
@@ -284,3 +280,67 @@ class CLICommandHandler:
             else:
                 print(f"[错误] 未知模式: {new_mode}")
                 print("可用模式: strong_context, long_context, auto")
+    
+    def _handle_char_command(self, user_input: str) -> None:
+        """处理角色管理命令"""
+        from .character_manager import select_character, remove_character, get_selected_characters
+        from .utils.characters import list_character_documents
+        
+        parts = user_input.strip().split(maxsplit=1)
+        
+        if len(parts) == 1:
+            # 只输入 char，显示帮助
+            print("[角色管理] 使用方法:")
+            print("  char list          - 查看所有可用角色")
+            print("  char select <名称> - 选择/切换角色")
+            print("  char remove        - 移除当前角色")
+            return
+        
+        command = parts[1].lower()
+        
+        if command == "list":
+            # 列出所有可用角色
+            all_characters = list_character_documents()
+            current_characters = get_selected_characters()
+            current_name = current_characters[0]["name"] if current_characters else "无"
+            
+            print(f"\n[当前激活角色] {current_name}")
+            print("\n[可用角色列表]")
+            if all_characters:
+                for doc in all_characters:
+                    marker = " (当前)" if doc["name"] == current_name else ""
+                    print(f"  - {doc['name']}{marker}")
+            else:
+                print("  暂无可用角色")
+            print()
+        
+        elif command.startswith("select "):
+            # 选择角色
+            character_name = command[7:].strip()
+            if not character_name:
+                print("[错误] 请指定角色名称")
+                return
+            
+            result = select_character(character_name)
+            if result.get("success"):
+                print(f"[成功] {result.get('message')}")
+            else:
+                print(f"[错误] {result.get('error')}")
+        
+        elif command == "remove":
+            # 移除当前角色
+            current_characters = get_selected_characters()
+            if not current_characters:
+                print("[提示] 当前没有激活的角色")
+                return
+            
+            character_name = current_characters[0]["name"]
+            result = remove_character(character_name)
+            if result.get("success"):
+                print(f"[成功] {result.get('message')}")
+            else:
+                print(f"[错误] {result.get('error')}")
+        
+        else:
+            print(f"[错误] 未知命令: {command}")
+            print("[提示] 使用 'char' 查看帮助")

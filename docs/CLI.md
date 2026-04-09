@@ -45,8 +45,16 @@ token              - 计算当前记忆使用的 Token 数
 ```
 mode               - 查看当前上下文处理模式
 mode <模式名>      - 切换模式（strong_context/long_context/auto）
-character          - 手动触发角色选择分析
+char               - 角色管理
+char list          - 列出所有可用角色
+char select <角色名> - 选择指定角色
+char remove        - 移除当前角色
 ```
+
+**角色系统说明：**
+- 选择角色后，该角色的专业属性会应用到所有后续对话
+- 角色内容会自动注入到系统提示词中
+- 可在 `.env` 中配置 `DEFAULT_CHARACTER` 设置默认角色
 
 ### 高级功能
 

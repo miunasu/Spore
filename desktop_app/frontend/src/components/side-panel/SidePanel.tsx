@@ -1,6 +1,6 @@
 /**
  * 侧边面板组件 - 现代化设计
- * 包含文件管理器和 Agent 监控
+ * 包含文件管理器、Agent 监控和设置
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FileManager } from './FileManager';
@@ -15,8 +15,8 @@ const TABS: { id: TabType; label: string; path?: string; icon: string }[] = [
   { id: 'agents', label: 'Agent', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
   { id: 'prompt', label: 'prompt', path: 'prompt', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   { id: 'skills', label: 'skills', path: 'skills', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
-  { id: 'history', label: 'history', path: 'history', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
   { id: 'characters', label: 'characters', path: 'characters', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
+  { id: 'history', label: 'history', path: 'history', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
 ];
 
 // 每个 tab 的状态：要么是文件夹路径，要么是打开的文件+滚动位置

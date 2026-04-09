@@ -331,7 +331,7 @@ class IPCManager:
     def setup_all_modules(self) -> Dict[str, Any]:
         """为所有需要使用 IPC 的模块设置 IPC 管理器
         
-        注意：supervisor 和 character_selector 在主对话循环中自动触发，
+        注意：supervisor 在主对话循环中自动触发，
         需要通过全局变量获取 IPC 管理器
         """
         results = {"success": [], "failed": []}
@@ -340,7 +340,6 @@ class IPCManager:
             ("tools", "base.tools", "set_ipc_manager"),
             ("agent_process", "base.agent_process", "set_ipc_manager"),
             ("supervisor", "AutoAgent.supervisor", "set_ipc_manager"),
-            ("character_selector", "AutoAgent.character_selector", "set_ipc_manager"),
         ]
         
         for name, module_path, func_name in modules:

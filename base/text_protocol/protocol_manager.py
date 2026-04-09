@@ -176,7 +176,6 @@ TOOL_NAME param=value
 - report_output 的 content 参数
 - Edit 的 old_string 和 new_string 参数
 - MultiEdit 的 edits 中的 old_string 和 new_string
-- python_exec 的 code 参数（多行代码时）
 
 ## 可用工具
 

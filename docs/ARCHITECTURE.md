@@ -208,10 +208,11 @@
   - `long_context`: 长上下文处理
   - `auto`: 自动选择
 
-#### CharacterSelector (角色选择器)
-- 分析任务需求
-- 推荐专业角色
-- 动态加载角色配置
+#### CharacterSelector (角色系统)
+- 常驻角色选择：配置 `DEFAULT_CHARACTER` 后，每次对话都带有角色属性
+- 角色内容自动注入到系统提示词中
+- 支持手动管理：通过 CLI 命令（`char list/select/remove`）或前端设置切换
+- 支持自定义角色：在 `characters/` 目录添加 Markdown 文件
 
 #### Supervisor (监督器)
 - 判断任务完成度

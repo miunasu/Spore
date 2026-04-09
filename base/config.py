@@ -69,11 +69,6 @@ class Config:
         except ValueError:
             self.temperature_supervisor = 0.1
         
-        try:
-            self.temperature_character_selector: float = float(os.getenv("TEMPERATURE_CHARACTER_SELECTOR", "0.1"))
-        except ValueError:
-            self.temperature_character_selector = 0.1
-        
         # max_tokens配置（LLM 单次输出的最大 token 数）
         try:
             self.max_output_tokens: int = int(os.getenv("MAX_OUTPUT_TOKENS", "15000"))
@@ -105,11 +100,9 @@ class Config:
         except ValueError:
             self.max_single_message_ratio = 0.3
         
-        # 用户消息计数触发角色推荐的频率
-        try:
-            self.character_recommend_interval: int = int(os.getenv("CHARACTER_RECOMMEND_INTERVAL", "5"))
-        except ValueError:
-            self.character_recommend_interval = 5
+        # ========== Characters 系统配置 ==========
+        # 默认启用的 character 名称（为空则不自动加载）
+        self.default_character: str = os.getenv("DEFAULT_CHARACTER", "").strip()
         
         # 规则提醒间隔（每 N 条用户消息提醒一次，0 表示禁用）
         try:
@@ -336,7 +329,7 @@ class Config:
         根据模式获取对应的temperature
         
         Args:
-            mode: 模式名称，可选值：main, coder, supervisor, character_selector
+            mode: 模式名称，可选值：main, coder, supervisor
         
         Returns:
             float: 对应的temperature值
@@ -345,7 +338,6 @@ class Config:
             "main": self.temperature_main,
             "coder": self.temperature_coder,
             "supervisor": self.temperature_supervisor,
-            "character_selector": self.temperature_character_selector,
         }
         return mode_map.get(mode, self.temperature_main)
     

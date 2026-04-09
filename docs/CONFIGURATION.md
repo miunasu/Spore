@@ -46,8 +46,15 @@ RULE_REMINDER_INTERVAL=10               # 规则提醒间隔（LLM 回复次数�
 ### 角色系统
 
 ```env
-CHARACTER_RECOMMEND_INTERVAL=5          # 角色推荐间隔（用户消息次数）
+DEFAULT_CHARACTER=Python专家             # 默认角色名称（留空则不自动加载）
 ```
+
+**角色系统说明：**
+- 配置默认角色后，每次对话都会带有该角色的专业属性
+- 角色内容会自动注入到系统提示词中
+- 可通过 CLI 命令（`char list/select/remove`）或前端设置管理角色
+- 支持自定义角色：在 `characters/` 目录添加 Markdown 文件即可
+- 留空 `DEFAULT_CHARACTER` 则不自动加载角色
 
 ### 桌面模式
 

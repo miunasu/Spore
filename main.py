@@ -25,7 +25,7 @@ from base.cli_commands import CLICommandHandler
 from base.conversation_loop import ConversationLoop
 from base.rule_reminder import should_remind, get_rule_reminder
 from base.agent_types import get_tools_for_mode
-from AutoAgent import character_choose_agent, select_context_mode, get_mode_description
+from AutoAgent import select_context_mode, get_mode_description
 
 # 初始化colorama以支持Windows的ANSI转义序列
 init(autoreset=True)
@@ -58,13 +58,21 @@ def main() -> int:
     time.sleep(0.5)
     
     # 设置 AutoAgent 的 IPC 管理器
-    from AutoAgent import supervisor, character_selector, mode_selector
+    from AutoAgent import supervisor, mode_selector
     supervisor.set_ipc_manager(ipc_manager)
-    character_selector.set_ipc_manager(ipc_manager)
     mode_selector.set_ipc_manager(ipc_manager)
     
     # 初始化状态管理器
     state = ConversationState()
+    
+    # 初始化 characters 系统（如果配置了默认角色）
+    if config.default_character:
+        from base.character_manager import select_character
+        result = select_character(config.default_character)
+        if result.get("success"):
+            print(f"[系统] 已自动加载角色: {config.default_character}")
+        else:
+            print(f"[警告] 无法加载默认角色 '{config.default_character}': {result.get('error', '未知错误')}")
     
     # 初始化CLI命令处理器
     cli_handler = CLICommandHandler(state)
@@ -158,10 +166,6 @@ def main() -> int:
             # 将提醒追加到最后一条用户消息中
             if state.messages and state.messages[-1]["role"] == "user":
                 state.messages[-1]["content"] += f"\n\n{reminder}"
-        
-        # 根据配置的频率自动调用角色选择agent
-        if state.user_message_count % config.character_recommend_interval == 0:
-            character_choose_agent(state.messages)
         
         # 进入对话循环（文本协议模式）
         try:

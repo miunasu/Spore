@@ -9,7 +9,6 @@ IPC 由 base.ipc_manager.initialize_ipc_system() 统一初始化。
 """
 
 from .supervisor import supervisor, end_check
-from .character_selector import character_choose_agent
 from .mode_selector import select_context_mode, get_mode_description
 
 __all__ = [

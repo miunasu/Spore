@@ -350,6 +350,71 @@ export const instancesApi = {
     ),
 };
 
+// Settings API（设置管理，只在主后端）
+export const settingsApi = {
+  // 获取所有角色列表
+  listCharacters: () =>
+    request<{
+      success: boolean;
+      enabled: boolean;
+      characters: Array<{ name: string; path: string }>;
+      current: string | null;
+      error?: string;
+      debug?: {
+        characters_root: string | null;
+        characters_count: number;
+        exists: boolean;
+      };
+    }>('/api/settings/characters/list'),
+
+  // 选择角色
+  selectCharacter: (characterName: string) =>
+    request<{ success: boolean; message?: string; error?: string }>(
+      '/api/settings/characters/select',
+      {
+        method: 'POST',
+        body: JSON.stringify({ character_name: characterName }),
+      }
+    ),
+
+  // 移除当前角色
+  removeCharacter: () =>
+    request<{ success: boolean; message?: string; error?: string }>(
+      '/api/settings/characters/remove',
+      {
+        method: 'POST',
+      }
+    ),
+
+  // 获取设置
+  getSettings: () =>
+    request<{
+      success: boolean;
+      settings: {
+        enable_characters: boolean;
+        default_character: string;
+        character_recommend_interval: number;
+        context_mode: string;
+        temperature_main: number;
+        max_output_tokens: number;
+      };
+      error?: string;
+    }>('/api/settings/settings'),
+
+  // 更新设置
+  updateSettings: (settings: {
+    enable_characters?: boolean;
+    default_character?: string;
+  }) =>
+    request<{ success: boolean; message?: string; error?: string }>(
+      '/api/settings/settings/update',
+      {
+        method: 'POST',
+        body: JSON.stringify(settings),
+      }
+    ),
+};
+
 // Health check
 export const healthCheck = (port = 8765) =>
   requestToPort<{ status: string; initialized: boolean }>(port, '/health');

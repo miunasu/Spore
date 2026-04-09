@@ -19,7 +19,6 @@ STRONG_CONTEXT_TOOLS = [
     "execute_command",
     "write_text_file",
     "delete_path",
-    "python_exec",
     "Read",
     "Grep",
     "character_manage",

@@ -22,12 +22,14 @@ from .utils import (
     todo_print,
     log_tool_result,
 )
+from .utils.terminal import safe_print
 from .todo_manager import todo_write
 from .logger import log_error, log_tool_error
 from AutoAgent import end_check
 from AutoAgent.supervisor import supervisor
 from .utils import terminal
 from . import config as _config
+
 
 class ConversationLoop:
     """对话循环处理器"""
@@ -57,19 +59,9 @@ class ConversationLoop:
         total_tokens = current_tokens + system_tokens
         max_tokens = self.config.context_max_tokens
 
-        # 无论是超限还是逼近极限，都优先检查并删除超大消息
+        # 当上下文超过警告阈值时，开始压缩记忆
         warning_threshold = max_tokens * self.config.context_warning_threshold
         
-        if total_tokens > warning_threshold:
-            # 先尝试删除超大消息
-            if self._remove_oversized_last_message():
-                # 重新计算token数
-                current_tokens = count_tokens(self.state.messages)
-                total_tokens = current_tokens + system_tokens
-                terminal.extra_line += 1
-                print(f"[系统] 已删除超大消息，当前 {total_tokens} 个token（含system prompt）")
-        
-        # 删除超大消息后，如果仍然接近或超过上限，开始压缩
         if total_tokens > warning_threshold:
             print(f"[系统] 对话历史接近上限（{total_tokens}/{max_tokens}），开始压缩记忆...")
             
@@ -99,9 +91,9 @@ class ConversationLoop:
             print(f"[系统] 对话历史已压缩：消息 {current_tokens} + system {system_tokens} = {total_tokens} tokens")
             terminal.extra_line += 3
 
-    def _remove_oversized_last_message(self) -> bool:
+    def _check_and_handle_oversized_tool_result(self) -> bool:
         """
-        检查并删除最后一条超大消息（文本协议版本）
+        检查工具返回结果是否超大，如果超大则删除并通知
         
         返回:
             如果删除了消息返回True，否则返回False
@@ -111,6 +103,11 @@ class ConversationLoop:
         
         # 获取最后一条消息
         last_msg = self.state.messages[-1]
+        
+        # 只检查 RESULT 消息（user 角色，包含独占一行的 @SPORE:RESULT）
+        if not (last_msg.get("role") == "user" and is_standalone_marker(last_msg.get("content", ""), "@SPORE:RESULT")):
+            return False
+        
         last_msg_tokens = count_tokens([last_msg])
         
         # 设置单条消息的最大token数（从配置读取比例）
@@ -119,62 +116,43 @@ class ConversationLoop:
         if last_msg_tokens <= max_single_msg_tokens:
             return False
         
-        print(f"[系统] 检测到超大消息（{last_msg_tokens} tokens），开始处理...")
+        print(f"[系统] 检测到超大工具返回（{last_msg_tokens} tokens），开始处理...")
         
-        # 检查是否是 RESULT 消息（user 角色，包含独占一行的 @SPORE:RESULT）
-        if last_msg.get("role") == "user" and is_standalone_marker(last_msg.get("content", ""), "@SPORE:RESULT"):
-            # 删除 RESULT 消息
-            self.state.messages.pop()
-            print(f"[系统] 已删除超大的工具返回消息")
-            
-            # 查找并删除对应的 assistant 消息（包含 ACTION 块）
-            for i in range(len(self.state.messages) - 1, -1, -1):
-                msg = self.state.messages[i]
-                if msg.get("role") == "assistant" and is_standalone_marker(msg.get("content", ""), "@SPORE:ACTION"):
-                    # 尝试解析 ACTION 块获取工具信息
-                    action = self.protocol_manager.action_parser.parse(msg.get("content", ""))
-                    tool_name = action.tool_name if action else "未知工具"
-                    tool_args = str(action.parameters) if action else "{}"
-                    
-                    # 删除 assistant 消息
-                    self.state.messages.pop(i)
-                    print(f"[系统] 已删除对应的工具调用请求消息")
-                    
-                    # 添加通知消息
-                    notice = f"[系统通知] 你刚才调用了工具 {tool_name}，参数：{tool_args}。但工具返回的内容过大（{last_msg_tokens} tokens），已被系统删除。请使用更精确的查询参数来限制输出，例如：\n- 使用更具体的搜索关键词\n- 限制搜索范围或文件类型\n- 只查看关键部分而非全部内容"
-                    self.state.messages.append({
-                        "role": "user",
-                        "content": notice
-                    })
-                    terminal.extra_line += 4
-                    print(f"[系统] 已添加超限通知消息")
-                    return True
-            
-            # 如果没找到对应的 assistant 消息，也添加通知
-            notice = f"[系统通知] 工具返回的内容过大（{last_msg_tokens} tokens），已被系统删除。请使用更精确的查询参数来限制输出。"
-            self.state.messages.append({
-                "role": "user",
-                "content": notice
-            })
-            terminal.extra_line += 2
-            return True
+        # 删除 RESULT 消息
+        self.state.messages.pop()
+        print(f"[系统] 已删除超大的工具返回消息")
         
-        # 如果是 assistant 消息过大
-        elif last_msg.get("role") == "assistant":
-            self.state.messages.pop()
-            print(f"[系统] 已删除超大的 assistant 消息（{last_msg_tokens} tokens）")
-            
-            notice = "[系统通知] 你上一条回复内容过大，已被系统删除。请用更简洁的方式回复。或进行多次对话，分次输出。"
-            self.state.messages.append({
-                "role": "user",
-                "content": notice
-            })
-            terminal.extra_line += 2
-            return True
+        # 查找并删除对应的 assistant 消息（包含 ACTION 块）
+        for i in range(len(self.state.messages) - 1, -1, -1):
+            msg = self.state.messages[i]
+            if msg.get("role") == "assistant" and is_standalone_marker(msg.get("content", ""), "@SPORE:ACTION"):
+                # 尝试解析 ACTION 块获取工具信息
+                action = self.protocol_manager.action_parser.parse(msg.get("content", ""))
+                tool_name = action.tool_name if action else "未知工具"
+                tool_args = str(action.parameters) if action else "{}"
+                
+                # 删除 assistant 消息
+                self.state.messages.pop(i)
+                print(f"[系统] 已删除对应的工具调用请求消息")
+                
+                # 添加通知消息
+                notice = f"[系统通知] 你刚才调用了工具 {tool_name}，参数：{tool_args}。但工具返回的内容过大（{last_msg_tokens} tokens），已被系统删除。请使用更精确的查询参数来限制输出，例如：\n- 使用更具体的搜索关键词\n- 限制搜索范围或文件类型\n- 只查看关键部分而非全部内容"
+                self.state.messages.append({
+                    "role": "user",
+                    "content": notice
+                })
+                terminal.extra_line += 4
+                print(f"[系统] 已添加超限通知消息")
+                return True
         
-        # 其他类型的消息（如 user），不删除
-        terminal.extra_line += 1
-        return False
+        # 如果没找到对应的 assistant 消息，也添加通知
+        notice = f"[系统通知] 工具返回的内容过大（{last_msg_tokens} tokens），已被系统删除。请使用更精确的查询参数来限制输出。"
+        self.state.messages.append({
+            "role": "user",
+            "content": notice
+        })
+        terminal.extra_line += 2
+        return True
 
     def _preprocess_messages_for_compression(self, messages: list) -> list:
         """
@@ -450,7 +428,7 @@ class ConversationLoop:
             if content:
                 if content.endswith(":") or content.endswith("："):
                     content = content[:-1] + "。"
-                print(f"{_config.current_agent_name}> {content}")
+                safe_print(f"{_config.current_agent_name}> {content}")
         
         # 显示 TODO
         if _config.current_agent_name == "Spore" and tool_name != "multi_agent_dispatch":
@@ -538,6 +516,9 @@ class ConversationLoop:
             "role": "user",
             "content": result_text
         })
+        
+        # 检查工具返回是否超大
+        self._check_and_handle_oversized_tool_result()
         
         # 保存临时消息
         self.state.save_temp_messages()
@@ -636,7 +617,7 @@ class ConversationLoop:
             self.state.last_answer = ACTION_MARKER
             # 如果有 REPLY 内容，先显示
             if parsed.reply_content:
-                print(f"{_config.current_agent_name}> {parsed.reply_content}")
+                safe_print(f"{_config.current_agent_name}> {parsed.reply_content}")
             return self.handle_action(parsed.action, parsed.prefix_text)
         
         elif parsed.response_type == "final":
@@ -647,7 +628,7 @@ class ConversationLoop:
             if not display_text and parsed.prefix_text:
                 display_text = self._filter_todo_block(parsed.prefix_text)
             if display_text:
-                print(f"{_config.current_agent_name}> {display_text}")
+                safe_print(f"{_config.current_agent_name}> {display_text}")
             
             # 添加 assistant 消息到对话历史（使用 add_assistant_message 增加计数）
             self.state.add_assistant_message(reply)
@@ -687,7 +668,7 @@ class ConversationLoop:
             if should_end:
                 # 检测到循环或结束，打印内容并结束
                 if display_answer:
-                    print(f"{_config.current_agent_name}> {display_answer}")
+                    safe_print(f"{_config.current_agent_name}> {display_answer}")
                 
                 self.state.messages.append({
                     "role": "assistant",
@@ -708,7 +689,7 @@ class ConversationLoop:
                 clear_last_todo_content()
             
             if display_answer:
-                print(f"{_config.current_agent_name}> {display_answer}")
+                safe_print(f"{_config.current_agent_name}> {display_answer}")
             
             # 显示 TODO（如果有）
             if _config.current_agent_name == "Spore":

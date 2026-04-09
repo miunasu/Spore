@@ -159,7 +159,7 @@ export interface WSConfirmResultEvent {
 export type WSEvent = WSLogEvent | WSAgentOutputEvent | WSAgentStatusEvent | WSAgentRegisterEvent | WSChatChunkEvent | WSTodoUpdateEvent | WSConfirmRequestEvent | WSConfirmCancelEvent | WSConfirmResultEvent;
 
 // Tab 类型
-export type TabType = 'output' | 'skills' | 'prompt' | 'history' | 'characters' | 'agents' | 'note';
+export type TabType = 'output' | 'skills' | 'prompt' | 'history' | 'agents' | 'note' | 'characters';
 
 // API 响应类型
 export interface ApiResponse<T = unknown> {

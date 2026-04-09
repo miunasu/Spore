@@ -8,7 +8,6 @@ from .web_browser import visit_url, search, web_browser
 from .grep import grep
 from .terminal import clear_todo_block, clear_printed_lines, extra_line, todo_print, get_last_todo_content, clear_last_todo_content
 from .token_counter import count_tokens, get_max_tokens
-from .python_exec import execute_python
 from .encoding import smart_decode, detect_encoding, safe_encode
 from .path_validator import validate_and_fix_path, fix_command_paths, detect_unescaped_path, normalize_path_for_pathlib
 
@@ -42,7 +41,6 @@ __all__ = [
     'clear_last_todo_content',
     'count_tokens',
     'get_max_tokens',
-    'execute_python',
     'smart_decode',
     'detect_encoding',
     'safe_encode',

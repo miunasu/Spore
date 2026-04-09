@@ -5,6 +5,36 @@ from base.todo_manager import get_current_todos_for_prompt
 
 extra_line = 0
 last_todo_content = ""
+
+
+def safe_print(text: str) -> None:
+    """
+    安全打印，处理 Windows 控制台编码问题
+    
+    在 Windows 系统中，控制台默认使用 GBK 编码，无法处理某些 Unicode 字符
+    （如繁体中文特殊符号、emoji 等），会导致 UnicodeEncodeError。
+    
+    此函数使用 errors='replace' 参数，将无法编码的字符替换为 '?'，
+    避免程序崩溃。
+    
+    参数:
+        text: 要打印的文本
+    
+    示例:
+        >>> safe_print("你好⋯⋯世界")  # 即使包含特殊字符也不会崩溃
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # Windows 控制台 GBK 编码无法处理某些 Unicode 字符
+        # 使用 errors='replace' 替换无法编码的字符
+        try:
+            print(text.encode('gbk', errors='replace').decode('gbk'))
+        except:
+            # 如果还是失败，使用 ASCII 安全模式
+            print(text.encode('ascii', errors='replace').decode('ascii'))
+
+
 def clear_printed_lines(num_lines: int) -> None:
     """
     清除终端中已打印的指定行数。

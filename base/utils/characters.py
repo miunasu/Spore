@@ -54,7 +54,7 @@ def list_character_documents() -> List[Dict[str, str]]:
             )
     except Exception as e:
         log_error("CHARACTER_LIST_ERROR", "Failed to list character documents", e, 
-                 context={"characters_dir": str(characters_dir)})
+                 context={"characters_dir": str(root)})
         return []
 
     return docs

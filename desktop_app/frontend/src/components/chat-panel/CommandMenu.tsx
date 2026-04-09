@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { commandsApi, filesApi } from '../../services/api';
+import { commandsApi, filesApi, settingsApi } from '../../services/api';
 
 interface MenuItem {
   id: string;
@@ -210,13 +210,6 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         ],
         placeholder: '默认: strong_context',
         description: '控制工具集和上下文处理策略',
-      },
-      {
-        key: 'CHARACTER_RECOMMEND_INTERVAL',
-        label: '角色推荐间隔',
-        type: 'text',
-        placeholder: '默认: 5',
-        description: '每 N 条消息触发一次',
       },
       {
         key: 'RULE_REMINDER_INTERVAL',
@@ -471,6 +464,12 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [envSaving, setEnvSaving] = useState(false);
   const [envError, setEnvError] = useState<string | null>(null);
   const [modalContent, setModalContent] = useState<{ title: string; content: string } | null>(null);
+  
+  // Characters 系统状态
+  const [characters, setCharacters] = useState<Array<{ name: string; path: string }>>([]);
+  const [currentCharacter, setCurrentCharacter] = useState<string>('');
+  const [charactersLoading, setCharactersLoading] = useState(false);
+  
   const { newConversation } = useChatStore();
   const {
     autoCleanShortLogs,
@@ -513,10 +512,60 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     }
   };
 
-  // 打开设置时加载 env
+  // 加载角色列表
+  const loadCharacters = async () => {
+    try {
+      setCharactersLoading(true);
+      const response = await settingsApi.listCharacters();
+      console.log('[Characters] API Response:', response);
+      if (response.success) {
+        setCharacters(response.characters || []);
+        setCurrentCharacter(response.current || '');
+        console.log('[Characters] Loaded:', response.characters?.length || 0, 'characters');
+        console.log('[Characters] Current:', response.current || 'none');
+        if (response.debug) {
+          console.log('[Characters] Debug:', response.debug);
+        }
+      } else {
+        console.error('[Characters] Load failed:', response.error);
+      }
+    } catch (error) {
+      console.error('[Characters] Load error:', error);
+    } finally {
+      setCharactersLoading(false);
+    }
+  };
+
+  // 选择角色
+  const handleSelectCharacter = async (characterName: string) => {
+    try {
+      if (characterName === '') {
+        // 选择"无角色"，移除当前角色
+        if (currentCharacter) {
+          await settingsApi.removeCharacter();
+          setCurrentCharacter('');
+        }
+      } else {
+        // 选择具体角色
+        const response = await settingsApi.selectCharacter(characterName);
+        if (response.success) {
+          setCurrentCharacter(characterName);
+          // 同时更新默认角色配置
+          await settingsApi.updateSettings({
+            default_character: characterName,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('选择角色失败:', error);
+    }
+  };
+
+  // 打开设置时加载 env 和角色列表
   const openSettings = () => {
     setShowSettings(true);
     loadEnvFile();
+    loadCharacters();
   };
 
   // 更新单个配置值
@@ -829,6 +878,31 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                       </button>
                     </div>
                   </div>
+                  
+                  {/* 角色选择 */}
+                  <div className="space-y-2">
+                    <div className="text-sm text-spore-text">角色</div>
+                    {charactersLoading ? (
+                      <div className="text-xs text-spore-muted">加载中...</div>
+                    ) : (
+                      <select
+                        value={currentCharacter}
+                        onChange={(e) => handleSelectCharacter(e.target.value)}
+                        className="w-full px-3 py-2 bg-spore-bg border border-spore-border/50 rounded-lg text-sm text-spore-text focus:outline-none focus:ring-2 focus:ring-spore-highlight/50"
+                      >
+                        <option value="">无角色</option>
+                        {characters.map((char) => (
+                          <option key={char.name} value={char.name}>
+                            {char.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    <div className="text-xs text-spore-muted">
+                      选择角色后会在对话中自动应用，选择"无角色"则禁用角色系统
+                    </div>
+                  </div>
+                  
                   {/* 自动清理短日志 */}
                   <div className="space-y-3">
                     <label className="flex items-center gap-3 cursor-pointer">

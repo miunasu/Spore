@@ -71,35 +71,11 @@ const formatContent = (
 const highlightContent = (content: string): string => {
   let result = content;
 
-  // 转义 HTML
+  // 只做 HTML 转义，不添加高亮样式
   result = result
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-
-  // 高亮 JSON 对象和数组
-  result = result.replace(
-    /(\{[^{}]*\}|\[[^\[\]]*\])/g,
-    '<span class="text-spore-info">$1</span>'
-  );
-
-  // 高亮数字
-  result = result.replace(
-    /\b(\d+\.?\d*)\b/g,
-    '<span class="text-spore-warning">$1</span>'
-  );
-
-  // 高亮 true/false/null
-  result = result.replace(
-    /\b(true|false|null)\b/g,
-    '<span class="text-spore-error">$1</span>'
-  );
-
-  // 高亮引号内的字符串
-  result = result.replace(
-    /"([^"]*)"/g,
-    '<span class="text-spore-highlight">"$1"</span>'
-  );
 
   return result;
 };

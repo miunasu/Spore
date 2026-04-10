@@ -64,7 +64,7 @@ async function requestToPort<T>(
 
 // 创建针对特定端口的 Chat API
 export const createChatApi = (port: number) => ({
-  send: (message: string) =>
+  send: (message: string, conversationId?: string) =>
     requestToPort<{
       status: string;
       content?: string;
@@ -74,7 +74,7 @@ export const createChatApi = (port: number) => ({
       raw_response?: string;
     }>(port, '/api/chat/send', {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, conversation_id: conversationId }),
     }),
 
   interrupt: () =>
@@ -82,10 +82,10 @@ export const createChatApi = (port: number) => ({
       method: 'POST',
     }),
 
-  history: (raw: boolean = false) =>
+  history: (raw: boolean = false, sessionId?: string) =>
     requestToPort<{ messages: Array<{ role: string; content: string }> }>(
       port,
-      `/api/chat/history${raw ? '?raw=true' : ''}`
+      `/api/chat/history${raw ? '?raw=true' : ''}${sessionId ? (raw ? '&' : '?') + `session_id=${sessionId}` : ''}`
     ),
 
   newConversation: () =>
@@ -169,7 +169,13 @@ export const createCommandsApi = (port: number) => ({
     }>(port, '/api/commands/continue', { method: 'POST' }),
 
   getTokens: (conversationId?: string) =>
-    requestToPort<{ token_count: number }>(
+    requestToPort<{
+      input: number;
+      output: number;
+      cumulative_input: number;
+      cumulative_output: number;
+      context: number;
+    }>(
       port,
       `/api/commands/tokens${conversationId ? `?conversation_id=${conversationId}` : ''}`
     ),

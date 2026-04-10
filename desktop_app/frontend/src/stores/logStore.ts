@@ -57,10 +57,11 @@ export const useLogStore = create<LogStore>((set, get) => ({
   },
 
   addLog: (type, entry) => {
-    const { activeConversationId } = get();
+    // 从 entry 中提取 conversationId（如果有）
+    const conversationId = entry.conversationId;
     const entryWithConv = {
       ...entry,
-      conversationId: activeConversationId || undefined,
+      conversationId: conversationId,
     };
 
     // 添加到缓冲区
@@ -81,7 +82,7 @@ export const useLogStore = create<LogStore>((set, get) => ({
               logEntry,
             ].slice(-300);
 
-            // 如果有活跃对话，也添加到对话日志
+            // 如果日志有 conversation_id，添加到对应对话的日志
             const convId = logEntry.conversationId;
             if (convId) {
               if (!newConvLogs[convId]) {

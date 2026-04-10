@@ -59,7 +59,13 @@ export const ChatPanel: React.FC = () => {
   const historyButtonRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragCounterRef = useRef(0);
-  const [tokenCount, setTokenCount] = useState<number | null>(null);
+  const [tokenStats, setTokenStats] = useState<{
+    input: number;
+    output: number;
+    cumulative_input: number;
+    cumulative_output: number;
+    context: number;
+  } | null>(null);
   
   // 上下文模式状态
   const [contextMode, setContextMode] = useState<string>('strong_context');
@@ -106,12 +112,18 @@ export const ChatPanel: React.FC = () => {
     }
   }, [activeConversationId]);
 
-  // 定时获取当前对话的 token 数量
+  // 定时获取当前对话的 token 统计
   useEffect(() => {
     const fetchTokens = async () => {
       try {
         const result = await commandsApi.getTokens(activeConversationId || undefined);
-        setTokenCount(result.token_count);
+        setTokenStats({
+          input: result.input || 0,
+          output: result.output || 0,
+          cumulative_input: result.cumulative_input || 0,
+          cumulative_output: result.cumulative_output || 0,
+          context: result.context || 0
+        });
       } catch (err) {
         // 忽略错误
       }
@@ -497,10 +509,10 @@ export const ChatPanel: React.FC = () => {
 
         {/* 操作按钮 */}
         <div className="flex items-center px-2 gap-1">
-          {/* Token 显示 */}
-          {tokenCount !== null && (
-            <span className="text-xs text-spore-muted/60 px-2">
-              {formatTokenCount(tokenCount)} tokens
+          {/* Token 显示 - 5个值 */}
+          {tokenStats && (
+            <span className="text-xs text-spore-muted/60 px-2 whitespace-nowrap">
+              {formatTokenCount(tokenStats.cumulative_input)}↑ {formatTokenCount(tokenStats.cumulative_output)}↓ ctx:{formatTokenCount(tokenStats.context)}
             </span>
           )}
 
@@ -576,7 +588,7 @@ export const ChatPanel: React.FC = () => {
 
           {/* 输入区域 */}
           <div className="p-4">
-            <InputArea />
+            <InputArea tokenStats={tokenStats} />
           </div>
         </>
       )}

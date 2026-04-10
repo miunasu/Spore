@@ -67,7 +67,9 @@ export interface Agent {
 // WebSocket 事件类型
 export interface WSLogEvent {
   type: 'log';
-  data: LogEntry;
+  data: LogEntry & {
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
+  };
 }
 
 export interface WSAgentOutputEvent {
@@ -78,6 +80,7 @@ export interface WSAgentOutputEvent {
     message: string;
     level: string;
     timestamp: number;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 
@@ -86,6 +89,7 @@ export interface WSAgentStatusEvent {
   data: {
     agent_id: string;
     status: AgentStatus;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 
@@ -95,6 +99,7 @@ export interface WSAgentRegisterEvent {
     agent_id: string;
     agent_name: string;
     status: AgentStatus;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 
@@ -103,6 +108,7 @@ export interface WSChatChunkEvent {
   data: {
     content: string;
     is_final: boolean;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 
@@ -121,6 +127,7 @@ export interface WSTodoUpdateEvent {
   data: {
     todos: TodoItem[];
     timestamp: number;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 
@@ -132,6 +139,7 @@ export interface ConfirmRequestData {
   message: string;
   details: string[];
   timestamp: number;
+  conversation_id?: string;  // 会话 ID，用于多标签页过滤
 }
 
 export interface WSConfirmRequestEvent {
@@ -144,6 +152,7 @@ export interface WSConfirmCancelEvent {
   data: {
     request_id: string;
     reason: string;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 
@@ -153,6 +162,7 @@ export interface WSConfirmResultEvent {
     request_id: string;
     confirmed: boolean;
     result: any;
+    conversation_id?: string;  // 会话 ID，用于多标签页过滤
   };
 }
 

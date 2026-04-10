@@ -6,7 +6,7 @@
 """
 from typing import List, Dict, Any, Optional
 import copy
-
+from base.config import get_config
 
 class ConversationState:
     """单个会话的状态"""
@@ -31,8 +31,13 @@ class ConversationState:
         # LLM 回复计数器（用于规则提醒）
         self.llm_reply_count: int = 0
         
+        # Token 统计（Desktop 模式专用）
+        self.last_input_tokens: int = 0  # 上次请求的输入 token（完整 context）
+        self.last_output_tokens: int = 0  # 上次请求的输出 token
+        self.cumulative_input_tokens: int = 0  # 累计输入 token（用于算钱）
+        self.cumulative_output_tokens: int = 0  # 累计输出 token（用于算钱）
+        
         # 上下文处理模式（每个对话独立，默认从ENV配置读取）
-        from base.config import get_config
         config = get_config()
         self.context_mode: str = config.context_mode
     
@@ -40,6 +45,7 @@ class ConversationState:
         """添加用户消息"""
         self.messages.append({"role": "user", "content": content})
         self.user_message_count += 1
+
     
     def add_assistant_message(self, content: str) -> None:
         """添加助手消息"""
@@ -48,12 +54,18 @@ class ConversationState:
     
     def clear_all(self) -> None:
         """清除所有状态"""
+        
         self.messages.clear()
         self.user_message_count = 0
         self.llm_reply_count = 0
         self.last_answer = ""
         self.current_answer = ""
         self.temp_msg = None
+        # 清除 token 统计
+        self.last_input_tokens = 0
+        self.last_output_tokens = 0
+        self.cumulative_input_tokens = 0
+        self.cumulative_output_tokens = 0
     
     def save_temp_messages(self) -> None:
         """保存临时消息（用于savemode）"""
@@ -70,6 +82,19 @@ class ConversationState:
         """切换save mode"""
         self.save_mode = not self.save_mode
         return self.save_mode
+    
+    def update_token_stats(self, input_tokens: int, output_tokens: int) -> None:
+        """
+        更新 token 统计（Desktop 模式专用）
+        
+        Args:
+            input_tokens: 本次请求的输入 token 数（完整 context）
+            output_tokens: 本次请求的输出 token 数
+        """
+        self.last_input_tokens = input_tokens
+        self.last_output_tokens = output_tokens
+        self.cumulative_input_tokens += input_tokens  # 累加所有 input（用于算钱）
+        self.cumulative_output_tokens += output_tokens  # 累加所有 output（用于算钱）
 
 
 class MultiSessionManager:
@@ -93,22 +118,28 @@ class MultiSessionManager:
     
     def switch_session(self, session_id: str) -> ConversationState:
         """切换到指定会话，如果不存在则创建"""
+        
         if session_id not in self._sessions:
             self._sessions[session_id] = ConversationState()
+        
         self._current_session_id = session_id
         return self._sessions[session_id]
     
     def create_session(self, session_id: str) -> ConversationState:
         """创建新会话"""
+        # 添加调试日志        
         if session_id in self._sessions:
             # 已存在则清空
             self._sessions[session_id].clear_all()
         else:
             self._sessions[session_id] = ConversationState()
+        
         return self._sessions[session_id]
     
     def delete_session(self, session_id: str) -> bool:
         """删除会话"""
+        # 添加调试日志
+        
         if session_id == "default":
             # 不能删除默认会话，只能清空
             self._sessions["default"].clear_all()

@@ -6,12 +6,25 @@ import { useChatStore } from '../../stores/chatStore';
 import { MessageDetailButton, MessageDetailContent } from './MessageDetail';
 
 export const MessageList: React.FC = () => {
-  const messages = useChatStore((state) => state.activeMessages());
+  // 直接订阅 conversations 和 activeConversationId，确保状态变化时重新渲染
+  const conversations = useChatStore((state) => state.conversations);
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
   const isGenerating = useChatStore((state) => state.isGenerating());
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // 根据当前活动对话获取消息
+  const messages = React.useMemo(() => {
+    const activeConv = conversations.find(c => c.id === activeConversationId);
+    return activeConv?.messages || [];
+  }, [conversations, activeConversationId]);
+  
   // 为每条消息维护展开状态
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set());
+
+  // 切换对话时清空展开状态
+  useEffect(() => {
+    setExpandedMessages(new Set());
+  }, [activeConversationId]);
 
   // 自动滚动到底部
   useEffect(() => {

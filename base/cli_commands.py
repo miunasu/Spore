@@ -7,7 +7,7 @@ import os
 from typing import Optional, Tuple
 import pyperclip
 from .state_manager import ConversationState
-from .utils import collect_skills_md_features, count_tokens, clear_last_todo_content
+from .utils import collect_skills_md_features, clear_last_todo_content
 from .todo_manager import todo_write
 from .memory_manager import save_messages, load_messages, get_latest_history_file
 from .logger import log_error
@@ -95,7 +95,6 @@ class CLICommandHandler:
         
         # 查看提示词
         if user_input.lower() == "prompt":
-            print(f'当前系统提示词使用的token数：{count_tokens(system_prompt)}')
             print(system_prompt)
             return "", True
         
@@ -116,9 +115,9 @@ class CLICommandHandler:
             self._handle_load_command(user_input)
             return "", True
         
-        # 计算token
+        # token 命令已废弃（使用 LLM API 返回的精确值）
         if user_input.lower() == "token":
-            print(f'当前记忆使用的token数：{count_tokens(self.state.messages)}')
+            print("Token 统计已从 LLM API 响应中自动获取，无需手动查询")
             return "", True
         
         # 角色选择

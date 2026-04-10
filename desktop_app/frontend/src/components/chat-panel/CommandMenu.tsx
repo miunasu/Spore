@@ -178,16 +178,6 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         placeholder: '默认: false',
       },
       {
-        key: 'TOKENIZER_TYPE',
-        label: 'Tokenizer 类型',
-        type: 'select',
-        options: [
-          { value: 'gpt', label: 'GPT (tiktoken)' },
-          { value: 'claude', label: 'Claude' },
-        ],
-        placeholder: '默认: gpt',
-      },
-      {
         key: 'SYSTEM_PROMPT_FILE',
         label: '系统提示文件',
         type: 'text',

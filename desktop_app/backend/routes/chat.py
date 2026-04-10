@@ -6,9 +6,19 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-
-from ..core import get_instances
 import re
+
+from ..core import get_instances, switch_session, create_session, delete_session, get_session_manager
+from base.logger import log_info, log_error
+from base.agent_types import get_tools_for_mode
+from base.tools import TOOL_DEFINITIONS
+from base.text_protocol import ProtocolManager
+from base.prompt_loader import load_system_prompt
+from base.utils import clear_last_todo_content
+from base.todo_manager import todo_write
+from base.agent_process import get_current_agent_manager
+from base.interrupt_handler import get_interrupt_handler
+from AutoAgent import select_context_mode
 
 router = APIRouter()
 
@@ -127,6 +137,7 @@ def extract_user_visible_content(reply: str) -> str:
 class ChatRequest(BaseModel):
     """聊天请求模型"""
     message: str
+    conversation_id: Optional[str] = None  # 新增：指定会话 ID
 
 
 class ChatResponse(BaseModel):
@@ -142,34 +153,39 @@ class ChatResponse(BaseModel):
 @router.post("/send", response_model=ChatResponse)
 async def send_message(req: ChatRequest):
     """
-    发送消息 - 复用 ConversationLoop 的对话逻辑
-    使用线程池异步执行，避免阻塞其他 API 请求
+    发送消息 - 使用独立的 ConversationLoop 实例
+    每个会话有自己的 ConversationLoop，实现真正的并发处理
     
     如果 message 为空，则不添加用户消息，直接继续对话（用于连续输出）
     """
-    ipc_manager, session_manager, _, conv_loop, config = get_instances()
+    from ..core import get_conv_loop_manager
     
-    if not conv_loop:
+    ipc_manager, session_manager, _, _, config = get_instances()[:5]
+    conv_loop_manager = get_conv_loop_manager()
+    
+    if not conv_loop_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
-    # 获取当前会话状态
-    state = session_manager.current
+    # 确定目标会话 ID
+    conversation_id = req.conversation_id or session_manager.current_session_id
     
-    # 根据当前会话的模式更新工具集
-    from base.agent_types import get_tools_for_mode
-    from base.tools import TOOL_DEFINITIONS
-    from base.text_protocol import ProtocolManager
-    from base.prompt_loader import load_system_prompt
-    from AutoAgent import select_context_mode
+    # 确保会话存在
+    if conversation_id not in session_manager.list_sessions():
+        session_manager.create_session(conversation_id)
     
-    # 如果是auto模式，先判断应该使用哪种模式
-    if state.context_mode == "auto" and req.message.strip():
+    # 获取该会话的状态
+    target_state = session_manager.get_session(conversation_id)
+    if not target_state:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {conversation_id}")
+        
+    # 根据会话的模式确定工具集
+    if target_state.context_mode == "auto" and req.message.strip():
         selected_mode = select_context_mode(req.message)
         current_tools = get_tools_for_mode(selected_mode)
     else:
-        current_tools = get_tools_for_mode(state.context_mode)
+        current_tools = get_tools_for_mode(target_state.context_mode)
     
-    # 更新工具集和系统提示
+    # 准备系统提示和工具定义
     tool_definitions = {
         name: TOOL_DEFINITIONS[name]
         for name in current_tools
@@ -178,23 +194,35 @@ async def send_message(req: ChatRequest):
     base_prompt = load_system_prompt() or ""
     protocol_manager = ProtocolManager()
     system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
+    
+    # 获取或创建该会话的 ConversationLoop 实例
+    conv_loop = conv_loop_manager.get_loop(
+        session_id=conversation_id,
+        system_prompt=system_prompt,
+        tool_names=current_tools
+    )
+    
+    # 更新 ConversationLoop 的配置（可能会话模式改变了）
     conv_loop.system_prompt = system_prompt
     conv_loop.tool_names = current_tools
     
     # 只有非空消息才添加用户消息
     if req.message.strip():
-        state.add_user_message(req.message)
+        target_state.add_user_message(req.message)
     
     def _do_chat():
         """在线程池中执行的阻塞操作"""
+        # 现在每个会话有独立的 conv_loop，不需要担心并发问题
+        # conv_loop.state 绑定到特定的会话状态，不会被其他请求影响
+        
         # 管理上下文长度
         conv_loop.manage_context_length()
         
         # 修复不完整的消息
         conv_loop.fix_incomplete_messages()
         
-        # 发送请求并获取响应（复用 conv_loop.send_chat_request）
-        return conv_loop.send_chat_request()
+        # 发送请求并获取响应
+        return conv_loop.send_chat_request(conversation_id=conversation_id)
     
     try:
         # 在线程池中执行阻塞操作
@@ -220,7 +248,7 @@ async def send_message(req: ChatRequest):
         
         # 提取用户可见内容（去除协议标记）
         clean_reply = extract_user_visible_content(reply)
-        
+                
         return ChatResponse(
             status="success",
             content=clean_reply,
@@ -230,6 +258,7 @@ async def send_message(req: ChatRequest):
         )
     
     except Exception as e:
+        log_error("CHAT_SEND_ERROR", f"Error in send_message: {str(e)}", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -248,13 +277,11 @@ def interrupt():
         conv_loop.handle_keyboard_interrupt()
         
         # 2. 直接终止当前活动的Agent管理器（处理子 Agent）
-        from base.agent_process import get_current_agent_manager
         agent_manager = get_current_agent_manager()
         if agent_manager:
             agent_manager.terminate_all()
         
         # 3. 同时调用 InterruptHandler 广播终止信号（兼容性）
-        from base.interrupt_handler import get_interrupt_handler
         interrupt_handler = get_interrupt_handler()
         interrupt_handler.broadcast_termination()
         
@@ -264,24 +291,33 @@ def interrupt():
 
 
 @router.get("/history")
-def get_history(raw: bool = False) -> Dict[str, Any]:
+def get_history(raw: bool = False, session_id: Optional[str] = None) -> Dict[str, Any]:
     """获取对话历史
     
     Args:
         raw: 是否返回原始内容（包含协议标记），默认 False 返回处理后的干净内容
+        session_id: 会话 ID，如果不指定则使用当前会话
     """
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
+    # 获取指定会话的状态
+    if session_id:
+        target_state = session_manager.get_session(session_id)
+        if not target_state:
+            raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
+    else:
+        target_state = session_manager.current
+    
     if raw:
         # 返回原始消息（包含协议标记）
-        return {"messages": session_manager.current.messages}
+        return {"messages": target_state.messages}
     
     # 处理消息，提取用户可见内容
     clean_messages = []
-    for msg in session_manager.current.messages:
+    for msg in target_state.messages:
         if msg.get("role") == "assistant":
             clean_content = extract_user_visible_content(msg.get("content", ""))
             if clean_content:  # 只添加有内容的消息
@@ -304,10 +340,6 @@ def new_conversation():
         raise HTTPException(status_code=503, detail="后端未初始化")
     
     try:
-        from base.utils import clear_last_todo_content
-        from base.todo_manager import todo_write
-        
-        session_manager.current.clear_all()
         clear_last_todo_content()
         todo_write([])
         
@@ -323,30 +355,26 @@ class SwitchSessionRequest(BaseModel):
 
 
 @router.post("/session/switch")
-def switch_session(req: SwitchSessionRequest) -> Dict[str, Any]:
+def switch_session_route(req: SwitchSessionRequest) -> Dict[str, Any]:
     """切换到指定会话"""
-    from ..core import switch_session as do_switch
-    return do_switch(req.session_id)
+    return switch_session(req.session_id)
 
 
 @router.post("/session/create")
-def create_session(req: SwitchSessionRequest) -> Dict[str, Any]:
+def create_session_route(req: SwitchSessionRequest) -> Dict[str, Any]:
     """创建新会话"""
-    from ..core import create_session as do_create
-    return do_create(req.session_id)
+    return create_session(req.session_id)
 
 
 @router.post("/session/delete")
-def delete_session(req: SwitchSessionRequest) -> Dict[str, Any]:
+def delete_session_route(req: SwitchSessionRequest) -> Dict[str, Any]:
     """删除会话"""
-    from ..core import delete_session as do_delete
-    return do_delete(req.session_id)
+    return delete_session(req.session_id)
 
 
 @router.get("/session/list")
 def list_sessions() -> Dict[str, Any]:
     """列出所有会话"""
-    from ..core import get_session_manager
     manager = get_session_manager()
     if not manager:
         return {"sessions": [], "current": None}

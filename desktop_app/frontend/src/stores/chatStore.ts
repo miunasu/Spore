@@ -134,14 +134,14 @@ interface ChatStore {
 
   // 对话管理
   newConversation: (name?: string) => Promise<void>;
-  switchConversation: (id: string) => void;
+  switchConversation: (id: string) => Promise<void>;
   closeConversation: (id: string) => Promise<void>;
   renameConversation: (id: string, name: string) => void;
 
   // 消息操作
   setInputValue: (value: string) => void;
   addMessage: (conversationId: string, message: Message) => void;
-  setMessages: (messages: Message[]) => void;
+  setMessages: (messages: Message[], targetConversationId?: string) => void;
   clearMessages: () => void;
 
   // UI 操作
@@ -169,9 +169,17 @@ const MAIN_PORT = 8765;
 
 export const useChatStore = create<ChatStore>((set, get) => {
   // 初始化默认对话（使用主后端）
+  // 使用固定 ID "default" 以匹配后端的默认 session
   const defaultConv = createConversation('Default');
+  defaultConv.id = 'default';  // 覆盖为固定 ID
   defaultConv.backendPort = MAIN_PORT;
   defaultConv.backendStatus = 'running';
+
+  // 确保后端切换到默认 session
+  const chatApi = createChatApi(MAIN_PORT);
+  chatApi.switchSession('default').catch((e) => {
+    frontendLog(`[错误] 初始化默认会话失败: ${e}`);
+  });
 
   return {
     conversations: [defaultConv],
@@ -248,25 +256,48 @@ export const useChatStore = create<ChatStore>((set, get) => {
         frontendLog(`[新建] ${newConv.name} (${newConv.id.slice(0, 16)}...)`);
       } catch (e) {
         frontendLog(`[错误] 创建对话失败: ${e}`);
-        console.error('创建新对话失败:', e);
       }
     },
 
-    switchConversation: (id) => {
+    switchConversation: async (id) => {
       const { conversations, activeConversationId } = get();
       if (id === activeConversationId) return;
 
       const conv = conversations.find((c) => c.id === id);
       if (conv) {
         set({ activeConversationId: id, inputValue: '' });
-        frontendLog(`[切换] -> ${conv.name} (${conv.messages.length}条消息)`);
 
-        // 通知后端切换会话
+        // 通知后端切换会话并加载历史
         const chatApi = createChatApi(MAIN_PORT);
-        chatApi.switchSession(id).catch((e) => {
-          frontendLog(`[错误] 切换会话失败: ${e}`);
-          console.error('切换会话失败:', e);
-        });
+        try {
+          await chatApi.switchSession(id);
+          
+          // 从后端加载该会话的消息历史
+          const historyResponse = await chatApi.history(false, id);
+          
+          const messages: Message[] = historyResponse.messages
+            .filter((msg) => {
+              // 只保留 user 和 assistant 消息
+              if (msg.role !== 'user' && msg.role !== 'assistant') return false;
+              // 过滤掉工具结果消息（以 @SPORE:RESULT 开头）
+              if (msg.role === 'user' && msg.content?.trim().startsWith('@SPORE:RESULT')) return false;
+              return true;
+            })
+            .map((msg, index) => ({
+              id: index.toString(),
+              role: msg.role as 'user' | 'assistant',
+              // assistant 消息提取显示内容
+              content: msg.role === 'assistant' ? extractDisplayContent(msg.content) : msg.content,
+              timestamp: Date.now(),
+            }))
+            .filter((msg) => msg.content.trim() !== ''); // 过滤掉空内容
+          
+          // 更新该对话的消息
+          get().setMessages(messages, id);
+        } catch (e) {
+          const errorMsg = e instanceof Error ? e.message : String(e);
+          frontendLog(`[错误] 切换会话失败: ${errorMsg}`);
+        }
       }
     },
 
@@ -284,7 +315,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const chatApi = createChatApi(conv.backendPort);
           await chatApi.interrupt();
         } catch (e) {
-          console.error('中断失败:', e);
+          frontendLog(`[错误] 关闭对话时中断失败: ${e}`);
         }
       }
 
@@ -293,7 +324,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const chatApi = createChatApi(MAIN_PORT);
         await chatApi.deleteSession(id);
       } catch (e) {
-        console.error('删除会话失败:', e);
+        frontendLog(`[错误] 删除后端会话失败: ${e}`);
       }
 
       const newConversations = conversations.filter((c) => c.id !== id);
@@ -315,7 +346,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (id === activeConversationId && newActiveId) {
         const chatApi = createChatApi(MAIN_PORT);
         chatApi.switchSession(newActiveId).catch((e) => {
-          console.error('切换会话失败:', e);
+          frontendLog(`[错误] 关闭对话后切换会话失败: ${e}`);
         });
       }
     },
@@ -345,12 +376,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }));
     },
 
-    setMessages: (messages) => {
+    setMessages: (messages, targetConversationId?) => {
       set((state) => {
         const { activeConversationId, conversations } = state;
+        const targetId = targetConversationId || activeConversationId;
         return {
           conversations: conversations.map((c) =>
-            c.id === activeConversationId
+            c.id === targetId
               ? { ...c, messages, updatedAt: Date.now() }
               : c
           ),
@@ -386,7 +418,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     // API 操作
     sendMessage: async (content) => {
-      const { activeConversationId, addMessage, setGenerating, ensureBackend, setMessages } =
+      const { activeConversationId, addMessage, setGenerating, ensureBackend } =
         get();
 
       if (!activeConversationId) return;
@@ -396,7 +428,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // 确保后端已启动
       const port = await ensureBackend(conversationId);
       if (!port) {
-        console.error('后端未就绪');
+        frontendLog(`[错误] 后端未就绪`);
         return;
       }
 
@@ -409,12 +441,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
         content,
         timestamp: Date.now(),
       };
+      // 使用 addMessage 添加到指定的对话
       addMessage(conversationId, userMessage);
       set({ inputValue: '' });
-
-      // 日志：用户发送消息
-      const contentPreview = content.length > 50 ? content.slice(0, 50) + '...' : content;
-      frontendLog(`[发送] ${contentPreview}`);
 
       setGenerating(conversationId, true);
       const startTime = Date.now();
@@ -426,7 +455,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         while (shouldContinue && !interruptFlags[conversationId]) {
           roundCount++;
-          const response = await chatApi.send(isFirstRequest ? content : '');
+          const response = await chatApi.send(
+            isFirstRequest ? content : '', 
+            conversationId
+          );
           isFirstRequest = false;
 
           if (interruptFlags[conversationId]) {
@@ -439,7 +471,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           if (response.status === 'error') {
             frontendLog(`[错误] 第${roundCount}轮: ${response.message}`);
-            console.error('对话错误:', response.message);
             break;
           }
 
@@ -449,16 +480,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
               role: 'assistant',
               content: response.content,
               timestamp: Date.now(),
-              sent_messages: response.sent_messages,  // 保存实际发送的消息
-              raw_response: response.raw_response,  // 保存原始响应
+              sent_messages: response.sent_messages,
+              raw_response: response.raw_response,
             };
+            // 使用 addMessage 添加到指定的对话（即使用户已切换标签页）
             addMessage(conversationId, assistantMessage);
-            
-            // 日志：AI回复
-            const replyPreview = response.content.length > 80 
-              ? response.content.slice(0, 80).replace(/\n/g, ' ') + '...' 
-              : response.content.replace(/\n/g, ' ');
-            frontendLog(`[回复] R${roundCount} (${response.content.length}字): ${replyPreview}`);
           }
 
           shouldContinue = response.should_continue === true;
@@ -467,59 +493,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
         }
 
-        // 对话结束后，从后端同步完整的消息历史
-        // 确保前端显示和后端存储一致
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         frontendLog(`[完成] 共${roundCount}轮，耗时${elapsed}秒`);
         
-        try {
-          const historyResponse = await chatApi.history();
-          
-          // 保存当前消息的详情数据（sent_messages 和 raw_response）
-          const currentMessages = get().activeMessages();
-          const detailsMap = new Map<string, { sent_messages?: any[]; raw_response?: string }>();
-          currentMessages.forEach(msg => {
-            if (msg.sent_messages || msg.raw_response) {
-              // 使用消息内容作为key（因为同步后id会变）
-              const key = `${msg.role}:${msg.content}`;
-              detailsMap.set(key, {
-                sent_messages: msg.sent_messages,
-                raw_response: msg.raw_response
-              });
-            }
-          });
-          
-          const messages: Message[] = historyResponse.messages
-            .filter((msg) => {
-              // 只保留 user 和 assistant 消息
-              if (msg.role !== 'user' && msg.role !== 'assistant') return false;
-              // 过滤掉工具结果消息（以 @SPORE:RESULT 开头）
-              if (msg.role === 'user' && msg.content?.trim().startsWith('@SPORE:RESULT')) return false;
-              return true;
-            })
-            .map((msg, index) => {
-              const displayContent = msg.role === 'assistant' ? extractDisplayContent(msg.content) : msg.content;
-              const key = `${msg.role}:${displayContent}`;
-              const details = detailsMap.get(key);
-              
-              return {
-                id: index.toString(),
-                role: msg.role as 'user' | 'assistant',
-                content: displayContent,
-                timestamp: Date.now(),
-                // 恢复详情数据
-                ...(details?.sent_messages && { sent_messages: details.sent_messages }),
-                ...(details?.raw_response && { raw_response: details.raw_response }),
-              };
-            })
-            .filter((msg) => msg.content.trim() !== ''); // 过滤掉空内容
-          setMessages(messages);
-        } catch (syncError) {
-          console.error('同步消息历史失败:', syncError);
-        }
+        // 不需要最后的 setMessages 同步，因为 addMessage 已经实时更新了
+        // 如果需要同步（比如确保一致性），应该使用 conversationId 而不是 activeConversationId
       } catch (error) {
         frontendLog(`[错误] 发送失败: ${error}`);
-        console.error('发送消息失败:', error);
       } finally {
         setGenerating(conversationId, false);
         delete interruptFlags[conversationId];
@@ -545,17 +525,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
         frontendLog(`[中断] 成功`);
       } catch (error) {
         frontendLog(`[错误] 中断失败: ${error}`);
-        console.error('中断失败:', error);
       }
     },
 
     loadHistory: async () => {
       const conv = get().activeConversation();
-      if (!conv?.backendPort) return;
-
+      if (!conv?.backendPort){ 
+        frontendLog(`[错误] loadHistory: 没有活动对话或后端端口`);
+        return;
+      }
       try {
         const chatApi = createChatApi(conv.backendPort);
-        const response = await chatApi.history();
+        const response = await chatApi.history(false, conv.id);
         const messages: Message[] = response.messages
           .filter((msg) => {
             // 只保留 user 和 assistant 消息
@@ -574,7 +555,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           .filter((msg) => msg.content.trim() !== ''); // 过滤掉空内容
         get().setMessages(messages);
       } catch (error) {
-        console.error('加载历史失败:', error);
+        frontendLog(`[错误] 加载历史失败: ${error}`);
       }
     },
 
@@ -658,7 +639,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
       } catch (error) {
         frontendLog(`[错误] 加载历史文件失败: ${error}`);
-        console.error('加载历史文件失败:', error);
       }
     },
 
@@ -667,7 +647,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const response = await commandsApi.listHistory();
         set({ historyFiles: response.files });
       } catch (error) {
-        console.error('获取历史文件列表失败:', error);
+        frontendLog(`[错误] 获取历史文件列表失败: ${error}`);
       }
     },
 
@@ -679,7 +659,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const cmdApi = createCommandsApi(conv.backendPort);
         await cmdApi.save();
       } catch (error) {
-        console.error('保存对话失败:', error);
+        frontendLog(`[错误] 保存对话失败: ${error}`);
       }
     },
   };

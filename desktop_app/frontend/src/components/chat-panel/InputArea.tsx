@@ -6,7 +6,17 @@ import { useChatStore } from '../../stores/chatStore';
 import { CommandMenu } from './CommandMenu';
 import { ConfirmBar } from './ConfirmBar';
 
-export const InputArea: React.FC = () => {
+interface InputAreaProps {
+  tokenStats?: {
+    input: number;
+    output: number;
+    cumulative_input: number;
+    cumulative_output: number;
+    context: number;
+  } | null;
+}
+
+export const InputArea: React.FC<InputAreaProps> = ({ tokenStats }) => {
   const { inputValue, setInputValue, sendMessage, interrupt } = useChatStore();
   const isGenerating = useChatStore((state) => state.isGenerating());
   const backendStatus = useChatStore(
@@ -102,10 +112,17 @@ export const InputArea: React.FC = () => {
         </div>
       </div>
       
-      {/* 提示文字 */}
-      <p className="text-xs text-spore-muted mt-2 text-center">
-        Shift + Enter for new line · Enter to send
-      </p>
+      {/* 提示文字和 Token 统计 */}
+      <div className="flex items-center justify-between text-xs text-spore-muted mt-2 px-1">
+        <span className="text-center flex-1">
+          Shift + Enter for new line · Enter to send
+        </span>
+        {tokenStats && (
+          <span className="text-spore-muted/60 whitespace-nowrap ml-4">
+            Σin:{tokenStats.cumulative_input} Σout:{tokenStats.cumulative_output}
+          </span>
+        )}
+      </div>
     </div>
   );
 };

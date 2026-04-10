@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
-from ..core import get_instances
+from ..core import get_session_manager
 
 router = APIRouter()
 
@@ -17,21 +17,19 @@ class LoadRequest(BaseModel):
 
 @router.get("/prompt")
 def get_prompt() -> Dict[str, Any]:
-    """获取系统提示词 - 复用 prompt_loader"""
+    """获取系统提示词"""
     from base.prompt_loader import load_system_prompt
-    from base.utils.token_counter import count_tokens
     
     prompt = load_system_prompt()
     return {
-        "prompt": prompt,
-        "token_count": count_tokens(prompt) if prompt else 0
+        "prompt": prompt
     }
 
 
 @router.get("/context")
 def get_context(full: bool = False) -> Dict[str, Any]:
     """获取上下文 - 复用 state.messages"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -58,7 +56,7 @@ def get_context(full: bool = False) -> Dict[str, Any]:
 @router.post("/memory/clear")
 def clear_memory():
     """清除记忆 - 复用 CLICommandHandler._handle_memclean_command 逻辑"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -88,7 +86,7 @@ def get_skills() -> Dict[str, Any]:
 @router.post("/savemode")
 def toggle_savemode() -> Dict[str, Any]:
     """切换节省模式 - 复用 state.toggle_save_mode"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -100,7 +98,7 @@ def toggle_savemode() -> Dict[str, Any]:
 @router.post("/save")
 def save_conversation():
     """保存对话 - 复用 memory_manager.save_messages"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -116,7 +114,7 @@ def save_conversation():
 @router.post("/load")
 def load_conversation(req: LoadRequest):
     """加载对话 - 复用 memory_manager.load_messages"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -136,7 +134,7 @@ def load_conversation(req: LoadRequest):
 @router.post("/continue")
 def continue_recent():
     """继续最近对话 - 复用 memory_manager.get_latest_history_file"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -164,19 +162,49 @@ def continue_recent():
 
 @router.get("/tokens")
 def calculate_tokens(conversation_id: Optional[str] = None) -> Dict[str, Any]:
-    """获取当前会话的 token 数 - 直接计算 messages 的 token"""
-    _, session_manager, _, _, _ = get_instances()
+    """获取指定会话的 token 统计 - Desktop 模式从 state 读取"""
+    session_manager = get_session_manager()
     
     if not session_manager:
-        return {"token_count": 0}
+        return {
+            "input": 0,
+            "output": 0,
+            "cumulative_input": 0,
+            "cumulative_output": 0,
+            "context": 0
+        }
     
     try:
-        from base.utils.token_counter import count_tokens
-        messages = session_manager.current.messages
-        token_count = count_tokens(messages) if messages else 0
-        return {"token_count": token_count}
-    except Exception:
-        return {"token_count": 0}
+        # 获取指定会话的 state（如果没有指定则使用当前会话）
+        if conversation_id:
+            state = session_manager.get_session(conversation_id)
+            if not state:
+                # 会话不存在，返回 0
+                return {
+                    "input": 0,
+                    "output": 0,
+                    "cumulative_input": 0,
+                    "cumulative_output": 0,
+                    "context": 0
+                }
+        else:
+            state = session_manager.current
+        
+        return {
+            "input": state.last_input_tokens,
+            "output": state.last_output_tokens,
+            "cumulative_input": state.cumulative_input_tokens,  # 累加所有 input（用于算钱）
+            "cumulative_output": state.cumulative_output_tokens,  # 累加所有 output（用于算钱）
+            "context": state.last_input_tokens  # context = 当前的 input
+        }
+    except Exception as e:
+        return {
+            "input": 0,
+            "output": 0,
+            "cumulative_input": 0,
+            "cumulative_output": 0,
+            "context": 0
+        }
 
 
 class SetConversationRequest(BaseModel):
@@ -195,7 +223,7 @@ def set_active_conversation(request: SetConversationRequest) -> Dict[str, Any]:
 @router.post("/character")
 def trigger_character():
     """触发角色选择 - 复用 AutoAgent.character_choose_agent"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
@@ -354,7 +382,7 @@ def get_context_mode() -> Dict[str, Any]:
     """获取当前会话的上下文处理模式"""
     from AutoAgent import get_mode_description
     
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         # 如果后端未初始化，返回默认模式
@@ -396,7 +424,7 @@ def set_context_mode(req: SetModeRequest) -> Dict[str, Any]:
     if req.mode not in ["strong_context", "long_context", "auto"]:
         raise HTTPException(status_code=400, detail=f"无效的模式: {req.mode}")
     
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")

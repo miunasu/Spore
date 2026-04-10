@@ -39,7 +39,7 @@ const PRELOADED_THEME_VAR_KEYS = [
 function App() {
   const { addLog, setActiveConversation } = useLogStore();
   const { addAgent, updateAgentStatus, addAgentLog } = useAgentStore();
-  const { loadHistory, activeConversationId } = useChatStore();
+  const { activeConversationId } = useChatStore();
   const { setTodos } = useTodoStore();
   const { setPendingRequest, clearRequest } = useConfirmStore();
   const theme = useSettingsStore((state) => state.theme);
@@ -64,6 +64,10 @@ function App() {
   // 批量处理 WebSocket 事件
   const handleWSEvents = useCallback((events: WSEvent[]) => {
     for (const event of events) {
+      // 注意：不在这里过滤 conversation_id
+      // 让各个 store 自己决定如何处理消息
+      // 这样可以确保消息被正确路由到对应的标签页
+      
       switch (event.type) {
         case 'log': {
           // 映射旧日志类型到新类型
@@ -74,64 +78,84 @@ function App() {
           } else {
             newType = oldType as LogType;
           }
-          addLog(newType, { ...event.data, log_type: newType });
+          // 保存原始的 conversation_id，让 logStore 处理
+          const logEntry = { 
+            ...event.data, 
+            log_type: newType,
+            conversationId: event.data.conversation_id 
+          };
+          addLog(newType, logEntry);
           break;
         }
         case 'agent_register':
-          // Agent 注册消息 - 立即创建 Agent
-          addAgent({
-            id: event.data.agent_id,
-            name: event.data.agent_name,
-            status: event.data.status,
-            logs: [],
-          });
+          // Agent 注册消息 - 只处理当前活跃对话的 Agent
+          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+            addAgent({
+              id: event.data.agent_id,
+              name: event.data.agent_name,
+              status: event.data.status,
+              logs: [],
+            });
+          }
           break;
         case 'agent_output':
-          // 确保 Agent 存在
-          addAgent({
-            id: event.data.agent_id,
-            name: event.data.agent_name,
-            status: 'running',
-            logs: [],
-          });
-          // 添加日志
-          addAgentLog(event.data.agent_id, {
-            message: event.data.message,
-            level: event.data.level as 'INFO' | 'WARNING' | 'ERROR' | 'SUCCESS',
-            timestamp: event.data.timestamp,
-          });
+          // 只处理当前活跃对话的 Agent 输出
+          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+            // 确保 Agent 存在
+            addAgent({
+              id: event.data.agent_id,
+              name: event.data.agent_name,
+              status: 'running',
+              logs: [],
+            });
+            // 添加日志
+            addAgentLog(event.data.agent_id, {
+              message: event.data.message,
+              level: event.data.level as 'INFO' | 'WARNING' | 'ERROR' | 'SUCCESS',
+              timestamp: event.data.timestamp,
+            });
+          }
           break;
         case 'agent_status':
-          updateAgentStatus(event.data.agent_id, event.data.status as AgentStatus);
+          // 只处理当前活跃对话的 Agent 状态更新
+          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+            updateAgentStatus(event.data.agent_id, event.data.status as AgentStatus);
+          }
           break;
         case 'todo_update':
-          setTodos(event.data.todos);
+          // 只处理当前活跃对话的 Todo 更新
+          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+            setTodos(event.data.todos);
+          }
           break;
         case 'confirm_request':
-          setPendingRequest(event.data);
+          // 只处理当前活跃对话的确认请求
+          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+            setPendingRequest(event.data);
+          }
           break;
         case 'confirm_cancel':
-          clearRequest();
+          // 只处理当前活跃对话的确认取消
+          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+            clearRequest();
+          }
           break;
       }
     }
-  }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, setPendingRequest, clearRequest]);
+  }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, setPendingRequest, clearRequest, activeConversationId]);
 
   useEffect(() => {
     // 连接 WebSocket
     wsService.connect();
 
-    // 订阅 WebSocket 事件（批量处理）
+    // 订阅 WebSocket 事件
     const unsubscribe = wsService.subscribe(handleWSEvents);
-
-    // 加载对话历史
-    loadHistory();
 
     return () => {
       unsubscribe();
       wsService.disconnect();
     };
-  }, [handleWSEvents, loadHistory]);
+  }, [handleWSEvents]);
 
   return (
     <div className="h-screen flex flex-col bg-spore-bg">

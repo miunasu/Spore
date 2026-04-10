@@ -6,7 +6,10 @@
 """
 import json
 import time
+import os
+import uuid
 from typing import Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from .state_manager import ConversationState
 from .tools import TOOL_HANDLERS, TOOL_DEFINITIONS
@@ -23,8 +26,10 @@ from .utils import (
     log_tool_result,
 )
 from .utils.terminal import safe_print
+from .utils.system_io import set_current_agent_id, get_current_agent_id
 from .todo_manager import todo_write
 from .logger import log_error, log_tool_error
+from .prompt_loader import load_system_prompt
 from AutoAgent import end_check
 from AutoAgent.supervisor import supervisor
 from .utils import terminal
@@ -36,13 +41,13 @@ class ConversationLoop:
     
     def __init__(
         self, 
-        state: ConversationState, 
+        session_manager,  # 改为接收 session_manager 而不是单个 state
         ipc_manager, 
         config,
         system_prompt: str,
         tool_names: list = None  # 主agent的工具名称列表
     ):
-        self.state = state
+        self.session_manager = session_manager  # 保存 session_manager
         self.ipc_manager = ipc_manager
         self.config = config
         self.system_prompt = system_prompt
@@ -51,19 +56,35 @@ class ConversationLoop:
         # 初始化文本协议管理器
         self.protocol_manager = ProtocolManager()
     
+    @property
+    def state(self):
+        """动态获取当前会话状态"""
+        return self.session_manager.current
+    
     def manage_context_length(self) -> None:
-        """管理对话历史长度"""
-        current_tokens = count_tokens(self.state.messages)
-        # 加上 system prompt 和预留的 completion tokens
-        system_tokens = count_tokens(self.system_prompt) if self.system_prompt else 0
-        total_tokens = current_tokens + system_tokens
+        """
+        管理对话历史长度
+        
+        使用 LLM 返回的精确 input_tokens 判断是否超出限制。
+        Desktop 模式：从 state.last_input_tokens 获取
+        CLI 模式：需要在调用后检查
+        """
+        # Desktop 模式：检查 state 中的 token 统计
+        if os.environ.get('SPORE_DESKTOP_MODE') == '1':
+            current_tokens = getattr(self.state, 'last_input_tokens', 0)
+            if current_tokens == 0:
+                # 还没有 token 统计，跳过
+                return
+        else:
+            # CLI 模式：暂时跳过，因为没有简单的方法获取当前 context
+            # 可以在 send_chat_request 返回后检查
+            return
+        
         max_tokens = self.config.context_max_tokens
-
-        # 当上下文超过警告阈值时，开始压缩记忆
         warning_threshold = max_tokens * self.config.context_warning_threshold
         
-        if total_tokens > warning_threshold:
-            print(f"[系统] 对话历史接近上限（{total_tokens}/{max_tokens}），开始压缩记忆...")
+        if current_tokens > warning_threshold:
+            print(f"[系统] 对话历史接近上限（{current_tokens}/{max_tokens}），开始压缩记忆...")
             
             # 调用 LLM 对记忆进行总结压缩
             summary = self._compress_memory()
@@ -77,19 +98,18 @@ class ConversationLoop:
                         "content": f"以下是之前对话的总结：\n\n{summary}\n\n请基于这个总结继续对话。"
                     }
                 ]
+                # 重置 token 统计
+                self.state.last_input_tokens = 0
+                self.state.last_output_tokens = 0
+                self.state.cumulative_input_tokens = 0
+                self.state.cumulative_output_tokens = 0
             else:
-                # 如果压缩失败，使用原有的删除策略
-                print(f"[系统] 记忆压缩失败，使用传统删除策略")
-                while total_tokens > max_tokens:
+                # 如果压缩失败，使用删除策略
+                print(f"[系统] 记忆压缩失败，删除最旧的消息")
+                if len(self.state.messages) > 1:
                     self.state.messages.pop(0)
-                    current_tokens = count_tokens(self.state.messages)
-                    total_tokens = current_tokens + system_tokens
             
-            # 重新计算最终的token数
-            current_tokens = count_tokens(self.state.messages)
-            total_tokens = current_tokens + system_tokens
-            print(f"[系统] 对话历史已压缩：消息 {current_tokens} + system {system_tokens} = {total_tokens} tokens")
-            terminal.extra_line += 3
+            terminal.extra_line += 2
 
     def _check_and_handle_oversized_tool_result(self) -> bool:
         """
@@ -350,9 +370,12 @@ class ConversationLoop:
                         })
                         break
     
-    def send_chat_request(self) -> Optional[Dict]:
+    def send_chat_request(self, conversation_id: Optional[str] = None) -> Optional[Dict]:
         """
         发送聊天请求并获取响应
+        
+        参数:
+            conversation_id: 会话ID，用于绑定 request_id（Desktop 模式）
         
         返回:
             响应字典，如果失败或中断返回None
@@ -377,6 +400,13 @@ class ConversationLoop:
         else:
             current_system_prompt = self.system_prompt
         
+        # 生成带会话 ID 的 request_id（Desktop 模式）
+        import uuid
+        if conversation_id:
+            request_id = f"{conversation_id}_{uuid.uuid4()}"
+        else:
+            request_id = None
+        
         # 发送请求并获取 request_id - 纯文本模式，不使用 function calling
         request_id = self.ipc_manager.send_chat_request(
             messages=self.state.messages,
@@ -384,7 +414,8 @@ class ConversationLoop:
             temperature=self.config.get_temperature("main"),
             system=current_system_prompt,
             tool_calls=False,  # 文本协议不使用 function calling
-            tools=None
+            tools=None,
+            request_id=request_id  # 传入带会话 ID 的 request_id
         )
         
         # 使用 request_id 等待响应
@@ -399,6 +430,16 @@ class ConversationLoop:
             print(f"Spore> [错误] {error_msg}")
             log_error("LLM_API_ERROR", f"Chat process returned error: {error_msg}")
             return None
+        
+        # Desktop 模式：从响应中提取 usage 并更新 state 的 token 统计
+        if os.environ.get('SPORE_DESKTOP_MODE') == '1':
+            reply_data = response.get("data", {})
+            usage = reply_data.get("usage", {})
+            if usage:
+                input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+                if input_tokens > 0 or output_tokens > 0:
+                    self.state.update_token_stats(input_tokens, output_tokens)
         
         return response
     
@@ -457,9 +498,6 @@ class ConversationLoop:
                 if tool_name in no_timeout_tools:
                     tool_result = handler(args)
                 else:
-                    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-                    from base.utils.system_io import set_current_agent_id, get_current_agent_id
-                    
                     tool_timeout = self.config.tool_execution_timeout
                     current_agent_id = get_current_agent_id() or "main_agent"
                     

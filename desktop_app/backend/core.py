@@ -8,7 +8,8 @@ from typing import Optional, Dict, Any, Tuple
 _ipc_manager = None
 _state = None
 _cli_handler = None
-_conv_loop = None
+_conv_loop = None  # 保留用于兼容性，但不再使用
+_conv_loop_manager = None  # 新增：ConversationLoop 管理器
 _config = None
 _initialized = False
 
@@ -23,7 +24,7 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     Returns:
         Dict: 包含所有初始化实例的字典
     """
-    global _ipc_manager, _state, _cli_handler, _conv_loop, _config, _initialized
+    global _ipc_manager, _state, _cli_handler, _conv_loop, _conv_loop_manager, _config, _initialized
     
     if _initialized:
         return get_instances_dict()
@@ -38,6 +39,7 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     from base.text_protocol import ProtocolManager
     from base.tools import TOOL_DEFINITIONS
     from base.logger import SporeLogger
+    from .conversation_loop_manager import ConversationLoopManager
     
     # 1. 初始化日志（桌面模式不启动监控终端，因为前端有日志显示区域）
     # 设置环境变量，禁止启动监控终端
@@ -74,9 +76,18 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     from base.utils.system_io import set_current_agent_id
     set_current_agent_id("main_agent")
     
-    # 7. 初始化对话循环（使用当前会话状态）
-    _conv_loop = ConversationLoop(
-        _state.current, _ipc_manager, _config, system_prompt, tool_names=MAIN_AGENT_TOOLS
+    # 7. 初始化 ConversationLoop 管理器（新架构）
+    _conv_loop_manager = ConversationLoopManager(
+        session_manager=_state,
+        ipc_manager=_ipc_manager,
+        config=_config
+    )
+    
+    # 8. 为默认会话创建 ConversationLoop（保持兼容性）
+    _conv_loop = _conv_loop_manager.get_loop(
+        session_id="default",
+        system_prompt=system_prompt,
+        tool_names=MAIN_AGENT_TOOLS
     )
     
     _initialized = True
@@ -89,9 +100,26 @@ def get_instances() -> Tuple:
     获取全局实例元组
     
     Returns:
-        Tuple: (ipc_manager, state, cli_handler, conv_loop, config)
+        Tuple: (ipc_manager, state, cli_handler, conv_loop, config, conv_loop_manager)
+    
+    注意：建议使用 get_session_manager() 等专用函数，而不是直接解包此元组
     """
-    return _ipc_manager, _state, _cli_handler, _conv_loop, _config
+    return _ipc_manager, _state, _cli_handler, _conv_loop, _config, _conv_loop_manager
+
+
+def get_session_manager():
+    """获取会话管理器（推荐使用）"""
+    return _state
+
+
+def get_conv_loop_manager():
+    """获取对话循环管理器（推荐使用）"""
+    return _conv_loop_manager
+
+
+def get_config():
+    """获取配置对象（推荐使用）"""
+    return _config
 
 
 def get_instances_dict() -> Dict[str, Any]:
@@ -106,7 +134,8 @@ def get_instances_dict() -> Dict[str, Any]:
         'state': _state,
         'cli_handler': _cli_handler,
         'conv_loop': _conv_loop,
-        'config': _config
+        'config': _config,
+        'conv_loop_manager': _conv_loop_manager,
     }
 
 
@@ -136,7 +165,7 @@ def switch_session(session_id: str) -> Dict[str, Any]:
     Returns:
         Dict: 包含会话信息
     """
-    global _cli_handler, _conv_loop
+    global _cli_handler
     
     if not _initialized or _state is None:
         return {"success": False, "error": "后端未初始化"}
@@ -144,29 +173,11 @@ def switch_session(session_id: str) -> Dict[str, Any]:
     # 切换会话
     new_state = _state.switch_session(session_id)
     
-    # 更新 CLI handler 和 ConversationLoop 的状态引用
+    # 只需要更新 CLI handler 的状态引用
     if _cli_handler:
         _cli_handler.state = new_state
-    if _conv_loop:
-        _conv_loop.state = new_state
-        
-        # 根据新会话的模式更新工具集
-        from base.agent_types import get_tools_for_mode
-        from base.tools import TOOL_DEFINITIONS
-        from base.text_protocol import ProtocolManager
-        from base.prompt_loader import load_system_prompt
-        
-        current_tools = get_tools_for_mode(new_state.context_mode)
-        tool_definitions = {
-            name: TOOL_DEFINITIONS[name]
-            for name in current_tools
-            if name in TOOL_DEFINITIONS
-        }
-        base_prompt = load_system_prompt() or ""
-        protocol_manager = ProtocolManager()
-        system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
-        _conv_loop.system_prompt = system_prompt
-        _conv_loop.tool_names = current_tools
+    
+    # 注意：不需要更新 conv_loop，因为现在每个会话有独立的 loop
     
     return {
         "success": True,
@@ -185,7 +196,7 @@ def create_session(session_id: str) -> Dict[str, Any]:
     Returns:
         Dict: 包含会话信息
     """
-    global _cli_handler, _conv_loop
+    global _cli_handler
     
     if not _initialized or _state is None:
         return {"success": False, "error": "后端未初始化"}
@@ -194,11 +205,10 @@ def create_session(session_id: str) -> Dict[str, Any]:
     new_state = _state.create_session(session_id)
     _state.switch_session(session_id)
     
-    # 更新引用
+    # 更新 CLI handler 引用（conv_loop 会动态获取）
     if _cli_handler:
         _cli_handler.state = new_state
-    if _conv_loop:
-        _conv_loop.state = new_state
+    
     
     return {
         "success": True,
@@ -216,20 +226,22 @@ def delete_session(session_id: str) -> Dict[str, Any]:
     Returns:
         Dict: 操作结果
     """
-    global _cli_handler, _conv_loop
+    global _cli_handler, _conv_loop_manager
     
     if not _initialized or _state is None:
         return {"success": False, "error": "后端未初始化"}
     
     success = _state.delete_session(session_id)
     
-    # 如果删除的是当前会话，更新引用到新的当前会话
+    # 删除对应的 ConversationLoop 实例
+    if success and _conv_loop_manager:
+        _conv_loop_manager.remove_loop(session_id)
+    
+    # 如果删除的是当前会话，更新 CLI handler 引用
     if success:
         current = _state.current
         if _cli_handler:
             _cli_handler.state = current
-        if _conv_loop:
-            _conv_loop.state = current
     
     return {"success": success}
 
@@ -237,3 +249,8 @@ def delete_session(session_id: str) -> Dict[str, Any]:
 def get_session_manager():
     """获取会话管理器"""
     return _state
+
+
+def get_conv_loop_manager():
+    """获取 ConversationLoop 管理器"""
+    return _conv_loop_manager

@@ -238,10 +238,6 @@ class SubAgentThread(threading.Thread):
             # 更新状态为等待
             self.database.set_status(AgentStatus.WAITING)
             
-            # 计算发送消息的 token 数
-            from .utils.token_counter import count_tokens
-            send_tokens = count_tokens(messages)
-            
             # 发送请求到Chat Process（使用文本协议，不使用function calling）
             from .config import get_config
             config = get_config()
@@ -277,17 +273,21 @@ class SubAgentThread(threading.Thread):
                 if response is not None:
                     break
             
-            # 计算接收到的回复的 token 数
+            # 从响应中获取 token 统计（从 LLM API 返回的 usage）
             if response and response.get("status") == "success":
                 reply_data = response.get("data", {})
                 reply_content = reply_data.get("content", "")
-                reply_tokens = count_tokens(reply_content)
-                # 累加 token 数
-                self.total_tokens_used += send_tokens + reply_tokens
+                usage = reply_data.get("usage", {})
+                input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+                
+                # 更新 token 统计（input_tokens 就是完整的上下文，不需要累加）
+                # total = context + output
+                self.total_tokens_used = input_tokens + output_tokens
                 
                 # 记录响应状态
                 self._log_to_agent_file(
-                    f"收到响应 (状态: success, 内容长度: {len(reply_content)}, tokens: {reply_tokens})",
+                    f"收到响应 (状态: success, 内容长度: {len(reply_content)}, context: {input_tokens}, output: {output_tokens})",
                     "DEBUG"
                 )
             else:

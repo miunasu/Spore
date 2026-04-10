@@ -3,7 +3,7 @@ Chat 进程模块 - 独立进程负责与 LLM 通信
 支持多线程并发请求，统一中断控制
 """
 import multiprocessing as mp
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future
 import threading
 import signal
@@ -15,60 +15,39 @@ from .logger import log_error
 from .config import get_config
 from . import config as _config
 
-# 每个对话的 token 计数（conversation_id -> token_count）
-_conversation_tokens: Dict[str, int] = {}
+# 向后兼容的全局变量
 _current_conversation_id: Optional[str] = None
-_token_count_lock = threading.Lock()
 
 
-def get_current_token_count(conversation_id: Optional[str] = None) -> int:
-    """获取指定对话的 token 数"""
-    with _token_count_lock:
-        cid = conversation_id or _current_conversation_id
-        if cid:
-            return _conversation_tokens.get(cid, 0)
-        return 0
+def get_current_token_count(conversation_id: Optional[str] = None) -> Tuple[int, int]:
+    """获取指定对话的 token 数（已废弃，CLI 模式由后端处理）"""
+    return (0, 0)
 
 
-def set_current_token_count(count: int, conversation_id: Optional[str] = None):
-    """设置指定对话的 token 数"""
-    with _token_count_lock:
-        cid = conversation_id or _current_conversation_id
-        if cid:
-            _conversation_tokens[cid] = count
+def set_current_token_count(input_tokens: int, output_tokens: int, conversation_id: Optional[str] = None):
+    """设置指定对话的 token 数（已废弃）"""
+    pass
 
 
-def add_to_token_count(additional_tokens: int, conversation_id: Optional[str] = None):
-    """累加 token 数到指定对话"""
-    with _token_count_lock:
-        cid = conversation_id or _current_conversation_id
-        if cid:
-            current = _conversation_tokens.get(cid, 0)
-            _conversation_tokens[cid] = current + additional_tokens
+def add_to_token_count(input_tokens: int, output_tokens: int, conversation_id: Optional[str] = None):
+    """累加 token 数到指定对话（已废弃）"""
+    pass
 
 
 def set_current_conversation(conversation_id: str):
     """设置当前活跃的对话 ID"""
     global _current_conversation_id
-    with _token_count_lock:
-        _current_conversation_id = conversation_id
-        # 如果是新对话，初始化 token 计数
-        if conversation_id not in _conversation_tokens:
-            _conversation_tokens[conversation_id] = 0
+    _current_conversation_id = conversation_id
 
 
 def reset_token_count(conversation_id: Optional[str] = None):
-    """重置指定对话的 token 计数"""
-    with _token_count_lock:
-        cid = conversation_id or _current_conversation_id
-        if cid:
-            _conversation_tokens[cid] = 0
+    """重置指定对话的 token 计数（已废弃）"""
+    pass
 
 
 def remove_conversation_tokens(conversation_id: str):
-    """移除对话的 token 记录（关闭对话时调用）"""
-    with _token_count_lock:
-        _conversation_tokens.pop(conversation_id, None)
+    """移除对话的 token 记录（已废弃）"""
+    pass
 
 
 class ChatProcess:
@@ -197,10 +176,8 @@ class ChatProcess:
             timeout = self.config.api_timeout
             max_tokens = self.config.get_max_tokens()
             
-            # 计算发送消息的 token 数
-            from .utils.token_counter import count_tokens
-            token_count = count_tokens(final_messages)
-            set_current_token_count(token_count)
+            # 获取 conversation_id（从 request_data 传递）
+            conversation_id = request_id.split("_")[0] if "_" in request_id else None
 
             completion = self.client.chat.completions.create(
                 model=model,
@@ -214,12 +191,18 @@ class ChatProcess:
                 return {"request_id": request_id, "status": "cancelled", "data": None}
             
             message = completion.choices[0].message
-            
-            # 计算接收到的回复的 token 数，并累加到总计数
             reply_content = message.content or ""
-            reply_tokens = count_tokens(reply_content)
-            current_total = get_current_token_count()
-            set_current_token_count(current_total + reply_tokens)
+            
+            # 从 API 响应中获取 token 统计（最准确）
+            input_tokens = 0
+            output_tokens = 0
+            if hasattr(completion, 'usage') and completion.usage:
+                input_tokens = getattr(completion.usage, 'prompt_tokens', 0)
+                output_tokens = getattr(completion.usage, 'completion_tokens', 0)
+            
+            # CLI 模式：打印 token 统计（后端自己处理累计）
+            if input_tokens > 0 or output_tokens > 0:
+                print(f"[Token] {input_tokens} {output_tokens}", flush=True)
             
             # 构建本次发送的消息（不包含历史记忆）
             current_sent = []
@@ -240,6 +223,12 @@ class ChatProcess:
                 "content": message.content,
                 "role": message.role,
                 "sent_messages": current_sent,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "prompt_tokens": input_tokens,  # 兼容 OpenAI 格式
+                    "completion_tokens": output_tokens  # 兼容 OpenAI 格式
+                }
             }
             
             return {"request_id": request_id, "status": "success", "data": result}
@@ -286,9 +275,8 @@ class ChatProcess:
             input_messages = self._merge_consecutive_messages(input_messages)
 
         try:
-            from .utils.token_counter import count_tokens
-            token_count = count_tokens(input_messages)
-            set_current_token_count(token_count)
+            # 获取 conversation_id
+            conversation_id = request_id.split("_")[0] if "_" in request_id else None
 
             # 构建请求参数
             # Responses API 不支持 temperature，instructions 对应 system prompt
@@ -307,9 +295,16 @@ class ChatProcess:
 
             reply_content = response.output_text or ""
 
-            reply_tokens = count_tokens(reply_content)
-            current_total = get_current_token_count()
-            set_current_token_count(current_total + reply_tokens)
+            # 从 API 响应中获取 token 统计（如果有）
+            input_tokens = 0
+            output_tokens = 0
+            if hasattr(response, 'usage') and response.usage:
+                input_tokens = getattr(response.usage, 'input_tokens', 0) or getattr(response.usage, 'prompt_tokens', 0)
+                output_tokens = getattr(response.usage, 'output_tokens', 0) or getattr(response.usage, 'completion_tokens', 0)
+            
+            # CLI 模式：打印 token 统计（后端自己处理累计）
+            if input_tokens > 0 or output_tokens > 0:
+                print(f"[Token] {input_tokens} {output_tokens}", flush=True)
 
             # 构建本次发送的消息记录
             current_sent = []
@@ -327,6 +322,12 @@ class ChatProcess:
                 "content": reply_content,
                 "role": "assistant",
                 "sent_messages": current_sent,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "prompt_tokens": input_tokens,  # 兼容 OpenAI 格式
+                    "completion_tokens": output_tokens  # 兼容 OpenAI 格式
+                }
             }
 
             return {"request_id": request_id, "status": "success", "data": result}
@@ -407,14 +408,8 @@ class ChatProcess:
         try:
             max_tokens = self.config.get_max_tokens()
             
-            # 计算发送消息的 token 数
-            from .utils.token_counter import count_tokens
-            token_count = count_tokens(anthropic_messages)
-            set_current_token_count(token_count)
-            
-            # 调试日志：记录发送给 Anthropic 的消息
-            # from .logger import log_info
-            # log_info("ANTHROPIC_MESSAGES_DEBUG", f"anthropic_messages: {anthropic_messages}")
+            # 获取 conversation_id
+            conversation_id = request_id.split("_")[0] if "_" in request_id else None
 
             # 构建请求参数
             request_params = {
@@ -433,6 +428,13 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
             
+            # 从 API 响应中获取 token 统计（最准确）
+            input_tokens = 0
+            output_tokens = 0
+            if hasattr(response, 'usage'):
+                input_tokens = getattr(response.usage, 'input_tokens', 0)
+                output_tokens = getattr(response.usage, 'output_tokens', 0)
+            
             # 提取响应内容
             content = ""
             if response.content:
@@ -440,13 +442,11 @@ class ChatProcess:
                     if hasattr(block, "text"):
                         content += block.text
             
-            # 计算接收到的回复的 token 数，并累加到总计数
-            reply_tokens = count_tokens(content)
-            current_total = get_current_token_count()
-            set_current_token_count(current_total + reply_tokens)
+            # CLI 模式：打印 token 统计（后端自己处理累计）
+            if input_tokens > 0 or output_tokens > 0:
+                print(f"[Token] {input_tokens} {output_tokens}", flush=True)
             
             # 构建本次发送的消息（不包含历史记忆）
-            # 只包含：system prompt（仅第一次对话） + 最后一条用户消息
             current_sent = []
             
             # 判断是否是第一次对话（messages 中只有一条用户消息）
@@ -470,7 +470,13 @@ class ChatProcess:
             result = {
                 "content": content,
                 "role": "assistant",
-                "sent_messages": current_sent,  # 只包含本次发送的内容
+                "sent_messages": current_sent,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "prompt_tokens": input_tokens,  # 兼容 OpenAI 格式
+                    "completion_tokens": output_tokens  # 兼容 OpenAI 格式
+                }
             }
             
             return {"request_id": request_id, "status": "success", "data": result}

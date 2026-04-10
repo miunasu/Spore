@@ -98,6 +98,16 @@ def desktop_confirm(
     """
     global _counter
     
+    # 获取当前会话 ID
+    conversation_id = None
+    try:
+        from .core import get_session_manager
+        manager = get_session_manager()
+        if manager:
+            conversation_id = manager.current_session_id
+    except:
+        pass
+    
     # 生成请求 ID
     with _lock:
         _counter += 1
@@ -118,7 +128,8 @@ def desktop_confirm(
                 "title": title,
                 "message": message,
                 "details": details or [],
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "conversation_id": conversation_id  # 添加会话 ID
             }
         })
     except Exception:
@@ -142,7 +153,8 @@ def desktop_confirm(
                 "type": "confirm_cancel",
                 "data": {
                     "request_id": request_id,
-                    "reason": "timeout"
+                    "reason": "timeout",
+                    "conversation_id": conversation_id  # 添加会话 ID
                 }
             })
         except Exception:

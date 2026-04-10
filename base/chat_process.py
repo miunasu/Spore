@@ -19,35 +19,10 @@ from . import config as _config
 _current_conversation_id: Optional[str] = None
 
 
-def get_current_token_count(conversation_id: Optional[str] = None) -> Tuple[int, int]:
-    """获取指定对话的 token 数（已废弃，CLI 模式由后端处理）"""
-    return (0, 0)
-
-
-def set_current_token_count(input_tokens: int, output_tokens: int, conversation_id: Optional[str] = None):
-    """设置指定对话的 token 数（已废弃）"""
-    pass
-
-
-def add_to_token_count(input_tokens: int, output_tokens: int, conversation_id: Optional[str] = None):
-    """累加 token 数到指定对话（已废弃）"""
-    pass
-
-
 def set_current_conversation(conversation_id: str):
     """设置当前活跃的对话 ID"""
     global _current_conversation_id
     _current_conversation_id = conversation_id
-
-
-def reset_token_count(conversation_id: Optional[str] = None):
-    """重置指定对话的 token 计数（已废弃）"""
-    pass
-
-
-def remove_conversation_tokens(conversation_id: str):
-    """移除对话的 token 记录（已废弃）"""
-    pass
 
 
 class ChatProcess:

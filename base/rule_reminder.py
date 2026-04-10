@@ -44,7 +44,6 @@ tool_name param1=value1 param2=value2
 - 文档编辑 → TextEditor
 
 ## 其他规则
-- 所有路径使用绝对路径
 - 操作后验证结果
 - 禁止编造、敷衍、重复
 

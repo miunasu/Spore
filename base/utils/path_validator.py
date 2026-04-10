@@ -7,18 +7,16 @@
 - 检测路径中的未转义反斜杠（如 test\test）
 - 自动修复为正确的转义格式（test\\test）
 - 支持绝对路径和相对路径
-- 支持命令字符串中的路径提取和修复
 
 使用示例:
-    from base.utils.path_validator import validate_and_fix_path, fix_command_paths
+    from base.utils.path_validator import validate_and_fix_path, normalize_path_for_pathlib
     
     # 修复单个路径
     fixed_path = validate_and_fix_path(r"test\\test\\file.txt")
     # 返回: "test\\\\test\\\\file.txt"
     
-    # 修复命令中的路径
-    fixed_cmd = fix_command_paths(r"python test\\script.py --output data\\result.txt")
-    # 返回: "python test\\\\script.py --output data\\\\result.txt"
+    # 规范化路径用于 pathlib
+    normalized = normalize_path_for_pathlib(r"test\\script.py")
 """
 
 import re
@@ -113,47 +111,6 @@ def validate_and_fix_path(path: str, auto_fix: bool = True) -> str:
     fixed_path = fixed_path.replace(placeholder, '\\\\')
     
     return fixed_path
-
-
-def fix_command_paths(command: str) -> str:
-    """
-    修复命令字符串中的路径（已废弃，建议使用 normalize_path_for_pathlib）
-    
-    该函数尝试智能识别命令中的路径并修复，但容易误判。
-    
-    推荐做法：
-    1. 如果路径是独立参数，直接使用 normalize_path_for_pathlib()
-    2. 如果需要在命令中使用路径，手动处理更可靠
-    
-    参数:
-        command: 原始命令字符串
-        
-    返回:
-        修复后的命令字符串
-        
-    示例（推荐做法）:
-        # 不推荐
-        cmd = fix_command_paths(r"python test\\script.py")
-        
-        # 推荐
-        script_path = normalize_path_for_pathlib(r"test\\script.py")
-        cmd = f'python "{script_path}"'
-    """
-    if not command or not isinstance(command, str):
-        return command
-    
-    # 简化策略：只处理引号内的明确路径
-    def fix_quoted_path(match):
-        quoted_content = match.group(1)
-        # 如果包含反斜杠，认为是路径并规范化
-        if '\\' in quoted_content:
-            return f'"{normalize_path_for_pathlib(quoted_content)}"'
-        return match.group(0)
-    
-    # 只修复双引号内的路径，避免误判
-    command = re.sub(r'"([^"]+)"', fix_quoted_path, command)
-    
-    return command
 
 
 def normalize_path_separators(path: str, target: str = 'windows') -> str:

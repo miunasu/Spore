@@ -732,13 +732,7 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
             # 等待完成
             result = manager.wait_for_completion()
             
-            # 累加所有子 Agent 的 token 消耗到主对话
-            from .chat_process import add_to_token_count
-            total_sub_agent_tokens = sum(
-                db.total_tokens for db in result.databases.values()
-            )
-            if total_sub_agent_tokens > 0:
-                add_to_token_count(total_sub_agent_tokens)
+            # Token 统计已由后端自动处理，无需手动累加
             
             # 检查是否被中断
             if interrupt_handler.is_interrupted():

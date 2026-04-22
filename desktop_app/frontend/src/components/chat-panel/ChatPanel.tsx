@@ -588,7 +588,7 @@ export const ChatPanel: React.FC = () => {
 
           {/* 输入区域 */}
           <div className="p-4">
-            <InputArea tokenStats={tokenStats} />
+            <InputArea />
           </div>
         </>
       )}

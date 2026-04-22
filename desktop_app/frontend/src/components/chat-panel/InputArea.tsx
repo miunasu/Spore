@@ -7,16 +7,10 @@ import { CommandMenu } from './CommandMenu';
 import { ConfirmBar } from './ConfirmBar';
 
 interface InputAreaProps {
-  tokenStats?: {
-    input: number;
-    output: number;
-    cumulative_input: number;
-    cumulative_output: number;
-    context: number;
-  } | null;
+  // Props interface - currently empty but kept for future extensibility
 }
 
-export const InputArea: React.FC<InputAreaProps> = ({ tokenStats }) => {
+export const InputArea: React.FC<InputAreaProps> = () => {
   const { inputValue, setInputValue, sendMessage, interrupt } = useChatStore();
   const isGenerating = useChatStore((state) => state.isGenerating());
   const backendStatus = useChatStore(

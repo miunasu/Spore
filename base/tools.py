@@ -94,11 +94,31 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": "在系统中执行PowerShell命令并返回其输出。命令通过原生PowerShell执行，支持所有PowerShell语法。",
+            "description": """在系统中执行PowerShell命令并返回其输出。命令通过原生PowerShell执行，支持所有PowerShell语法。
+
+## 多行代码执行方式
+
+### PowerShell Here-String
+使用 @'...'@ 语法传递多行代码，工具会自动处理：
+
+示例 - 执行多行Python代码：
+```
+@'
+for i in range(5):
+    print(f"Number: {i}")
+'@ | python
+```
+
+### Here-String 语法说明
+- 单引号版本 @'...'@: 内容按字面值处理，不展开变量
+- 双引号版本 @"..."@: 支持变量展开和转义
+- 开始标记 @' 或 @" 必须在行尾
+- 结束标记 '@ 或 "@ 必须在行首
+- 工具会自动检测并处理 here-string 语法""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "直接传递给PowerShell的命令字符串，该工具会把命令直接传递给原生的PowerShell终端"},
+                    "command": {"type": "string", "description": "直接传递给PowerShell的命令字符串，支持 here-string 语法（@'...'@ | command）用于多行代码"},
                     "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
                     "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },

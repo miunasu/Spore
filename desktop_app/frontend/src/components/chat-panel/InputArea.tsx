@@ -112,16 +112,11 @@ export const InputArea: React.FC<InputAreaProps> = ({ tokenStats }) => {
         </div>
       </div>
       
-      {/* 提示文字和 Token 统计 */}
-      <div className="flex items-center justify-between text-xs text-spore-muted mt-2 px-1">
-        <span className="text-center flex-1">
+      {/* 提示文字 */}
+      <div className="flex items-center justify-center text-xs text-spore-muted mt-2 px-1">
+        <span className="text-center">
           Shift + Enter for new line · Enter to send
         </span>
-        {tokenStats && (
-          <span className="text-spore-muted/60 whitespace-nowrap ml-4">
-            Σin:{tokenStats.cumulative_input} Σout:{tokenStats.cumulative_output}
-          </span>
-        )}
       </div>
     </div>
   );

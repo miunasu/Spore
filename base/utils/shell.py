@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import time
+import tempfile
 from typing import Optional, Dict, Any, List, Union
 from .encoding import smart_decode
 
@@ -12,6 +13,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
 
     参数:
         command: 字符串（经 PowerShell 解析）或 参数列表（直接执行）。
+                支持 PowerShell here-string 语法：@'...'@ | command
         timeout: 超时时间（秒），None 使用配置默认值。
         encoding: 输出编码，None 时智能检测（Windows优先GBK，Linux/Mac优先UTF-8）。
         working_dir: 工作目录（可选），指定命令执行的目录。
@@ -32,7 +34,48 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         - returncode 保持原始值，LLM可据此判断命令实际是否失败
         - error_detected 仅在 returncode=0 但输出中检测到错误时为True
         - LLM应综合 returncode、error_detected、stderr、stdout 判断执行结果
+        - 支持 here-string 语法：检测到 @'...'@ | 模式时自动创建临时脚本处理
     """
+    # 检测 here-string 语法并特殊处理
+    # 格式: @'...'@ | command 或 @"..."@ | command
+    if isinstance(command, str):
+        here_string_match = re.match(r"^@(['\"])(.*?)\1@\s*\|\s*(.+)$", command, re.DOTALL)
+        if here_string_match:
+            quote_type = here_string_match.group(1)
+            here_content = here_string_match.group(2)
+            target_command = here_string_match.group(3)
+            
+            # 创建临时文件保存 here-string 内容
+            import tempfile
+            try:
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                    f.write(here_content)
+                    temp_file = f.name
+                
+                # 修改命令：使用 Get-Content 读取文件并管道传递
+                # 使用 -Raw 参数保持原始格式（包括换行）
+                modified_command = f"Get-Content -Path '{temp_file}' -Raw | {target_command}"
+                
+                # 递归调用执行修改后的命令
+                result = execute_command(modified_command, timeout=timeout, encoding=encoding, working_dir=working_dir)
+                
+                # 清理临时文件
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+                
+                return result
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": f"Here-string 处理失败: {e}",
+                    "duration_sec": 0,
+                    "shell_used": True,
+                }
+    
     # 命令安全检查：拦截危险的删除命令
     cmd_str = command if isinstance(command, str) else ' '.join(command)
     cmd_lower = cmd_str.strip().lower()

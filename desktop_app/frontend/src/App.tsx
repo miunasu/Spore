@@ -123,9 +123,10 @@ function App() {
           }
           break;
         case 'todo_update':
-          // 只处理当前活跃对话的 Todo 更新
-          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
-            setTodos(event.data.todos);
+          // 更新指定会话的 Todo（如果没有 conversation_id，则更新当前活跃会话）
+          const todoConversationId = event.data.conversation_id || activeConversationId;
+          if (todoConversationId) {
+            setTodos(todoConversationId, event.data.todos);
           }
           break;
         case 'confirm_request':

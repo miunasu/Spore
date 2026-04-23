@@ -10,6 +10,7 @@ import {
   commandsApi,
 } from '../services/api';
 import { useLogStore } from './logStore';
+import { useTodoStore } from './todoStore';
 
 // 前端日志辅助函数
 const frontendLog = (message: string) => {
@@ -326,6 +327,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
       } catch (e) {
         frontendLog(`[错误] 删除后端会话失败: ${e}`);
       }
+
+      // 清除该会话的todos
+      const { clearTodos } = useTodoStore.getState();
+      clearTodos(id);
 
       const newConversations = conversations.filter((c) => c.id !== id);
       const newActiveId =

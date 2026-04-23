@@ -1,12 +1,18 @@
 /**
  * Todo 进度条组件
  * 显示在聊天区顶部，可折叠展开
+ * 支持多会话独立显示
  */
 import React from 'react';
 import { useTodoStore } from '../../stores/todoStore';
+import { useChatStore } from '../../stores/chatStore';
 
 export const TodoBar: React.FC = () => {
-  const { todos, isExpanded, toggleExpanded } = useTodoStore();
+  const { getTodos, isExpanded, toggleExpanded } = useTodoStore();
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
+  
+  // 获取当前会话的todos
+  const todos = activeConversationId ? getTodos(activeConversationId) : [];
 
   // 没有任务时不显示
   if (todos.length === 0) {

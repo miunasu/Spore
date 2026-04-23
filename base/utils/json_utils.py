@@ -7,7 +7,7 @@ from ..logger import log_llm_validation_error, log_tool_error, log_info
 def _strip_think_tags(text: str) -> str:
     """
     移除文本中的 <think>...</think> 标签及其内容。
-    某些 API 代理（如 packyapi）会在响应中添加思考过程。
+    某些 API 代理会在响应中添加思考过程。
     """
     # 移除 <think>...</think> 标签（支持多行，非贪婪匹配）
     return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL)

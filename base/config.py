@@ -30,12 +30,12 @@ class Config:
         # 启用后使用 client.responses.create，支持 o 系列模型的原生接口
         self.use_responses_api: bool = os.getenv("USE_RESPONSES_API", "false").lower() == "true"
 
-        # 是否清理 SDK 的 x-stainless headers（某些第三方API代理如packyapi需要）
+        # 是否清理 SDK 的 x-stainless headers（某些第三方API代理需要）
         # 对 OpenAI SDK 和 Anthropic SDK 都生效
         self.clean_sdk_headers: bool = os.getenv("CLEAN_SDK_HEADERS", "false").lower() == "true"
         
         # 是否清理 Authorization 头部（Anthropic SDK 会同时发送 x-api-key 和 Authorization）
-        # packyapi 等第三方代理只接受 x-api-key，需要移除 Authorization 头部
+        # 某些第三方代理只接受 x-api-key，需要移除 Authorization 头部
         # 仅对 Anthropic SDK 有意义，OpenAI SDK 不发送此头部
         self.clean_auth_header: bool = os.getenv("CLEAN_AUTH_HEADER", "false").lower() == "true"
         

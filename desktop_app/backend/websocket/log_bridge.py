@@ -62,24 +62,19 @@ def setup_todo_callbacks():
     
     当 todo_write 被调用时，推送到 WebSocket
     """
-    def todo_update_callback(todos: List[Dict]):
-        """Todo 更新回调"""
-        # 获取当前会话 ID
-        conversation_id = None
-        try:
-            from ..core import get_session_manager
-            manager = get_session_manager()
-            if manager:
-                conversation_id = manager.current_session_id
-        except:
-            pass
+    def todo_update_callback(session_id: str, todos: List[Dict]):
+        """Todo 更新回调
         
+        Args:
+            session_id: 会话ID
+            todos: TODO列表
+        """
         send_ws_message({
             "type": "todo_update",
             "data": {
                 "todos": todos,
                 "timestamp": time.time(),
-                "conversation_id": conversation_id  # 添加会话 ID
+                "conversation_id": session_id  # 使用传入的会话 ID
             }
         })
     

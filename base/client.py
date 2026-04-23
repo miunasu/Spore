@@ -18,7 +18,7 @@ except ImportError:
 class CleanHeadersTransport(httpx.HTTPTransport):
     """
     自定义 HTTP Transport，移除 SDK 添加的特定 headers。
-    某些第三方 API 代理（如 packyapi）会拦截带有这些 headers 的请求。
+    某些第三方 API 代理会拦截带有这些 headers 的请求。
     
     移除的 headers:
     - x-stainless-*: OpenAI/Anthropic SDK 的追踪头

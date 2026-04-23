@@ -40,6 +40,9 @@ class ConversationState:
         # 上下文处理模式（每个对话独立，默认从ENV配置读取）
         config = get_config()
         self.context_mode: str = config.context_mode
+        
+        # TODO列表（每个会话独立）
+        self.todos: List[Dict] = []
     
     def add_user_message(self, content: str) -> None:
         """添加用户消息"""
@@ -66,6 +69,8 @@ class ConversationState:
         self.last_output_tokens = 0
         self.cumulative_input_tokens = 0
         self.cumulative_output_tokens = 0
+        # 清除 TODO 列表
+        self.todos.clear()
     
     def save_temp_messages(self) -> None:
         """保存临时消息（用于savemode）"""

@@ -59,10 +59,14 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     # 4. 初始化多会话管理器
     _state = MultiSessionManager()
     
-    # 5. 初始化 CLI 命令处理器（传入当前会话）
+    # 5. 初始化 TODO 管理器（依赖会话管理器）
+    from base.todo_manager import initialize_todo_manager
+    initialize_todo_manager(_state)
+    
+    # 6. 初始化 CLI 命令处理器（传入当前会话）
     _cli_handler = CLICommandHandler(_state.current)
     
-    # 6. 加载系统提示并注入协议
+    # 7. 加载系统提示并注入协议
     base_prompt = load_system_prompt() or ""
     tool_definitions = {
         name: TOOL_DEFINITIONS[name]
@@ -76,14 +80,14 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     from base.utils.system_io import set_current_agent_id
     set_current_agent_id("main_agent")
     
-    # 7. 初始化 ConversationLoop 管理器（新架构）
+    # 8. 初始化 ConversationLoop 管理器（新架构）
     _conv_loop_manager = ConversationLoopManager(
         session_manager=_state,
         ipc_manager=_ipc_manager,
         config=_config
     )
     
-    # 8. 为默认会话创建 ConversationLoop（保持兼容性）
+    # 9. 为默认会话创建 ConversationLoop（保持兼容性）
     _conv_loop = _conv_loop_manager.get_loop(
         session_id="default",
         system_prompt=system_prompt,

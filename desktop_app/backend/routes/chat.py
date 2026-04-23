@@ -173,6 +173,10 @@ async def send_message(req: ChatRequest):
     if conversation_id not in session_manager.list_sessions():
         session_manager.create_session(conversation_id)
     
+    # 切换到目标会话（确保 session_manager.current 指向正确的会话）
+    # 这样 load_system_prompt() 中的 get_current_todos_for_prompt() 才能获取正确的TODO
+    session_manager.switch_session(conversation_id)
+    
     # 获取该会话的状态
     target_state = session_manager.get_session(conversation_id)
     if not target_state:

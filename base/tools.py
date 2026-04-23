@@ -98,15 +98,34 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 ## 多行代码执行方式
 
-### PowerShell Here-String
-使用 @'...'@ 语法传递多行代码，工具会自动处理：
+### 使用 @SPORE:CONTENT 格式
+对于多行代码，必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式包裹命令参数。
+工具会自动检测 here-string 语法
 
-示例 - 执行多行Python代码：
+示例1 - 执行多行Python代码：
 ```
+@SPORE:ACTION
+execute_command command=@SPORE:CONTENT
 @'
 for i in range(5):
     print(f"Number: {i}")
+    if i == 3:
+        print("Found three!")
 '@ | python
+@SPORE:CONTENT_END timeout=30
+```
+
+示例2 - PowerShell 多行脚本：
+```
+@SPORE:ACTION
+execute_command command=@SPORE:CONTENT
+@'
+$files = Get-ChildItem -Path . -Recurse -Filter *.log
+foreach ($file in $files) {
+    Write-Host "Processing: $($file.FullName)"
+}
+'@ | powershell -Command -
+@SPORE:CONTENT_END
 ```
 
 ### Here-String 语法说明
@@ -114,11 +133,16 @@ for i in range(5):
 - 双引号版本 @"..."@: 支持变量展开和转义
 - 开始标记 @' 或 @" 必须在行尾
 - 结束标记 '@ 或 "@ 必须在行首
-- 工具会自动检测并处理 here-string 语法""",
+- 工具会自动检测 here-string 并创建临时文件处理
+
+### 重要提示
+❌ 不要在双引号中使用 \n 表示换行（会被保留为字面字符串）
+❌ 不要直接在参数值中写 here-string（解析器会失败）
+✅ 必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 包裹多行命令""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "直接传递给PowerShell的命令字符串，支持 here-string 语法（@'...'@ | command）用于多行代码"},
+                    "command": {"type": "string", "description": "PowerShell命令字符串。对于多行代码，【必须】使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式包裹，内部可使用 here-string 语法（@'...'@ | command）"},
                     "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
                     "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },

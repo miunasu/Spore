@@ -385,6 +385,15 @@ class ConversationLoop:
             self.ipc_manager.clear_queues()
             self._interrupted_flag = False
         
+        # 检查是否需要注入规则提醒（防止长对话遗忘）
+        # 基于 LLM 回复次数触发
+        from .rule_reminder import should_remind, get_rule_reminder
+        if should_remind(self.state.llm_reply_count, self.config.rule_reminder_interval):
+            reminder = get_rule_reminder(short=self.config.rule_reminder_short)
+            # 将提醒追加到最后一条用户消息中
+            if self.state.messages and self.state.messages[-1]["role"] == "user":
+                self.state.messages[-1]["content"] += f"\n\n{reminder}"
+        
         # 每次请求前重新加载 system_prompt，确保动态内容（TODO、角色、目录等）是最新的
         from .prompt_loader import load_system_prompt
         from .tools import TOOL_DEFINITIONS

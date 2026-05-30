@@ -79,8 +79,15 @@ def write_text_file(
 
         # 追加或覆盖写入
         if append:
-            # 追加模式
+            # 追加模式：确保不会粘连（文件末尾无换行时自动补充）
             with open(file_path, 'a', encoding=used_encoding) as f:
+                # 检查文件末尾是否有换行符
+                if file_path.exists() and file_path.stat().st_size > 0:
+                    with open(file_path, 'rb') as check_f:
+                        check_f.seek(-1, 2)  # 定位到最后一个字节
+                        last_byte = check_f.read(1)
+                        if last_byte not in (b'\n', b'\r') and not content.startswith('\n'):
+                            f.write('\n')
                 f.write(content)
         else:
             # 覆盖模式

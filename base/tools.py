@@ -9,7 +9,7 @@
     from base.tools import TOOL_DEFINITIONS
     
     # 2. 为特定 Agent 构建工具定义字典
-    tool_names = ["Read", "Edit", "Grep", "execute_command"]
+    tool_names = ["file", "edit", "Grep", "execute_command"]
     tool_definitions = {name: TOOL_DEFINITIONS[name] for name in tool_names if name in TOOL_DEFINITIONS}
     
     # 3. 使用 ProtocolManager 注入协议到 system prompt
@@ -20,15 +20,10 @@
 可用工具列表:
     - skill_query: 查询技能文档
     - execute_command: 执行系统命令
-    - write_text_file: 写入文本文件
-    - report_output: 输出报告文本
-    - delete_path: 删除文件或文件夹
-    - Read: 读取文件内容
-    - Edit: 精确字符串替换编辑文件
-    - MultiEdit: 批量编辑单个文件
+    - file: 文件操作（读取/写入/删除）
+    - edit: 编辑文件（单次/批量替换）
     - web_browser: 访问网页或搜索
     - Grep: 文件内容搜索
-    - character_manage: 角色管理
     - multi_agent_dispatch: 多Agent任务派发
 """
 
@@ -45,7 +40,6 @@ from .utils import (
     multi_edit_text,
     web_browser,
     grep,
-    write_text,
 )
 from .character_manager import (
     select_character,
@@ -150,217 +144,47 @@ foreach ($file in $files) {
             },
         },
     },
-    "write_text_file": {
+    
+    "file": {
         "type": "function",
         "function": {
-            "name": "write_text_file",
-            "description": """写入或覆盖创建文本文件，支持追加模式用于分段写入大文件。
-
-支持任意大小的文件写入。对于超大文件，可以使用分段追加写入以提高性能：
-- 第一次写入：append=false（覆盖模式）
-- 后续写入：append=true（追加模式）""",
+            "name": "file",
+            "description": "?????????????????",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "目标文件路径"},
-                    "content": {"type": "string", "description": "要写入的文本内容。【必须】使用 @SPORE:CONTENT内容@SPORE:CONTENT_END 格式。"},
-                    "append": {"type": "boolean", "description": "是否追加模式（true=追加到文件末尾，false=覆盖文件，默认false）。大文件必须使用追加模式分段写入。"},
-                    "encoding": {"type": "string", "description": "文件编码（默认utf-8）"},
-                    "verify_result": {"type": "boolean", "description": "是否验证写入结果（默认true）"}
+                    "type": {"type": "string", "enum": ["read", "write", "delete"], "description": "????"},
+                    "file_path": {"type": "string", "description": "?????read/write????"},
+                    "path": {"type": "string", "description": "?????write????????"},
+                    "content": {"type": "string", "description": "?????write??????????? @SPORE:CONTENT??@SPORE:CONTENT_END ???"},
+                    "append": {"type": "boolean", "description": "???????write????"},
+                    "encoding": {"type": "string", "description": "?????write????"},
+                    "offset": {"type": "number", "description": "?????read????"},
+                    "limit": {"type": "number", "description": "?????read????"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "????????delete????"}
                 },
-                "required": ["path", "content"],
+                "required": ["type"],
             },
         },
     },
-    "report_output": {
+    "edit": {
         "type": "function",
         "function": {
-            "name": "report_output",
-            "description": """用于输出报告或其他人类自然语言文本，写入纯自然语言文本文件。
-
-【文件格式限制】仅支持以下后缀：.txt、.md、.log、.json、.xml、.yaml、.yml、.csv
-- 如需编写代码文件（.py、.js、.java 等），请使用子 Agent
-- 如需编写配置文件（.conf、.ini 等），请使用子 Agent
-
-支持任意大小的文件写入。对于超大报告，可以使用分段追加写入以提高性能：
-- 第一次写入：append=false（覆盖模式）
-- 后续写入：append=true（追加模式）""",
+            "name": "edit",
+            "description": "???????????????????????? file type=read ?????",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "目标文件的完整路径，支持相对路径和绝对路径"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "写入报告的内容。【必须】使用 @SPORE:CONTENT内容@SPORE:CONTENT_END 格式。"
-                    },
-                    "encoding": {
-                        "type": "string",
-                        "description": "文件编码格式（默认utf-8）",
-                        "enum": ["utf-8", "gbk", "gb2312", "ascii", "utf-16", "latin-1"]
-                    },
-                    "append": {
-                        "type": "boolean",
-                        "description": "是否追加模式，true为追加到文件末尾，false为覆盖写入（默认为false）。大文件必须使用追加模式分段写入。"
-                    }
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    "delete_path": {
-        "type": "function",
-        "function": {
-            "name": "delete_path",
-            "description": "批量删除文件或文件夹（递归）。支持一次删除多个路径，会弹出确认对话框让用户确认所有待删除项。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "待删除的路径列表，支持文件和文件夹"
-                    },
-                    "verify_result": {"type": "boolean", "description": "是否验证删除结果，默认true"}
-                },
-                "required": ["paths"],
-            },
-        },
-    },
-    "Read": {
-        "type": "function",
-        "function": {
-            "name": "Read",
-            "description": "Reads a file from the local filesystem. You can access any file directly by using this tool.\nAssume this tool is able to read all files on the machine. If the User provides a path to a file assume that path is valid. It is okay to read a file that does not exist; an error will be returned.\n\nUsage:\n- The file_path parameter must be an absolute path, not a relative path\n- By default, it reads up to 2000 lines starting from the beginning of the file\n- You can optionally specify a line offset and limit (especially handy for long files), but it's recommended to read the whole file by not providing these parameters\n- Any lines longer than 2000 characters will be truncated\n- Results are returned using cat -n like format, with line numbers starting at 1\nIf you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "The absolute path to the file to read",
-                    },
-                    "offset": {
-                        "type": "number",
-                        "description": "The line number to start reading from. Only provide if the file is too large to read at once",
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "The number of lines to read. Only provide if the file is too large to read at once.",
-                    },
+                    "type": {"type": "string", "enum": ["single", "multi"], "description": "???????single"},
+                    "file_path": {"type": "string", "description": "????"},
+                    "old_string": {"type": "string", "description": "???????single??????????? @SPORE:CONTENT??@SPORE:CONTENT_END ??"},
+                    "new_string": {"type": "string", "description": "???????single??????????? @SPORE:CONTENT??@SPORE:CONTENT_END ??"},
+                    "replace_all": {"type": "boolean", "default": False, "description": "???????single????"},
+                    "edits": {"type": "array", "items": {"type": "object", "properties": {"old_string": {"type": "string", "description": "??????"}, "new_string": {"type": "string", "description": "??????"}, "replace_all": {"type": "boolean", "default": False}}, "required": ["old_string", "new_string"]}, "description": "???????multi????"}
                 },
                 "required": ["file_path"],
-                "additionalProperties": False,
-                "$schema": "http://json-schema.org/draft-07/schema#",
             },
         },
-    },
-    "Edit": {
-        "type": "function",
-        "function": {
-            "name": "Edit",
-            "description": "Performs exact string replacements in files. \n\nUsage:\n- You must use your `Read` tool before evert time editing. This tool will error if you attempt an edit without reading the file. \n- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix. The line number prefix format is: spaces + line number + tab. Everything after that tab is the actual file content to match. Never include any part of the line number prefix in the old_string or new_string.\n- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- The edit will FAIL if `old_string` is not unique in the file. Either provide a larger string with more surrounding context to make it unique or use `replace_all` to change every instance of `old_string`. \n- Use `replace_all` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "The absolute path to the file to modify"
-                    },
-                    "old_string": {
-                        "type": "string",
-                        "description": "The text to replace. 【必须】使用 @SPORE:CONTENT内容@SPORE:CONTENT_END 格式"
-                    },
-                    "new_string": {
-                        "type": "string",
-                        "description": "The text to replace it with (must be different from old_string). 【必须】使用 @SPORE:CONTENT内容@SPORE:CONTENT_END 格式"
-                    },
-                    "replace_all": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Replace all occurences of old_string (default false)"
-                    },
-                    "validate_syntax": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": "Validate syntax after editing (Python/C). Set to false to skip validation."
-                    },
-                    "normalize_indent": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": "Auto-normalize indentation (tab/space conversion). Helps handle mixed indentation."
-                    }
-                },
-                "required": [
-                    "file_path",
-                    "old_string",
-                    "new_string"
-                ],
-                "additionalProperties": False,
-                "$schema": "http://json-schema.org/draft-07/schema#"
-            }
-        }
-    },
-    "MultiEdit": {
-        "type": "function",
-        "function": {
-            "name": "MultiEdit",
-            "description": "This is a tool for making multiple edits to a single file in one operation. It is built on top of the Edit tool and allows you to perform multiple find-and-replace operations efficiently. Prefer this tool over the Edit tool when you need to make multiple edits to the same file.\n\nEVERY TIME before using this tool:\n\n1. Use the Read tool to understand the file's contents and context\n2. Verify the directory path is correct\n\nTo make multiple file edits, provide the following:\n1. file_path: The absolute path to the file to modify (must be absolute, not relative)\n2. edits: An array of edit operations to perform, where each edit contains:\n    - old_string: The text to replace (must match the file contents exactly, including all whitespace and indentation)\n    - new_string: The edited text to replace the old_string\n    - replace_all: Replace all occurences of old_string. This parameter is optional and defaults to false.\n\nIMPORTANT:\n- All edits are applied in sequence, in the order they are provided\n- Each edit operates on the result of the previous edit\n- All edits must be valid for the operation to succeed - if any edit fails, none will be applied\n- This tool is ideal when you need to make several changes to different parts of the same file\n- For Jupyter notebooks (.ipynb files), use the NotebookEdit instead\n\nCRITICAL REQUIREMENTS:\n1. All edits follow the same requirements as the single Edit tool\n2. The edits are atomic - either all succeed or none are applied\n3. Plan your edits carefully to avoid conflicts between sequential operations\n\nWARNING:\n- The tool will fail if edits.old_string doesn't match the file contents exactly (including whitespace)\n- The tool will fail if edits.old_string and edits.new_string are the same\n- Since edits are applied in sequence, ensure that earlier edits don't affect the text that later edits are trying to find\n\nWhen making edits:\n- Ensure all edits result in idiomatic, correct code\n- Do not leave the code in a broken state\n- Always use absolute file paths (starting with /)\n- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.\n- Use replace_all for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.\n\nIf you want to create a new file, use:\n- A new file path, including dir name if needed\n- First edit: empty old_string and the new file's contents as new_string\n- Subsequent edits: normal edit operations on the created content",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "The absolute path to the file to modify"
-                    },
-                    "edits": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "old_string": {
-                                    "type": "string",
-                                    "description": "The text to replace. 【必须】使用 @SPORE:CONTENT内容@SPORE:CONTENT_END 格式"
-                                },
-                                "new_string": {
-                                    "type": "string",
-                                    "description": "The text to replace it with. 【必须】使用 @SPORE:CONTENT内容@SPORE:CONTENT_END 格式"
-                                },
-                                "replace_all": {
-                                    "type": "boolean",
-                                    "default": False,
-                                    "description": "Replace all occurences of old_string (default false)."
-                                }
-                            },
-                            "required": [
-                                "old_string",
-                                "new_string"
-                            ],
-                            "additionalProperties": False
-                        },
-                        "minItems": 1,
-                        "description": "Array of edit operations to perform sequentially on the file"
-                    },
-                    "validate_syntax": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": "Validate syntax after all edits (Python/C). Set to false to skip validation."
-                    },
-                    "normalize_indent": {
-                        "type": "boolean",
-                        "default": True,
-                        "description": "Auto-normalize indentation (tab/space conversion). Helps handle mixed indentation."
-                    }
-                },
-                "required": [
-                    "file_path",
-                    "edits"
-                ],
-                "additionalProperties": False,
-                "$schema": "http://json-schema.org/draft-07/schema#"
-            }
-        }
     },
     "web_browser": {
         "type": "function",
@@ -642,62 +466,96 @@ def handle_execute_command(args: Dict[str, Any]) -> str:
     return safe_tool_execution("execute_command", _impl, args, return_json=True)
 
 
-def handle_write_text_file(args: Dict[str, Any]) -> str:
-    # system_io.write_text_file 已自动处理路径规范化
-    return safe_tool_execution("write_text_file", lambda a: write_text_file(**a), args)
-
-def handle_write_text(args: Dict[str, Any]) -> str:
-    """写入报告 - write_text 已返回 JSON 字符串，不需要再序列化"""
-    # write_text 已自动处理路径规范化
-    return safe_tool_execution("report_output", write_text, args, return_json=False)
-
-
-def handle_delete_path(args: Dict[str, Any]) -> str:
+def handle_file(args: Dict[str, Any]) -> str:
+    """???????? - read/write/delete"""
     def _impl(a):
-        paths = a.get("paths", [])
-        # 处理字符串类型的paths（LLM可能输出 paths="[...]" 格式）
-        if isinstance(paths, str):
-            try:
-                parsed = json.loads(paths)
-                if isinstance(parsed, list):
-                    paths = parsed
-                else:
-                    paths = [paths]  # 单个路径字符串
-            except json.JSONDecodeError:
-                paths = [paths]  # 单个路径字符串
+        op_type = a.get("type", "read")
         
-        # delete_path 已自动处理路径规范化
-        a["paths"] = paths
-        return delete_path(**a)
-    return safe_tool_execution("delete_path", _impl, args)
-
-
-def handle_read(args: Dict[str, Any]) -> str:
-    # read_text_file 已自动处理路径规范化
-    return safe_tool_execution("Read", lambda a: read_text_file(**a), args)
+        if op_type == "read":
+            file_path = a.get("file_path") or a.get("path")
+            if not file_path:
+                raise ValueError("file_path ????")
+            read_args = {"file_path": file_path}
+            if a.get("offset") is not None:
+                read_args["offset"] = a["offset"]
+            if a.get("limit") is not None:
+                read_args["limit"] = a["limit"]
+            return read_text_file(**read_args)
+        
+        elif op_type == "write":
+            file_path = a.get("file_path") or a.get("path")
+            if not file_path:
+                raise ValueError("path ????")
+            content = a.get("content", "")
+            write_args = {"path": file_path, "content": content}
+            if a.get("append") is not None:
+                write_args["append"] = a["append"]
+            if a.get("encoding") is not None:
+                write_args["encoding"] = a["encoding"]
+            return write_text_file(**write_args)
+        
+        elif op_type == "delete":
+            paths = a.get("paths", [])
+            if isinstance(paths, str):
+                try:
+                    parsed = json.loads(paths)
+                    if isinstance(parsed, list):
+                        paths = parsed
+                    else:
+                        paths = [paths]
+                except json.JSONDecodeError:
+                    paths = [paths]
+            return delete_path(paths=paths)
+        
+        else:
+            raise ValueError(f"???????: {op_type}")
+    
+    return safe_tool_execution("file", _impl, args, return_json=True)
 
 
 def handle_edit(args: Dict[str, Any]) -> str:
-    # edit_text_exact 已自动处理路径规范化
-    return safe_tool_execution("Edit", lambda a: edit_text_exact(**a), args)
-
-
-def handle_multi_edit(args: Dict[str, Any]) -> str:
+    """?????? - single/multi"""
     def _impl(a):
-        # multi_edit_text 已自动处理路径规范化
+        edit_type = a.get("type", "single")
         
-        edits = a.get("edits", [])
-        # 处理字符串类型的edits（LLM可能输出 edits="[...]" 格式）
-        if isinstance(edits, str):
-            try:
-                edits = json.loads(edits)
-            except json.JSONDecodeError:
+        if edit_type == "single":
+            edit_args = {
+                "file_path": a.get("file_path"),
+                "old_string": a.get("old_string"),
+                "new_string": a.get("new_string"),
+            }
+            if a.get("replace_all") is not None:
+                edit_args["replace_all"] = a["replace_all"]
+            if a.get("validate_syntax") is not None:
+                edit_args["validate_syntax"] = a["validate_syntax"]
+            if a.get("normalize_indent") is not None:
+                edit_args["normalize_indent"] = a["normalize_indent"]
+            return edit_text_exact(**edit_args)
+        
+        elif edit_type == "multi":
+            edits = a.get("edits", [])
+            if isinstance(edits, str):
+                try:
+                    edits = json.loads(edits)
+                except json.JSONDecodeError:
+                    edits = []
+            if not isinstance(edits, list):
                 edits = []
-        if not isinstance(edits, list):
-            edits = []
-        a["edits"] = edits
-        return multi_edit_text(**a)
-    return safe_tool_execution("MultiEdit", _impl, args)
+            multi_args = {
+                "file_path": a.get("file_path"),
+                "edits": edits,
+            }
+            if a.get("validate_syntax") is not None:
+                multi_args["validate_syntax"] = a["validate_syntax"]
+            if a.get("normalize_indent") is not None:
+                multi_args["normalize_indent"] = a["normalize_indent"]
+            return multi_edit_text(**multi_args)
+        
+        else:
+            raise ValueError(f"???????: {edit_type}")
+    
+    return safe_tool_execution("edit", _impl, args, return_json=True)
+
 
 
 def handle_grep(args: Dict[str, Any]) -> str:
@@ -834,12 +692,8 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
 TOOL_HANDLERS: Dict[str, Any] = {
     "skill_query": handle_skill_query,
     "execute_command": handle_execute_command,
-    "write_text_file": handle_write_text_file,
-    "report_output": handle_write_text,
-    "delete_path": handle_delete_path,
-    "Read": handle_read,
-    "Edit": handle_edit,
-    "MultiEdit": handle_multi_edit,
+    "file": handle_file,
+    "edit": handle_edit,
     "Grep": handle_grep,
     "web_browser": handle_web_browser,
     "multi_agent_dispatch": handle_multi_agent_dispatch,

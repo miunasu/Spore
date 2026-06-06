@@ -41,7 +41,7 @@
 - 所有输出不可以包含emoji
 
 ### 4. 验证结果
-- 文件操作：用 Read 验证内容
+- 文件操作：用 file type=read 验证内容
 - 代码脚本或可执行程序：运行测试确认功能
 - 确保所有需求已满足
 
@@ -87,7 +87,7 @@
 3. [pending] 给出优化建议
 
 @SPORE:ACTION
-Read file_path=E:/Project/src/main.ts
+file type=read file_path=E:/Project/src/main.ts
 
 
 工具返回后：
@@ -102,7 +102,7 @@ Read file_path=E:/Project/src/main.ts
 3. [pending] 给出优化建议
 
 @SPORE:ACTION
-Read file_path=E:/Project/src/runner.ts
+file type=read file_path=E:/Project/src/runner.ts
 
 
 ---
@@ -158,7 +158,7 @@ Skill 由文档和代码（可选）组成，用于指导完成特定任务。
 
 ## 通用策略
 
-- **信息收集**：文本操作前先 Read 文件；不确定目录时用 dir；搜索用 Grep
+- **信息收集**：文本操作前先 file type=read 读取文件；不确定目录时用 dir；搜索用 Grep
 - **错误处理**：失败时分析错误，尝试其他方法；文件不存在时确认路径
 - **拒绝前确认**：系统命令、现有工具、现有 skills、创建 skill 全部无法完成才拒绝
 

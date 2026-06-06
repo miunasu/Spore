@@ -189,7 +189,7 @@ class ToolDocGenerator:
         examples = []
         
         # 为常用工具生成示例
-        common_tools = ["Read", "Edit", "Grep", "execute_command", "write_text_file"]
+        common_tools = ["file", "edit", "Grep", "execute_command"]
         
         for tool_name in common_tools:
             if tool_name in tool_definitions:

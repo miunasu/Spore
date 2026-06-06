@@ -5,7 +5,7 @@
 ## 核心规则
 
 1. 只修改指定文件，不要动其他文件
-2. 编辑前必须先读取，使用 Read 工具
+2. 编辑前必须先读取，使用 file type=read 工具
 3. 修改后必须验证，回读确认结果
 4. **必须使用 @SPORE 协议格式**
 
@@ -19,7 +19,7 @@
 我需要先读取文件内容。
 
 @SPORE:ACTION
-Read file_path="C:\project\main.py"
+file type=read file_path="C:\project\main.py"
 
 系统返回:
 
@@ -32,7 +32,7 @@ Read file_path="C:\project\main.py"
 文件内容已读取，现在添加 hello 函数。
 
 @SPORE:ACTION
-Edit file_path="C:\project\main.py" old_string="def existing_func():\n    pass" new_string="def hello():\n    print('Hello!')\n\ndef existing_func():\n    pass"
+edit file_path="C:\project\main.py" old_string="def existing_func():\n    pass" new_string="def hello():\n    print('Hello!')\n\ndef existing_func():\n    pass"
 
 系统返回:
 
@@ -45,7 +45,7 @@ Edit file_path="C:\project\main.py" old_string="def existing_func():\n    pass" 
 修改成功，验证一下。
 
 @SPORE:ACTION
-Read file_path="C:\project\main.py"
+file type=read file_path="C:\project\main.py"
 
 系统返回:
 

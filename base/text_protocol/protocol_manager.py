@@ -172,10 +172,9 @@ TOOL_NAME param=value
 - JSON: param={{"key": "value"}}
 
 **如果你的工具集中包含如下特定工具，则必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式的参数：**
-- write_text_file 的 content 参数
-- report_output 的 content 参数
-- Edit 的 old_string 和 new_string 参数
-- MultiEdit 的 edits 中的 old_string 和 new_string
+- file type=write 的 content 参数
+- edit 的 old_string 和 new_string 参数
+- edit type=multi 的 edits 中的 old_string 和 new_string
 
 ## 可用工具
 

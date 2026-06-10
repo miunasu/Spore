@@ -4,9 +4,9 @@
 """
 from typing import List, Optional
 
+
 # 完整版关键规则提醒模板
-RULE_REMINDER_TEMPLATE = """
-[系统提醒] 请严格遵守以下规则：
+RULE_REMINDER_TEMPLATE = """[系统提醒] 请严格遵守以下规则：
 
 ## 格式规范
 所有标识符必须独占一行：@SPORE:ACTION、@SPORE:TODO、@SPORE:REPLY、@SPORE:FINAL@
@@ -21,7 +21,7 @@ tool_name param1=value1 param2=value2
 
 
 ## 工具调用规则
-1. **每次回复只能包含一个 ACTION 块，即每次回复只能包含一个工具调用**
+1. **每次回复只能包含一个 ACTION 块**
 2. 输出 ACTION 后立即停止，等待系统返回工具执行结果
 3. 不要自己输出 RESULT 或继续回复
 
@@ -29,12 +29,7 @@ tool_name param1=value1 param2=value2
 给用户的回复内容必须放在 @SPORE:REPLY 块中
 
 ## 任务完成标记
-无论简单还是复杂任务，完成后最后一次输出必须包含 @SPORE:FINAL@
-
-## TODO 管理
-复杂任务必须在回复中输出 @SPORE:TODO 跟踪进度：
-- 开始时输出 @SPORE:TODO 列出步骤
-- 每完成一步输出更新后的 @SPORE:TODO（状态改为 completed/failed）
+完成后最后一次输出必须包含 @SPORE:FINAL@
 
 ## 多Agent协作
 你可以派发子Agent：
@@ -51,21 +46,18 @@ tool_name param1=value1 param2=value2
 {tools}
 
 ## 可用技能
-{skills}
-""".strip()
+{skills}""".strip()
+
 
 # 精简版本（token 敏感时使用）
-RULE_REMINDER_SHORT_TEMPLATE = """
-[系统提醒] 关键规则：
-1. **每次回复必须输出 @SPORE:ACTION（调用工具）或 @SPORE:FINAL@（任务完成）**
+RULE_REMINDER_SHORT_TEMPLATE = """[系统提醒] 关键规则：
+1. **每次回复必须输出 @SPORE:ACTION 或 @SPORE:FINAL@**
 2. 工具调用：@SPORE:ACTION 必须独占一行
-3. 给用户的回复必须放在 @SPORE:REPLY 块中
+3. 回复必须放在 @SPORE:REPLY 块中
 4. 任务完成后输出 @SPORE:FINAL@
-5. 复杂任务在回复中输出 @SPORE:TODO 跟踪进度
 
 可用工具: {tools_short}
-可用技能: {skills_short}
-""".strip()
+可用技能: {skills_short}""".strip()
 
 
 def _get_tool_names() -> List[str]:
@@ -103,16 +95,16 @@ def _get_skill_names() -> List[str]:
 def get_rule_reminder(short: bool = False) -> str:
     """
     获取规则提醒文本（包含动态工具和技能列表）
-    
+
     Args:
         short: 是否使用精简版本
-    
+
     Returns:
         规则提醒文本
     """
     tool_names = _get_tool_names()
     skill_names = _get_skill_names()
-    
+
     if short:
         tools_short = ", ".join(tool_names) if tool_names else "无"
         skills_short = ", ".join(skill_names) if skill_names else "无"
@@ -132,11 +124,11 @@ def get_rule_reminder(short: bool = False) -> str:
 def should_remind(llm_reply_count: int, interval: int) -> bool:
     """
     判断是否应该发送规则提醒
-    
+
     Args:
         llm_reply_count: 当前 LLM 回复计数
         interval: 提醒间隔（每 N 次 LLM 回复提醒一次）
-    
+
     Returns:
         是否应该提醒
     """

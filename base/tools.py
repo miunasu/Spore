@@ -88,15 +88,14 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": """在系统中执行PowerShell命令并返回其输出。命令通过原生PowerShell执行，支持所有PowerShell语法。
+            "description": """在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。多行Python代码推荐用 here-string 管道方式：@'\\n代码\\n'@ | python -
 
 ## 多行代码执行方式
 
 ### 使用 @SPORE:CONTENT 格式
-对于多行代码，必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式包裹命令参数。
-工具会自动检测 here-string 语法
+对于多行代码或包含单引号的命令，必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式包裹命令参数。
 
-示例1 - 执行多行Python代码：
+示例1 - 执行多行Python代码（推荐方式）：
 ```
 @SPORE:ACTION
 execute_command command=@SPORE:CONTENT
@@ -105,38 +104,30 @@ for i in range(5):
     print(f"Number: {i}")
     if i == 3:
         print("Found three!")
-'@ | python
+'@ | python -
 @SPORE:CONTENT_END timeout=30
 ```
 
-示例2 - PowerShell 多行脚本：
+示例2 - 简单Python命令：
 ```
 @SPORE:ACTION
-execute_command command=@SPORE:CONTENT
-@'
-$files = Get-ChildItem -Path . -Recurse -Filter *.log
-foreach ($file in $files) {
-    Write-Host "Processing: $($file.FullName)"
-}
-'@ | powershell -Command -
-@SPORE:CONTENT_END
+execute_command command=python -c "print('hello')"
 ```
 
 ### Here-String 语法说明
 - 单引号版本 @'...'@: 内容按字面值处理，不展开变量
-- 双引号版本 @"..."@: 支持变量展开和转义
-- 开始标记 @' 或 @" 必须在行尾
-- 结束标记 '@ 或 "@ 必须在行首
-- 工具会自动检测 here-string 并创建临时文件处理
+- 多行Python用 @'...'@ | python - 从stdin执行
+- 开始标记 @' 必须在行尾
+- 结束标记 '@ 必须在行首
 
 ### 重要提示
-❌ 不要在双引号中使用 \n 表示换行（会被保留为字面字符串）
-❌ 不要直接在参数值中写 here-string（解析器会失败）
-✅ 必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 包裹多行命令""",
+✅ 命令通过-EncodedCommand传递，引号安全
+✅ 包含单引号的命令需用 @SPORE:CONTENT 格式传参
+✅ 多行Python用 @'...'@ | python - 从stdin执行""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "PowerShell命令字符串。对于多行代码，【必须】使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式包裹，内部可使用 here-string 语法（@'...'@ | command）"},
+                    "command": {"type": "string", "description": "PowerShell命令字符串（通过-EncodedCommand传递，引号安全）。包含单引号的命令需用@SPORE:CONTENT格式传参；多行Python用 @'...'@ | python - 从stdin执行"},
                     "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
                     "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },
@@ -149,19 +140,19 @@ foreach ($file in $files) {
         "type": "function",
         "function": {
             "name": "file",
-            "description": "?????????????????",
+            "description": "文件操作工具，支持读取、写入、删除",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["read", "write", "delete"], "description": "????"},
-                    "file_path": {"type": "string", "description": "?????read/write????"},
-                    "path": {"type": "string", "description": "?????write????????"},
-                    "content": {"type": "string", "description": "?????write??????????? @SPORE:CONTENT??@SPORE:CONTENT_END ???"},
-                    "append": {"type": "boolean", "description": "???????write????"},
-                    "encoding": {"type": "string", "description": "?????write????"},
-                    "offset": {"type": "number", "description": "?????read????"},
-                    "limit": {"type": "number", "description": "?????read????"},
-                    "paths": {"type": "array", "items": {"type": "string"}, "description": "????????delete????"}
+                    "type": {"type": "string", "enum": ["read", "write", "delete"], "description": "操作类型"},
+                    "file_path": {"type": "string", "description": "文件路径（read/write时使用）"},
+                    "path": {"type": "string", "description": "文件路径（write时也可用此参数）"},
+                    "content": {"type": "string", "description": "写入内容（write时必需）"},
+                    "append": {"type": "boolean", "description": "是否追加模式（write时可选）"},
+                    "encoding": {"type": "string", "description": "文件编码（write时可选）"},
+                    "offset": {"type": "number", "description": "起始行号（read时可选）"},
+                    "limit": {"type": "number", "description": "读取行数（read时可选）"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "待删除路径列表（delete时必需）"}
                 },
                 "required": ["type"],
             },
@@ -171,16 +162,16 @@ foreach ($file in $files) {
         "type": "function",
         "function": {
             "name": "edit",
-            "description": "???????????????????????? file type=read ?????",
+            "description": "编辑文件，支持单次替换和批量替换。编辑前必须先用 file type=read 读取文件内容。不可用于覆盖整个文件内容，覆盖请用file type=write",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["single", "multi"], "description": "???????single"},
-                    "file_path": {"type": "string", "description": "????"},
-                    "old_string": {"type": "string", "description": "???????single??????????? @SPORE:CONTENT??@SPORE:CONTENT_END ??"},
-                    "new_string": {"type": "string", "description": "???????single??????????? @SPORE:CONTENT??@SPORE:CONTENT_END ??"},
-                    "replace_all": {"type": "boolean", "default": False, "description": "???????single????"},
-                    "edits": {"type": "array", "items": {"type": "object", "properties": {"old_string": {"type": "string", "description": "??????"}, "new_string": {"type": "string", "description": "??????"}, "replace_all": {"type": "boolean", "default": False}}, "required": ["old_string", "new_string"]}, "description": "???????multi????"}
+                    "type": {"type": "string", "enum": ["single", "multi"], "description": "编辑类型，默认single"},
+                    "file_path": {"type": "string", "description": "文件路径"},
+                    "old_string": {"type": "string", "description": "要替换的文本（single时必需）"},
+                    "new_string": {"type": "string", "description": "替换后的文本（single时必需）"},
+                    "replace_all": {"type": "boolean", "default": False, "description": "是否全部替换（single时可选）"},
+                    "edits": {"type": "array", "items": {"type": "object", "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean", "default": False}}, "required": ["old_string", "new_string"]}, "description": "编辑操作列表（multi时必需）"}
                 },
                 "required": ["file_path"],
             },

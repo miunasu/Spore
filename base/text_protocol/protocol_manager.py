@@ -116,7 +116,7 @@ PROTOCOL_TEMPLATE = """
     我来读取文件内容。
 
     @SPORE:ACTION
-    Read file_path="C:/test.txt"
+    file type=read file_path="C:/test.txt"
 
 示例3 - 工具任务完成后:
 

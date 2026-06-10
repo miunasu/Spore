@@ -17,27 +17,21 @@ from typing import List, Dict, Any, Optional
 STRONG_CONTEXT_TOOLS = [
     "skill_query",
     "execute_command",
-    "write_text_file",
-    "delete_path",
-    "Read",
+    "file",
+    "edit",
     "Grep",
-    "character_manage",
     "multi_agent_dispatch",
     "web_browser",
-    "MultiEdit",
-    "Edit",
 ]
 
 # 长上下文处理模式工具集
 LONG_CONTEXT_TOOLS = [
     "skill_query",
     "execute_command",
-    "delete_path",
-    "multi_agent_dispatch",
-    "character_manage",
-    "Read",
+    "file",
+    "edit",
     "Grep",
-    "report_output",
+    "multi_agent_dispatch",
 ]
 
 # 向后兼容：默认使用强上下文模式
@@ -123,19 +117,19 @@ class AgentTypeConfig:
 PREDEFINED_AGENT_TYPES: Dict[str, AgentTypeConfig] = {
     "Coder": AgentTypeConfig(
         name="Coder",
-        tools_list=["execute_command", "Grep", "write_text_file", "MultiEdit", "Edit", "Read", "delete_path","skill_query"],
+        tools_list=["execute_command", "Grep", "file", "edit", "skill_query"],
     ),
     "WebInfoCollector": AgentTypeConfig(
         name="WebSearcher",
-        tools_list=["web_browser", "report_output","skill_query"],
+        tools_list=["web_browser", "file", "skill_query"],
     ),
     "FileContentAnalyzer": AgentTypeConfig(
         name="FileSearcher",
-        tools_list=["Read", "Grep", "execute_command", "report_output","skill_query"],
+        tools_list=["file", "Grep", "execute_command", "skill_query"],
     ),
     "TextEditor": AgentTypeConfig(
         name="TextEditor",
-        tools_list=["Read", "Grep", "report_output", "Edit", "MultiEdit", "skill_query"],
+        tools_list=["file", "Grep", "edit", "skill_query"],
     ),
 }
 

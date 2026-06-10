@@ -94,7 +94,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
             "ok": False,
             "returncode": -1,
             "stdout": "",
-            "stderr": f"错误: 不允许在命令中使用 '{detected_cmd}' 删除文件。\n检测到的命令片段: ...{context}...\n请使用 delete_path 工具函数来安全地删除文件或目录。",
+            "stderr": f"错误: 不允许在命令中使用 '{detected_cmd}' 删除文件。\n检测到的命令片段: ...{context}...\n请使用 file type=delete 工具来安全地删除文件或目录。",
             "duration_sec": 0,
             "shell_used": isinstance(command, str),
         }
@@ -172,7 +172,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     
     # 设置环境变量
     env = os.environ.copy()
-    env['PYTHONIOENCODING'] = prefer_encoding
+    env['PYTHONIOENCODING'] = 'utf-8'
     
     # Windows 创建标志：防止终端闪屏
     creation_flags = 0
@@ -182,19 +182,22 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         creation_flags = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
     
     # Windows 系统：构建 PowerShell 命令
-    # 使用 shell=False 直接调用 powershell.exe，让 PowerShell 自己解析命令
+    # 使用 -EncodedCommand 传递命令（Base64编码），避免引号转义问题
     ps_args = None
     if os.name == "nt" and shell_used:
         # 查找 PowerShell 路径
         import shutil
+        import base64
         ps_exe = shutil.which('pwsh')  # 优先 PowerShell 7+
         if not ps_exe:
             ps_exe = shutil.which('powershell')  # 回退到 PowerShell 5.x
         
         if ps_exe:
-            # 构建参数列表：powershell.exe -NoProfile -NonInteractive -Command "原始命令"
-            # 注意：这里 command 是原始字符串，PowerShell 会自己解析
-            ps_args = [ps_exe, '-NoProfile', '-NonInteractive', '-Command', command]
+            # 前置编码设置：确保管道传中文给外部进程时使用UTF-8
+            full_command = f"$OutputEncoding = [System.Text.Encoding]::UTF8; $env:PYTHONIOENCODING='utf-8'; {command}"
+            # 将命令编码为 UTF-16LE 再 Base64，PowerShell -EncodedCommand 要求此格式
+            encoded = base64.b64encode(full_command.encode('utf-16-le')).decode('ascii')
+            ps_args = [ps_exe, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
             shell_used = False  # 改为 False，因为我们直接调用可执行文件
 
     try:

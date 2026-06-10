@@ -12,7 +12,7 @@ import json
 
 # 文件操作类工具列表
 FILE_OPERATION_TOOLS = {
-    "Read", "Edit", "MultiEdit", "write_text_file", "delete_path", "report_output"
+    "file", "edit"
 }
 
 

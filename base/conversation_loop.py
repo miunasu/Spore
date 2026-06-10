@@ -502,7 +502,7 @@ class ConversationLoop:
         else:
             try:
                 # 某些工具不限时
-                no_timeout_tools = ["multi_agent_dispatch"]
+                no_timeout_tools = ["multi_agent_dispatch", "file"]
                 
                 if tool_name in no_timeout_tools:
                     tool_result = handler(args)

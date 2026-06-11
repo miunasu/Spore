@@ -88,42 +88,7 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": """在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。多行Python代码推荐用 here-string 管道方式：@'\\n代码\\n'@ | python -
-
-## 多行代码执行方式
-
-### 使用 @SPORE:CONTENT 格式
-对于多行代码或包含单引号的命令，必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式包裹命令参数。
-
-示例1 - 执行多行Python代码（推荐方式）：
-```
-@SPORE:ACTION
-execute_command command=@SPORE:CONTENT
-@'
-for i in range(5):
-    print(f"Number: {i}")
-    if i == 3:
-        print("Found three!")
-'@ | python -
-@SPORE:CONTENT_END timeout=30
-```
-
-示例2 - 简单Python命令：
-```
-@SPORE:ACTION
-execute_command command=python -c "print('hello')"
-```
-
-### Here-String 语法说明
-- 单引号版本 @'...'@: 内容按字面值处理，不展开变量
-- 多行Python用 @'...'@ | python - 从stdin执行
-- 开始标记 @' 必须在行尾
-- 结束标记 '@ 必须在行首
-
-### 重要提示
-✅ 命令通过-EncodedCommand传递，引号安全
-✅ 包含单引号的命令需用 @SPORE:CONTENT 格式传参
-✅ 多行Python用 @'...'@ | python - 从stdin执行""",
+            "description": "在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。多行Python代码推荐用 here-string 管道方式：@'\\n代码\\n'@ | python -",
             "parameters": {
                 "type": "object",
                 "properties": {

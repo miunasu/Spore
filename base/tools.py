@@ -127,8 +127,8 @@ execute_command command=python -c "print('hello')"
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "PowerShell命令字符串（通过-EncodedCommand传递，引号安全）。包含单引号的命令需用@SPORE:CONTENT格式传参；多行Python用 @'...'@ | python - 从stdin执行"},
-                    "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
+                    "command": {"type": "string", "description": "PowerShell命令字符串（通过-EncodedCommand传递，引号安全）。包含单引号的命令需用@SPORE:CONTENT格式传参；多行Python用 @'...'@ | python - 从stdin执行。注意：@SPORE:CONTENT块只包裹command一个参数的值，其他参数（如timeout）写在块外面"},
+                    "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。直接写数字即可（如timeout=120），不要用@SPORE:CONTENT格式"},
                     "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },
                 "required": ["command"],

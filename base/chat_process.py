@@ -154,13 +154,20 @@ class ChatProcess:
             # 获取 conversation_id（从 request_data 传递）
             conversation_id = request_id.split("_")[0] if "_" in request_id else None
 
-            completion = self.client.chat.completions.create(
-                model=model,
-                messages=final_messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=timeout
-            )
+            # 构建请求参数
+            request_params = {
+                "model": model,
+                "messages": final_messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "timeout": timeout,
+            }
+            
+            # 如果配置了 reasoning_effort，添加到请求中
+            if self.config.openai_reasoning_effort:
+                request_params["extra_body"] = {"reasoning_effort": self.config.openai_reasoning_effort}
+            
+            completion = self.client.chat.completions.create(**request_params)
             
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -262,6 +269,10 @@ class ChatProcess:
             }
             if system and not self.config.system_as_user:
                 request_params["instructions"] = system
+
+            # 如果配置了 reasoning_effort，添加到请求中
+            if self.config.openai_reasoning_effort:
+                request_params["reasoning"] = {"effort": self.config.openai_reasoning_effort}
 
             response = self.client.responses.create(**request_params)
 

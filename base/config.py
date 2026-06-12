@@ -30,6 +30,10 @@ class Config:
         # 启用后使用 client.responses.create，支持 o 系列模型的原生接口
         self.use_responses_api: bool = os.getenv("USE_RESPONSES_API", "false").lower() == "true"
 
+        # OpenAI reasoning_effort 参数（用于推理模型如 o1/gpt-5.5 等）
+        # 可选值：low, medium, high, xhigh，留空表示不传此参数
+        self.openai_reasoning_effort: Optional[str] = os.getenv("OPENAI_REASONING_EFFORT", "").strip() or None
+
         # 是否清理 SDK 的 x-stainless headers（某些第三方API代理需要）
         # 对 OpenAI SDK 和 Anthropic SDK 都生效
         self.clean_sdk_headers: bool = os.getenv("CLEAN_SDK_HEADERS", "false").lower() == "true"

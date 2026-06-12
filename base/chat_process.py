@@ -219,11 +219,14 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
             
+            error_context = {"request_id": request_id, "model": model}
+            if 'completion' in locals() and completion is not None:
+                error_context["response"] = str(completion)
             log_error(
                 "LLM_API_CALL_ERROR",
                 f"OpenAI Chat API call error: {str(exc)}",
                 exc,
-                context={"request_id": request_id, "model": model}
+                context=error_context
             )
             return {"request_id": request_id, "status": "error", "data": str(exc)}
 
@@ -322,11 +325,14 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
+            error_context = {"request_id": request_id, "model": model}
+            if 'response' in locals() and response is not None:
+                error_context["response"] = str(response)
             log_error(
                 "LLM_API_CALL_ERROR",
                 f"OpenAI Responses API call error: {str(exc)}",
                 exc,
-                context={"request_id": request_id, "model": model}
+                context=error_context
             )
             return {"request_id": request_id, "status": "error", "data": str(exc)}
     
@@ -471,11 +477,14 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
             
+            error_context = {"request_id": request_id, "model": model}
+            if 'response' in locals() and response is not None:
+                error_context["response"] = str(response)
             log_error(
                 "LLM_API_CALL_ERROR",
                 f"Anthropic API call error: {str(exc)}",
                 exc,
-                context={"request_id": request_id, "model": model}
+                context=error_context
             )
             return {"request_id": request_id, "status": "error", "data": str(exc)}
     

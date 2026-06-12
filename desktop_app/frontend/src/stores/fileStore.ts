@@ -33,6 +33,9 @@ interface FileStore {
   deleteItem: (path: string) => Promise<void>;
   createItem: (name: string, type: 'file' | 'folder') => Promise<void>;
   renameItem: (oldPath: string, newName: string) => Promise<void>;
+  copyItem: (sourcePath: string, targetPath: string) => Promise<void>;
+  moveItem: (sourcePath: string, targetPath: string) => Promise<void>;
+  openLocation: (path: string) => Promise<void>;
 }
 
 export const useFileStore = create<FileStore>((set, get) => ({
@@ -156,6 +159,34 @@ export const useFileStore = create<FileStore>((set, get) => ({
       await loadDirectory(currentPath);
     } catch (error) {
       console.error('重命名失败:', error);
+    }
+  },
+
+  copyItem: async (sourcePath, targetPath) => {
+    const { currentPath, loadDirectory } = get();
+    try {
+      await filesApi.copy(sourcePath, targetPath);
+      await loadDirectory(currentPath);
+    } catch (error) {
+      console.error('复制失败:', error);
+    }
+  },
+
+  moveItem: async (sourcePath, targetPath) => {
+    const { currentPath, loadDirectory } = get();
+    try {
+      await filesApi.move(sourcePath, targetPath);
+      await loadDirectory(currentPath);
+    } catch (error) {
+      console.error('剪切失败:', error);
+    }
+  },
+
+  openLocation: async (path) => {
+    try {
+      await filesApi.openLocation(path);
+    } catch (error) {
+      console.error('打开所在位置失败:', error);
     }
   },
 }));

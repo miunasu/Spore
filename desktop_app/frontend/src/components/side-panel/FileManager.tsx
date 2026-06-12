@@ -2,6 +2,7 @@
  * 文件管理器组件 - 现代化设计
  */
 import React, { useState, useRef, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/tauri';
 import { useFileStore } from '../../stores/fileStore';
 import { useDragStore } from '../../stores/dragStore';
 import { useEditorStore } from '../../stores/editorStore';
@@ -12,6 +13,13 @@ import type { FileItem } from '../../types';
 const DRAG_THRESHOLD = 5;
 // 文件列表刷新间隔（毫秒）
 const REFRESH_INTERVAL = 3000;
+
+type ClipboardMode = 'copy' | 'cut';
+
+type SystemFileClipboard = {
+  paths: string[];
+  operation: ClipboardMode;
+};
 
 export const FileManager: React.FC = () => {
   const {
@@ -26,6 +34,9 @@ export const FileManager: React.FC = () => {
     deleteItem,
     createItem,
     renameItem,
+    copyItem,
+    moveItem,
+    openLocation,
   } = useFileStore();
 
   const { startDrag, isDragging } = useDragStore();
@@ -42,6 +53,11 @@ export const FileManager: React.FC = () => {
   const [newItemType, setNewItemType] = useState<'file' | 'folder' | null>(null);
   const [renamingItem, setRenamingItem] = useState<FileItem | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [clipboardItem, setClipboardItem] = useState<{
+    item: FileItem;
+    mode: ClipboardMode;
+  } | null>(null);
+  const [canPasteFiles, setCanPasteFiles] = useState(false);
 
   // 拖拽状态追踪
   const dragStartRef = useRef<{ x: number; y: number; item: FileItem } | null>(null);
@@ -126,9 +142,38 @@ export const FileManager: React.FC = () => {
     openFile(item);
   };
 
+  const syncSystemClipboard = async () => {
+    try {
+      const systemClipboard = await invoke<SystemFileClipboard | null>('get_file_clipboard');
+      const hasSystemFiles = Boolean(systemClipboard?.paths?.length);
+      setCanPasteFiles(hasSystemFiles || Boolean(clipboardItem));
+      return systemClipboard;
+    } catch (error) {
+      setCanPasteFiles(Boolean(clipboardItem));
+      return null;
+    }
+  };
+
+  const handleClipboardAction = async (item: FileItem, mode: ClipboardMode) => {
+    setClipboardItem({ item, mode });
+    setCanPasteFiles(true);
+
+    try {
+      await invoke('set_file_clipboard', {
+        paths: [item.path],
+        operation: mode,
+      });
+    } catch (error) {
+      console.error('写入系统文件剪贴板失败:', error);
+    }
+
+    setContextMenu(null);
+  };
+
   const handleContextMenu = (e: React.MouseEvent, item?: FileItem) => {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, item });
+    void syncSystemClipboard();
   };
 
   const handleCreate = async () => {
@@ -146,6 +191,80 @@ export const FileManager: React.FC = () => {
   };
 
   // 处理鼠标按下 - 记录起始位置
+
+  const getTargetDirectory = (item?: FileItem) => {
+    if (item?.type === 'folder') {
+      return item.path;
+    }
+    return currentPath || rootPath || '.';
+  };
+
+  const buildPastePath = (targetDirectory: string, item: FileItem) => {
+    const directory = targetDirectory.replace(/\\/g, '/').replace(/\/$/, '');
+    const existingNames = new Set(items.map((existingItem) => existingItem.name));
+    const joinPath = (name: string) => directory && directory !== '.' ? `${directory}/${name}` : name;
+
+    if (!existingNames.has(item.name)) {
+      return joinPath(item.name);
+    }
+
+    const dotIndex = item.type === 'file' ? item.name.lastIndexOf('.') : -1;
+    const baseName = dotIndex > 0 ? item.name.slice(0, dotIndex) : item.name;
+    const extension = dotIndex > 0 ? item.name.slice(dotIndex) : '';
+
+    for (let index = 1; index < 1000; index++) {
+      const suffix = index === 1 ? ' - 副本' : ` - 副本 ${index}`;
+      const candidateName = `${baseName}${suffix}${extension}`;
+      if (!existingNames.has(candidateName)) {
+        return joinPath(candidateName);
+      }
+    }
+
+    return joinPath(`${baseName} - 副本 ${Date.now()}${extension}`);
+  };
+
+  const handlePaste = async (targetItem?: FileItem) => {
+    const targetDirectory = getTargetDirectory(targetItem);
+
+    try {
+      const systemClipboard = await invoke<SystemFileClipboard | null>('get_file_clipboard');
+      if (systemClipboard?.paths?.length) {
+        await invoke<string[]>('paste_file_clipboard', { targetDirectory });
+        await refreshDirectory();
+
+        if (systemClipboard.operation === 'cut') {
+          setClipboardItem(null);
+          setCanPasteFiles(false);
+        } else {
+          setCanPasteFiles(true);
+        }
+
+        setContextMenu(null);
+        return;
+      }
+    } catch (error) {
+      console.error('系统文件剪贴板粘贴失败:', error);
+    }
+
+    if (!clipboardItem) {
+      setCanPasteFiles(false);
+      setContextMenu(null);
+      return;
+    }
+
+    const targetPath = buildPastePath(targetDirectory, clipboardItem.item);
+
+    if (clipboardItem.mode === 'copy') {
+      await copyItem(clipboardItem.item.path, targetPath);
+      setCanPasteFiles(true);
+    } else {
+      await moveItem(clipboardItem.item.path, targetPath);
+      setClipboardItem(null);
+      setCanPasteFiles(false);
+    }
+    setContextMenu(null);
+  };
+
   const handleMouseDown = (e: React.MouseEvent, item: FileItem) => {
     if (e.button === 0 && item.type === 'file') {
       dragStartRef.current = { x: e.clientX, y: e.clientY, item };
@@ -344,6 +463,47 @@ export const FileManager: React.FC = () => {
             {contextMenu.item && (
               <>
                 <button
+                  onClick={() => handleClipboardAction(contextMenu.item!, 'copy')}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-spore-accent/50 flex items-center gap-2 transition-colors"
+                >
+                  <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  复制
+                </button>
+                <button
+                  onClick={() => handleClipboardAction(contextMenu.item!, 'cut')}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-spore-accent/50 flex items-center gap-2 transition-colors"
+                >
+                  <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7M5 19l4.879-4.879M12 12L5 5m7 7l-2.121 2.121M12 12l2.121 2.121" />
+                  </svg>
+                  剪切
+                </button>
+                {(canPasteFiles || clipboardItem) && contextMenu.item!.type === 'folder' && (
+                  <button
+                    onClick={() => handlePaste(contextMenu.item)}
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-spore-accent/50 flex items-center gap-2 transition-colors"
+                  >
+                    <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                    粘贴到此文件夹
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    openLocation(contextMenu.item!.path);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm hover:bg-spore-accent/50 flex items-center gap-2 transition-colors"
+                >
+                  <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  打开所在位置
+                </button>
+                <button
                   onClick={() => {
                     setRenamingItem(contextMenu.item!);
                     setRenameValue(contextMenu.item!.name);
@@ -372,6 +532,17 @@ export const FileManager: React.FC = () => {
                 </button>
               </>
             )}
+            {(canPasteFiles || clipboardItem) && (
+              <button
+                onClick={() => handlePaste()}
+                className="w-full px-4 py-2 text-left text-sm hover:bg-spore-accent/50 flex items-center gap-2 transition-colors"
+              >
+                <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                </svg>
+                粘贴到当前目录
+              </button>
+            )}
             <button
               onClick={() => { setNewItemType('file'); setContextMenu(null); }}
               className="w-full px-4 py-2 text-left text-sm hover:bg-spore-accent/50 flex items-center gap-2 transition-colors"
@@ -396,3 +567,4 @@ export const FileManager: React.FC = () => {
     </div>
   );
 };
+

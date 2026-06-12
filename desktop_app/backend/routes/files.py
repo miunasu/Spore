@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 import sys
 import shutil
+import subprocess
 
 router = APIRouter()
 
@@ -68,11 +69,37 @@ class RenameRequest(BaseModel):
     new_path: str
 
 
+class CopyRequest(BaseModel):
+    """复制请求"""
+    source_path: str
+    target_path: str
+
+
+class MoveRequest(BaseModel):
+    """移动请求"""
+    source_path: str
+    target_path: str
+
+
+class OpenLocationRequest(BaseModel):
+    """打开所在位置请求"""
+    path: str
+
+
 class CreateRequest(BaseModel):
     """创建文件/文件夹请求"""
     path: str
     type: str  # "file" or "folder"
     content: Optional[str] = ""
+
+
+def get_relative_path(path: Path) -> str:
+    """获取用于前端展示的安全相对路径"""
+    actual_path = path.resolve()
+    try:
+        return str(actual_path.relative_to(Path.cwd().resolve())).replace("\\", "/")
+    except ValueError:
+        return str(actual_path.relative_to(get_resource_base_dir().resolve())).replace("\\", "/")
 
 
 def validate_path(path: str) -> Path:
@@ -279,6 +306,93 @@ def rename_path(req: RenameRequest):
             "old_path": str(old_path.relative_to(Path.cwd())),
             "new_path": str(new_path.relative_to(Path.cwd()))
         }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/copy")
+def copy_path(req: CopyRequest):
+    """复制文件或目录"""
+    try:
+        source_path = validate_path(req.source_path)
+        target_path = validate_path(req.target_path)
+        
+        if not source_path.exists():
+            raise HTTPException(status_code=404, detail="源路径不存在")
+        
+        if target_path.exists():
+            raise HTTPException(status_code=400, detail="目标路径已存在")
+        
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        if source_path.is_dir():
+            shutil.copytree(source_path, target_path)
+        else:
+            shutil.copy2(source_path, target_path)
+        
+        return {
+            "success": True,
+            "source_path": get_relative_path(source_path),
+            "target_path": get_relative_path(target_path)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/move")
+def move_path(req: MoveRequest):
+    """移动文件或目录"""
+    try:
+        source_path = validate_path(req.source_path)
+        target_path = validate_path(req.target_path)
+        
+        if not source_path.exists():
+            raise HTTPException(status_code=404, detail="源路径不存在")
+        
+        if target_path.exists():
+            raise HTTPException(status_code=400, detail="目标路径已存在")
+        
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source_path), str(target_path))
+        
+        return {
+            "success": True,
+            "source_path": get_relative_path(source_path),
+            "target_path": get_relative_path(target_path)
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/open-location")
+def open_location(req: OpenLocationRequest):
+    """在系统文件管理器中打开目标所在位置"""
+    try:
+        target_path = validate_path(req.path)
+        
+        if not target_path.exists():
+            raise HTTPException(status_code=404, detail="路径不存在")
+        
+        if sys.platform == "win32":
+            if target_path.is_file():
+                subprocess.Popen(["explorer", "/select,", str(target_path)])
+            else:
+                subprocess.Popen(["explorer", str(target_path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(target_path.parent if target_path.is_file() else target_path)])
+        else:
+            subprocess.Popen(["xdg-open", str(target_path.parent if target_path.is_file() else target_path)])
+        
+        return {"success": True, "path": get_relative_path(target_path)}
     
     except HTTPException:
         raise

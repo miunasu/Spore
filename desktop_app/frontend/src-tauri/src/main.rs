@@ -34,6 +34,547 @@ static JOB_HANDLE: Mutex<Option<SafeHandle>> = Mutex::new(None);
 
 static BACKEND_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
+#[derive(serde::Serialize)]
+struct FileClipboardPayload {
+    paths: Vec<String>,
+    operation: String,
+}
+
+struct AppState {
+    spore_root: PathBuf,
+}
+
+const ALLOWED_FILE_ROOTS: [&str; 5] = ["output", "skills", "prompt", "history", "characters"];
+const ALLOWED_ROOT_FILES: [&str; 2] = ["note.txt", ".env"];
+
+fn normalize_spore_relative_path(path: &str) -> Result<PathBuf, String> {
+    let normalized = path.replace('\\', "/");
+    let trimmed = normalized.trim_matches('/');
+
+    if trimmed.is_empty() || trimmed == "." {
+        return Err("路径不能为空".to_string());
+    }
+
+    if trimmed.contains('\0') {
+        return Err("路径包含非法字符".to_string());
+    }
+
+    let relative = PathBuf::from(trimmed);
+    if relative.is_absolute() {
+        return Err("右栏路径不能是绝对路径".to_string());
+    }
+
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(_) => {}
+            _ => return Err(format!("路径超出允许范围: {}", path)),
+        }
+    }
+
+    if ALLOWED_ROOT_FILES.contains(&trimmed) {
+        return Ok(relative);
+    }
+
+    let root = trimmed.split('/').next().unwrap_or("");
+    if ALLOWED_FILE_ROOTS.contains(&root) {
+        Ok(relative)
+    } else {
+        Err(format!("不允许访问目录: {}", root))
+    }
+}
+
+fn resolve_spore_path(path: &str, spore_root: &PathBuf) -> Result<PathBuf, String> {
+    normalize_spore_relative_path(path).map(|relative| spore_root.join(relative))
+}
+
+fn resolve_clipboard_path(path: &str, spore_root: &PathBuf) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(path);
+    if candidate.is_absolute() {
+        Ok(candidate)
+    } else {
+        resolve_spore_path(path, spore_root)
+    }
+}
+
+fn unique_target_path(target_dir: &std::path::Path, source: &std::path::Path) -> Result<PathBuf, String> {
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| format!("无法获取文件名: {}", source.display()))?;
+
+    let first_candidate = target_dir.join(file_name);
+    if !first_candidate.exists() {
+        return Ok(first_candidate);
+    }
+
+    let name = file_name.to_string_lossy();
+    let is_file = source.is_file();
+    let (base_name, extension) = if is_file {
+        match name.rfind('.') {
+            Some(index) if index > 0 => (&name[..index], &name[index..]),
+            _ => (name.as_ref(), ""),
+        }
+    } else {
+        (name.as_ref(), "")
+    };
+
+    for index in 1..1000 {
+        let suffix = if index == 1 {
+            " - Copy".to_string()
+        } else {
+            format!(" - Copy {}", index)
+        };
+        let candidate = target_dir.join(format!("{}{}{}", base_name, suffix, extension));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+
+    Ok(target_dir.join(format!("{} - Copy {}{}", base_name, timestamp, extension)))
+}
+
+fn copy_path_recursively(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    if source.is_dir() {
+        fs::create_dir_all(target)
+            .map_err(|error| format!("创建目录失败 {}: {}", target.display(), error))?;
+
+        for entry in fs::read_dir(source)
+            .map_err(|error| format!("读取目录失败 {}: {}", source.display(), error))?
+        {
+            let entry = entry.map_err(|error| format!("读取目录项失败: {}", error))?;
+            let child_source = entry.path();
+            let child_target = target.join(entry.file_name());
+            copy_path_recursively(&child_source, &child_target)?;
+        }
+    } else {
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("创建父目录失败 {}: {}", parent.display(), error))?;
+        }
+
+        fs::copy(source, target)
+            .map_err(|error| format!("复制文件失败 {} -> {}: {}", source.display(), target.display(), error))?;
+    }
+
+    Ok(())
+}
+
+fn move_path(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("创建父目录失败 {}: {}", parent.display(), error))?;
+    }
+
+    match fs::rename(source, target) {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            copy_path_recursively(source, target)?;
+            if source.is_dir() {
+                fs::remove_dir_all(source)
+                    .map_err(|error| format!("删除源目录失败 {}: {}", source.display(), error))?;
+            } else {
+                fs::remove_file(source)
+                    .map_err(|error| format!("删除源文件失败 {}: {}", source.display(), error))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn paste_paths_to_directory(payload: FileClipboardPayload, target_dir: PathBuf) -> Result<Vec<String>, String> {
+    if target_dir.exists() && !target_dir.is_dir() {
+        return Err(format!("目标路径不是目录: {}", target_dir.display()));
+    }
+
+    fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("创建目标目录失败 {}: {}", target_dir.display(), error))?;
+
+    let canonical_target_dir = target_dir
+        .canonicalize()
+        .map_err(|error| format!("解析目标目录失败 {}: {}", target_dir.display(), error))?;
+
+    let is_cut = payload.operation == "cut";
+    let mut pasted_paths = Vec::new();
+
+    for path in payload.paths {
+        let source = PathBuf::from(&path);
+        if !source.exists() {
+            return Err(format!("源路径不存在: {}", source.display()));
+        }
+
+        let canonical_source = source
+            .canonicalize()
+            .map_err(|error| format!("解析源路径失败 {}: {}", source.display(), error))?;
+        let target = unique_target_path(&canonical_target_dir, &canonical_source)?;
+
+        if canonical_source.is_dir() && target.starts_with(&canonical_source) {
+            return Err("不能将文件夹粘贴到自身或其子目录".to_string());
+        }
+
+        if is_cut {
+            move_path(&canonical_source, &target)?;
+        } else {
+            copy_path_recursively(&canonical_source, &target)?;
+        }
+
+        pasted_paths.push(target.to_string_lossy().to_string());
+    }
+
+    if is_cut {
+        let _ = clear_system_file_clipboard();
+    }
+
+    Ok(pasted_paths)
+}
+
+#[tauri::command]
+fn set_file_clipboard(
+    paths: Vec<String>,
+    operation: String,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
+    let mut resolved_paths = Vec::new();
+
+    for path in paths {
+        let resolved = resolve_clipboard_path(&path, &state.spore_root)?;
+        if !resolved.exists() {
+            return Err(format!("路径不存在: {}", resolved.display()));
+        }
+        resolved_paths.push(resolved);
+    }
+
+    set_system_file_clipboard(resolved_paths, &operation)
+}
+
+#[tauri::command]
+fn get_file_clipboard() -> Result<Option<FileClipboardPayload>, String> {
+    get_system_file_clipboard()
+}
+
+#[tauri::command]
+fn paste_file_clipboard(
+    target_directory: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<String>, String> {
+    let payload = get_system_file_clipboard()?.ok_or_else(|| "系统剪贴板中没有文件".to_string())?;
+    let target_dir = resolve_spore_path(&target_directory, &state.spore_root)?;
+    paste_paths_to_directory(payload, target_dir)
+}
+
+#[cfg(target_os = "windows")]
+const CF_HDROP: u32 = 15;
+#[cfg(target_os = "windows")]
+const GMEM_MOVEABLE: u32 = 0x0002;
+#[cfg(target_os = "windows")]
+const GMEM_ZEROINIT: u32 = 0x0040;
+#[cfg(target_os = "windows")]
+const DROPEFFECT_COPY: u32 = 1;
+#[cfg(target_os = "windows")]
+const DROPEFFECT_MOVE: u32 = 2;
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct DropFiles {
+    p_files: u32,
+    pt_x: i32,
+    pt_y: i32,
+    f_nc: i32,
+    f_wide: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+extern "system" {
+    fn OpenClipboard(h_wnd_new_owner: HANDLE) -> i32;
+    fn EmptyClipboard() -> i32;
+    fn CloseClipboard() -> i32;
+    fn SetClipboardData(u_format: u32, h_mem: HANDLE) -> HANDLE;
+    fn GetClipboardData(u_format: u32) -> HANDLE;
+    fn IsClipboardFormatAvailable(format: u32) -> i32;
+    fn RegisterClipboardFormatW(lpsz_format: *const u16) -> u32;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+extern "system" {
+    fn GlobalAlloc(u_flags: u32, dw_bytes: usize) -> HANDLE;
+    fn GlobalFree(h_mem: HANDLE) -> HANDLE;
+    fn GlobalLock(h_mem: HANDLE) -> *mut std::ffi::c_void;
+    fn GlobalUnlock(h_mem: HANDLE) -> i32;
+    fn GlobalSize(h_mem: HANDLE) -> usize;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "shell32")]
+extern "system" {
+    fn DragQueryFileW(h_drop: HANDLE, i_file: u32, lpsz_file: *mut u16, cch: u32) -> u32;
+}
+
+#[cfg(target_os = "windows")]
+struct ClipboardGuard;
+
+#[cfg(target_os = "windows")]
+impl Drop for ClipboardGuard {
+    fn drop(&mut self) {
+        unsafe {
+            CloseClipboard();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_clipboard_guard() -> Result<ClipboardGuard, String> {
+    unsafe {
+        if OpenClipboard(null_mut()) == 0 {
+            Err("无法打开系统剪贴板".to_string())
+        } else {
+            Ok(ClipboardGuard)
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn preferred_drop_effect_format() -> Result<u32, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let format_name: Vec<u16> = std::ffi::OsStr::new("Preferred DropEffect")
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let format = unsafe { RegisterClipboardFormatW(format_name.as_ptr()) };
+    if format == 0 {
+        Err("注册 Preferred DropEffect 剪贴板格式失败".to_string())
+    } else {
+        Ok(format)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn create_hdrop_data(paths: &[PathBuf]) -> Result<HANDLE, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut wide_paths: Vec<u16> = Vec::new();
+    for path in paths {
+        wide_paths.extend(path.as_os_str().encode_wide());
+        wide_paths.push(0);
+    }
+    wide_paths.push(0);
+
+    let header_size = std::mem::size_of::<DropFiles>();
+    let total_size = header_size + wide_paths.len() * std::mem::size_of::<u16>();
+
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size);
+        if handle.is_null() {
+            return Err("分配剪贴板内存失败".to_string());
+        }
+
+        let locked = GlobalLock(handle) as *mut u8;
+        if locked.is_null() {
+            GlobalFree(handle);
+            return Err("锁定剪贴板内存失败".to_string());
+        }
+
+        let drop_files = DropFiles {
+            p_files: header_size as u32,
+            pt_x: 0,
+            pt_y: 0,
+            f_nc: 0,
+            f_wide: 1,
+        };
+
+        std::ptr::write(locked as *mut DropFiles, drop_files);
+        std::ptr::copy_nonoverlapping(
+            wide_paths.as_ptr() as *const u8,
+            locked.add(header_size),
+            wide_paths.len() * std::mem::size_of::<u16>(),
+        );
+
+        GlobalUnlock(handle);
+        Ok(handle)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn create_drop_effect_data(effect: u32) -> Result<HANDLE, String> {
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, std::mem::size_of::<u32>());
+        if handle.is_null() {
+            return Err("分配 DropEffect 内存失败".to_string());
+        }
+
+        let locked = GlobalLock(handle) as *mut u32;
+        if locked.is_null() {
+            GlobalFree(handle);
+            return Err("锁定 DropEffect 内存失败".to_string());
+        }
+
+        std::ptr::write(locked, effect);
+        GlobalUnlock(handle);
+        Ok(handle)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_system_file_clipboard(paths: Vec<PathBuf>, operation: &str) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("没有可写入剪贴板的文件".to_string());
+    }
+
+    let effect = if operation == "cut" {
+        DROPEFFECT_MOVE
+    } else {
+        DROPEFFECT_COPY
+    };
+
+    let hdrop = create_hdrop_data(&paths)?;
+    let drop_effect = create_drop_effect_data(effect)?;
+    let drop_effect_format = preferred_drop_effect_format()?;
+    let _guard = open_clipboard_guard()?;
+
+    unsafe {
+        if EmptyClipboard() == 0 {
+            GlobalFree(hdrop);
+            GlobalFree(drop_effect);
+            return Err("清空系统剪贴板失败".to_string());
+        }
+
+        if SetClipboardData(CF_HDROP, hdrop).is_null() {
+            GlobalFree(hdrop);
+            GlobalFree(drop_effect);
+            return Err("写入 CF_HDROP 失败".to_string());
+        }
+
+        if SetClipboardData(drop_effect_format, drop_effect).is_null() {
+            GlobalFree(drop_effect);
+            return Err("写入 Preferred DropEffect 失败".to_string());
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn clear_system_file_clipboard() -> Result<(), String> {
+    let _guard = open_clipboard_guard()?;
+
+    unsafe {
+        if EmptyClipboard() == 0 {
+            Err("清空系统剪贴板失败".to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn read_drop_effect() -> Result<String, String> {
+    let format = preferred_drop_effect_format()?;
+
+    unsafe {
+        if IsClipboardFormatAvailable(format) == 0 {
+            return Ok("copy".to_string());
+        }
+
+        let handle = GetClipboardData(format);
+        if handle.is_null() {
+            return Ok("copy".to_string());
+        }
+
+        if GlobalSize(handle) < std::mem::size_of::<u32>() {
+            return Ok("copy".to_string());
+        }
+
+        let locked = GlobalLock(handle) as *const u32;
+        if locked.is_null() {
+            return Ok("copy".to_string());
+        }
+
+        let effect = std::ptr::read(locked);
+        GlobalUnlock(handle);
+
+        if effect & DROPEFFECT_MOVE != 0 {
+            Ok("cut".to_string())
+        } else {
+            Ok("copy".to_string())
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_system_file_clipboard() -> Result<Option<FileClipboardPayload>, String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    unsafe {
+        if IsClipboardFormatAvailable(CF_HDROP) == 0 {
+            return Ok(None);
+        }
+    }
+
+    let _guard = open_clipboard_guard()?;
+
+    unsafe {
+        let handle = GetClipboardData(CF_HDROP);
+        if handle.is_null() {
+            return Ok(None);
+        }
+
+        let count = DragQueryFileW(handle, u32::MAX, std::ptr::null_mut(), 0);
+        if count == 0 {
+            return Ok(None);
+        }
+
+        let mut paths = Vec::new();
+        for index in 0..count {
+            let len = DragQueryFileW(handle, index, std::ptr::null_mut(), 0);
+            if len == 0 {
+                continue;
+            }
+
+            let mut buffer = vec![0u16; len as usize + 1];
+            let written = DragQueryFileW(handle, index, buffer.as_mut_ptr(), buffer.len() as u32);
+            if written == 0 {
+                continue;
+            }
+
+            let path = OsString::from_wide(&buffer[..written as usize])
+                .to_string_lossy()
+                .to_string();
+            paths.push(path);
+        }
+
+        if paths.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(FileClipboardPayload {
+            paths,
+            operation: read_drop_effect()?,
+        }))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_system_file_clipboard(_paths: Vec<PathBuf>, _operation: &str) -> Result<(), String> {
+    Err("文件剪贴板互通当前仅支持 Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn clear_system_file_clipboard() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_system_file_clipboard() -> Result<Option<FileClipboardPayload>, String> {
+    Ok(None)
+}
+
 /// 创建 Windows Job Object，确保所有子进程跟随父进程退出
 #[cfg(target_os = "windows")]
 fn setup_job_object() -> Option<HANDLE> {
@@ -451,6 +992,14 @@ fn main() {
     ensure_writable_dirs(&spore_root);
     
     tauri::Builder::default()
+        .manage(AppState {
+            spore_root: spore_root.clone(),
+        })
+        .invoke_handler(tauri::generate_handler![
+            set_file_clipboard,
+            get_file_clipboard,
+            paste_file_clipboard
+        ])
         .setup(move |app| {
             // 启动后端
             if let Some(child) = start_backend(&spore_root) {

@@ -36,6 +36,8 @@ export const ChatPanel: React.FC = () => {
     renameConversation,
     fetchHistoryFiles,
     loadHistoryFile,
+    renameHistoryFile,
+    deleteHistoryFile,
   } = useChatStore();
 
   const { setActiveConversation } = useLogStore();
@@ -53,6 +55,8 @@ export const ChatPanel: React.FC = () => {
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [showHistoryMenu, setShowHistoryMenu] = useState(false);
+  const [editingHistoryFile, setEditingHistoryFile] = useState<string | null>(null);
+  const [editingHistoryName, setEditingHistoryName] = useState('');
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -295,6 +299,24 @@ export const ChatPanel: React.FC = () => {
     setEditingTabId(null);
   };
 
+  const handleHistoryRenameSubmit = async () => {
+    if (!editingHistoryFile || !editingHistoryName.trim()) {
+      setEditingHistoryFile(null);
+      setEditingHistoryName('');
+      return;
+    }
+
+    await renameHistoryFile(editingHistoryFile, editingHistoryName.trim());
+    setEditingHistoryFile(null);
+    setEditingHistoryName('');
+  };
+
+  const handleHistoryDelete = async (filename: string) => {
+    if (confirm(`确定删除历史记忆文件 ${filename}？`)) {
+      await deleteHistoryFile(filename);
+    }
+  };
+
   // 拖拽处理
   const handleDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
@@ -373,21 +395,69 @@ export const ChatPanel: React.FC = () => {
         </div>
       ) : (
         historyFiles.map((file) => (
-          <button
+          <div
             key={file.name}
-            onClick={() => {
-              loadHistoryFile(file.name);
-              setShowHistoryMenu(false);
-            }}
-            className="w-full flex flex-col items-start px-3 py-2 text-sm text-spore-text hover:bg-spore-accent/30 transition-colors"
+            className="group flex items-center gap-2 px-3 py-2 text-sm text-spore-text hover:bg-spore-accent/30 transition-colors"
           >
-            <span className="truncate w-full text-left">
-              {file.name.replace('.mem', '')}
-            </span>
-            <span className="text-xs text-spore-muted">
-              {new Date(file.modified * 1000).toLocaleString('zh-CN')}
-            </span>
-          </button>
+            {editingHistoryFile === file.name ? (
+              <input
+                type="text"
+                value={editingHistoryName}
+                onChange={(e) => setEditingHistoryName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleHistoryRenameSubmit();
+                  if (e.key === 'Escape') {
+                    setEditingHistoryFile(null);
+                    setEditingHistoryName('');
+                  }
+                }}
+                onBlur={handleHistoryRenameSubmit}
+                onClick={(e) => e.stopPropagation()}
+                className="flex-1 min-w-0 bg-spore-bg border border-spore-highlight/50 rounded px-2 py-1 text-xs outline-none"
+                autoFocus
+              />
+            ) : (
+              <button
+                onClick={() => {
+                  loadHistoryFile(file.name);
+                  setShowHistoryMenu(false);
+                }}
+                className="flex-1 min-w-0 flex flex-col items-start text-left"
+              >
+                <span className="truncate w-full">
+                  {file.name.replace('.mem', '')}
+                </span>
+                <span className="text-xs text-spore-muted">
+                  {new Date(file.modified * 1000).toLocaleString('zh-CN')}
+                </span>
+              </button>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditingHistoryFile(file.name);
+                setEditingHistoryName(file.name);
+              }}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-spore-accent/50 transition-opacity"
+              title="重命名历史文件"
+            >
+              <svg className="w-3.5 h-3.5 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleHistoryDelete(file.name);
+              }}
+              className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-spore-error/20 transition-opacity"
+              title="删除历史文件"
+            >
+              <svg className="w-3.5 h-3.5 text-spore-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
+          </div>
         ))
       )}
     </div>

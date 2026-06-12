@@ -162,6 +162,8 @@ interface ChatStore {
   loadHistory: () => Promise<void>;
   loadHistoryFile: (filename: string) => Promise<void>;
   fetchHistoryFiles: () => Promise<void>;
+  renameHistoryFile: (oldName: string, newName: string) => Promise<void>;
+  deleteHistoryFile: (filename: string) => Promise<void>;
   saveConversation: () => Promise<void>;
 }
 
@@ -653,6 +655,26 @@ export const useChatStore = create<ChatStore>((set, get) => {
         set({ historyFiles: response.files });
       } catch (error) {
         frontendLog(`[错误] 获取历史文件列表失败: ${error}`);
+      }
+    },
+
+    renameHistoryFile: async (oldName, newName) => {
+      try {
+        await commandsApi.renameHistory(oldName, newName);
+        await get().fetchHistoryFiles();
+        frontendLog(`[历史] 已重命名: ${oldName} -> ${newName}`);
+      } catch (error) {
+        frontendLog(`[错误] 重命名历史文件失败: ${error}`);
+      }
+    },
+
+    deleteHistoryFile: async (filename) => {
+      try {
+        await commandsApi.deleteHistory(filename);
+        await get().fetchHistoryFiles();
+        frontendLog(`[历史] 已删除: ${filename}`);
+      } catch (error) {
+        frontendLog(`[错误] 删除历史文件失败: ${error}`);
       }
     },
 

@@ -196,6 +196,20 @@ export const createCommandsApi = (port: number) => ({
       files: Array<{ name: string; size: number; modified: number }>;
     }>(port, '/api/commands/history/list'),
 
+  renameHistory: (oldName: string, newName: string) =>
+    requestToPort<{ success: boolean; old_name: string; new_name: string }>(
+      port,
+      '/api/commands/history/rename',
+      { method: 'POST', body: JSON.stringify({ old_name: oldName, new_name: newName }) }
+    ),
+
+  deleteHistory: (filename: string) =>
+    requestToPort<{ success: boolean; filename: string }>(
+      port,
+      '/api/commands/history/delete',
+      { method: 'POST', body: JSON.stringify({ filename }) }
+    ),
+
   clearLogs: () =>
     requestToPort<{
       success: boolean;
@@ -282,6 +296,30 @@ export const filesApi = {
         method: 'POST',
         body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
       }
+    ),
+
+  copy: (sourcePath: string, targetPath: string) =>
+    request<{ success: boolean; source_path: string; target_path: string }>(
+      '/api/files/copy',
+      {
+        method: 'POST',
+        body: JSON.stringify({ source_path: sourcePath, target_path: targetPath }),
+      }
+    ),
+
+  move: (sourcePath: string, targetPath: string) =>
+    request<{ success: boolean; source_path: string; target_path: string }>(
+      '/api/files/move',
+      {
+        method: 'POST',
+        body: JSON.stringify({ source_path: sourcePath, target_path: targetPath }),
+      }
+    ),
+
+  openLocation: (path: string) =>
+    request<{ success: boolean; path: string }>(
+      '/api/files/open-location',
+      { method: 'POST', body: JSON.stringify({ path }) }
     ),
 
   create: (path: string, type: 'file' | 'folder', content = '') =>

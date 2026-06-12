@@ -4,6 +4,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import re
+from pathlib import Path
 
 from ..core import get_session_manager
 
@@ -12,6 +14,15 @@ router = APIRouter()
 
 class LoadRequest(BaseModel):
     """加载对话请求"""
+    filename: str
+
+
+class RenameHistoryRequest(BaseModel):
+    old_name: str
+    new_name: str
+
+
+class DeleteHistoryRequest(BaseModel):
     filename: str
 
 
@@ -238,6 +249,84 @@ def trigger_character():
         return {"success": True, "message": "角色选择已触发"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+def _resolve_history_file(filename: str) -> Path:
+    history_dir = Path("history").resolve()
+    normalized = filename.replace("\\", "/").strip("/")
+
+    if not normalized or normalized.startswith("../") or "/../" in normalized:
+        raise HTTPException(status_code=400, detail="Invalid history file path")
+
+    target = (history_dir / normalized).resolve()
+    try:
+        target.relative_to(history_dir)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="History file path is outside allowed scope")
+
+    if target.suffix != ".mem":
+        raise HTTPException(status_code=400, detail="Only .mem history files are allowed")
+
+    return target
+
+
+def _build_history_target_path(old_name: str, new_name: str) -> Path:
+    source = _resolve_history_file(old_name)
+    history_dir = Path("history").resolve()
+    raw_new_name = new_name.replace("\\", "/").strip()
+
+    if not raw_new_name:
+        raise HTTPException(status_code=400, detail="New filename is empty")
+
+    if "/" in raw_new_name:
+        target_rel = raw_new_name.strip("/")
+    else:
+        parent_rel = source.parent.relative_to(history_dir)
+        target_rel = str(parent_rel / raw_new_name) if str(parent_rel) != "." else raw_new_name
+
+    if not target_rel.endswith(".mem"):
+        target_rel += ".mem"
+
+    invalid_chars = set('<>:"|?*')
+    if any(char in invalid_chars or ord(char) < 32 for char in Path(target_rel).name):
+        raise HTTPException(status_code=400, detail="New filename contains invalid characters")
+
+    return _resolve_history_file(target_rel)
+
+
+
+@router.post("/history/rename")
+def rename_history_file(req: RenameHistoryRequest) -> Dict[str, Any]:
+    source = _resolve_history_file(req.old_name)
+    target = _build_history_target_path(req.old_name, req.new_name)
+
+    if not source.exists() or not source.is_file():
+        raise HTTPException(status_code=404, detail=f"History file does not exist: {req.old_name}")
+
+    if target.exists():
+        raise HTTPException(status_code=400, detail="Target history file already exists")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+
+    history_dir = Path("history").resolve()
+    return {
+        "success": True,
+        "old_name": str(source.relative_to(history_dir)).replace("\\", "/"),
+        "new_name": str(target.relative_to(history_dir)).replace("\\", "/")
+    }
+
+
+@router.post("/history/delete")
+def delete_history_file(req: DeleteHistoryRequest) -> Dict[str, Any]:
+    target = _resolve_history_file(req.filename)
+
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"History file does not exist: {req.filename}")
+
+    target.unlink()
+    return {"success": True, "filename": req.filename}
 
 
 @router.get("/history/list")

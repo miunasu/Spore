@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 import time
-import tempfile
+
 from typing import Optional, Dict, Any, List, Union
 from .encoding import smart_decode
 
@@ -13,7 +13,6 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
 
     参数:
         command: 字符串（经 PowerShell 解析）或 参数列表（直接执行）。
-                支持 PowerShell here-string 语法：@'...'@ | command
         timeout: 超时时间（秒），None 使用配置默认值。
         encoding: 输出编码，None 时智能检测（Windows优先GBK，Linux/Mac优先UTF-8）。
         working_dir: 工作目录（可选），指定命令执行的目录。
@@ -34,48 +33,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         - returncode 保持原始值，LLM可据此判断命令实际是否失败
         - error_detected 仅在 returncode=0 但输出中检测到错误时为True
         - LLM应综合 returncode、error_detected、stderr、stdout 判断执行结果
-        - 支持 here-string 语法：检测到 @'...'@ | 模式时自动创建临时脚本处理
     """
-    # 检测 here-string 语法并特殊处理
-    # 格式: @'...'@ | command 或 @"..."@ | command
-    if isinstance(command, str):
-        here_string_match = re.match(r"^@(['\"])(.*?)\1@\s*\|\s*(.+)$", command, re.DOTALL)
-        if here_string_match:
-            quote_type = here_string_match.group(1)
-            here_content = here_string_match.group(2)
-            target_command = here_string_match.group(3)
-            
-            # 创建临时文件保存 here-string 内容
-            import tempfile
-            try:
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-                    f.write(here_content)
-                    temp_file = f.name
-                
-                # 修改命令：使用 Get-Content 读取文件并管道传递
-                # 使用 -Raw 参数保持原始格式（包括换行）
-                modified_command = f"Get-Content -Path '{temp_file}' -Raw | {target_command}"
-                
-                # 递归调用执行修改后的命令
-                result = execute_command(modified_command, timeout=timeout, encoding=encoding, working_dir=working_dir)
-                
-                # 清理临时文件
-                try:
-                    os.unlink(temp_file)
-                except:
-                    pass
-                
-                return result
-            except Exception as e:
-                return {
-                    "ok": False,
-                    "returncode": -1,
-                    "stdout": "",
-                    "stderr": f"Here-string 处理失败: {e}",
-                    "duration_sec": 0,
-                    "shell_used": True,
-                }
-    
     # 命令安全检查：拦截危险的删除命令
     cmd_str = command if isinstance(command, str) else ' '.join(command)
     cmd_lower = cmd_str.strip().lower()
@@ -172,7 +130,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     
     # 设置环境变量
     env = os.environ.copy()
-    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONIOENCODING'] = prefer_encoding
     
     # Windows 创建标志：防止终端闪屏
     creation_flags = 0
@@ -182,7 +140,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         creation_flags = 0x08000000 | subprocess.CREATE_NEW_PROCESS_GROUP
     
     # Windows 系统：构建 PowerShell 命令
-    # 使用 -EncodedCommand 传递命令（Base64编码），避免引号转义问题
+    # 使用 -EncodedCommand 避免引号/转义被 PowerShell 解析
     ps_args = None
     if os.name == "nt" and shell_used:
         # 查找 PowerShell 路径
@@ -193,9 +151,8 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
             ps_exe = shutil.which('powershell')  # 回退到 PowerShell 5.x
         
         if ps_exe:
-            # 前置编码设置：确保管道传中文给外部进程时使用UTF-8
-            full_command = f"$OutputEncoding = [System.Text.Encoding]::UTF8; $env:PYTHONIOENCODING='utf-8'; {command}"
-            # 将命令编码为 UTF-16LE 再 Base64，PowerShell -EncodedCommand 要求此格式
+            # 自动设置编码：$OutputEncoding 确保管道传中文，PYTHONIOENCODING 确保 Python stdout 输出 UTF-8
+            full_command = '$env:PYTHONIOENCODING="utf-8"; $OutputEncoding = [System.Text.Encoding]::UTF8; ' + command
             encoded = base64.b64encode(full_command.encode('utf-16-le')).decode('ascii')
             ps_args = [ps_exe, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
             shell_used = False  # 改为 False，因为我们直接调用可执行文件

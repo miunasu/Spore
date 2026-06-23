@@ -88,11 +88,11 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": "在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。多行Python代码推荐用 here-string 管道方式：@'\\n代码\\n'@ | python -",
+            "description": "在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。\n\n【多行PowerShell】使用@SPORE:CONTENT格式传参，直接写多行PS代码。示例：\ncommand=@SPORE:CONTENT\nNew-Item -Path C:/temp -ItemType Directory\nGet-ChildItem C:/temp\n@SPORE:CONTENT_END\n\n【多行Python】使用@SPORE:CONTENT格式传参，内容为PowerShell here-string管道给python。示例：\ncommand=@SPORE:CONTENT\n@'\nimport os\nprint(os.getcwd())\n'@ | python -\n@SPORE:CONTENT_END",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "PowerShell命令字符串（通过-EncodedCommand传递，引号安全）。包含单引号的命令需用@SPORE:CONTENT格式传参；多行Python用 @'...'@ | python - 从stdin执行"},
+                    "command": {"type": "string", "description": "PowerShell命令字符串（通过-EncodedCommand传递，引号安全）。单行直接写command=xxx；多行使用@SPORE:CONTENT格式传参。多行Python固定格式：@'(换行)python代码(换行)'@ | python -"},
                     "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
                     "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },

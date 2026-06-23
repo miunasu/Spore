@@ -58,9 +58,10 @@ def main() -> int:
     time.sleep(0.5)
     
     # 设置 AutoAgent 的 IPC 管理器
-    from AutoAgent import supervisor, mode_selector
-    supervisor.set_ipc_manager(ipc_manager)
-    mode_selector.set_ipc_manager(ipc_manager)
+    from AutoAgent.supervisor import set_ipc_manager as _supervisor_set_ipc
+    from AutoAgent.mode_selector import set_ipc_manager as _mode_selector_set_ipc
+    _supervisor_set_ipc(ipc_manager)
+    _mode_selector_set_ipc(ipc_manager)
     
     # 初始化状态管理器
     state = ConversationState()

@@ -20,12 +20,17 @@ def _get_resource_dir() -> str:
     获取资源目录路径
     
     PyInstaller 打包环境下，资源文件在 SPORE_RESOURCE_DIR 环境变量指定的目录
+    或使用 cwd（exe 所在目录）
     开发环境下，资源文件在项目根目录
     """
     # 优先使用环境变量
     resource_dir = os.environ.get('SPORE_RESOURCE_DIR')
     if resource_dir and os.path.exists(resource_dir):
         return resource_dir
+    
+    # 打包环境：使用当前工作目录（exe 所在目录）
+    if getattr(sys, 'frozen', False):
+        return os.getcwd()
     
     # 开发环境：从 __file__ 推断项目根目录
     base_dir = os.path.dirname(os.path.abspath(__file__))

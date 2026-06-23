@@ -388,8 +388,14 @@ def get_config() -> Config:
 
 # 向后兼容接口已移除，请直接使用 get_config() 获取配置
 
-# 获取项目根目录（config.py 在 base/ 目录下，所以向上一级）
-_PROJECT_ROOT = Path(__file__).parent.parent
+# 获取项目根目录
+import sys as _sys
+if getattr(_sys, 'frozen', False):
+    # 打包环境：使用 cwd（exe 所在目录）
+    _PROJECT_ROOT = Path.cwd()
+else:
+    # 开发环境：config.py 在 base/ 目录下，向上一级
+    _PROJECT_ROOT = Path(__file__).parent.parent
 # 预加载项目根目录下的 .env 文件
 _ENV_PATH = _PROJECT_ROOT / '.env'
 load_dotenv(dotenv_path=_ENV_PATH, override=False)

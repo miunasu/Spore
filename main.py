@@ -46,7 +46,7 @@ def main() -> int:
     config = get_config()
     try:
         config.validate()
-        print(f"[系统] 配置加载成功: SDK={config.llm_sdk}, 模型={config.get_model()}, 温度={config.temperature_main}")
+        print(f"[系统] 配置加载成功: SDK={config.llm_sdk}, 模型={config.get_model()}")
     except RuntimeError as e:
         print(f"[错误] {e}")
         log_error("CONFIG_ERROR", "Configuration validation failed", e)

@@ -153,7 +153,6 @@ def get_settings() -> Dict[str, Any]:
             "settings": {
                 "default_character": config.default_character,
                 "context_mode": config.context_mode,
-                "temperature_main": config.temperature_main,
                 "max_output_tokens": config.max_output_tokens,
             }
         }

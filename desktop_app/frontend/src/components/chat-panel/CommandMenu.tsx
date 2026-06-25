@@ -80,33 +80,6 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
     title: 'LLM 参数',
     items: [
       {
-        key: 'TEMPERATURE_MAIN',
-        label: 'Temperature (主对话)',
-        type: 'text',
-        placeholder: '默认: 0.7',
-        description: '0.0-2.0，数值越高越随机',
-      },
-      {
-        key: 'TEMPERATURE_CODER',
-        label: 'Temperature (Coder)',
-        type: 'text',
-        placeholder: '默认: 0.3',
-        description: '代码生成，建议较低',
-      },
-      {
-        key: 'TEMPERATURE_SUPERVISOR',
-        label: 'Temperature (监督)',
-        type: 'text',
-        placeholder: '默认: 0.1',
-        description: '循环检测，建议低温度',
-      },
-      {
-        key: 'TEMPERATURE_CHARACTER_SELECTOR',
-        label: 'Temperature (角色选择)',
-        type: 'text',
-        placeholder: '默认: 0.1',
-      },
-      {
         key: 'MAX_OUTPUT_TOKENS',
         label: '最大输出 Token',
         type: 'text',

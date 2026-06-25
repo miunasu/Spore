@@ -250,12 +250,12 @@ class SubAgentThread(threading.Thread):
             
             request_id = self.ipc_manager.send_chat_request(
                 messages=messages,
-                model=config.get_model(),
-                temperature=config.get_temperature("coder"),
+                model=config.get_sub_agent_model(),
                 system=self.system_prompt,
                 tool_calls=False,  # 文本协议不使用 function calling
                 tools=None,
-                request_id=self.conversation_id
+                request_id=self.conversation_id,
+                use_sub_agent_config=True  # 使用子 agent 独立配置
             )
             
             # 等待响应（使用短超时循环，以便能够检查终止信号）

@@ -57,7 +57,6 @@ def supervisor(last_answer: str, current_answer: str) -> bool:
         request_id = _ipc_manager.send_chat_request(
             messages=messages,
             model=_config.get_model(),
-            temperature=_config.get_temperature("supervisor"),
             system=system_prompt,
             tool_calls=False
         )

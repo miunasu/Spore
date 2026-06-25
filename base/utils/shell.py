@@ -308,7 +308,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         "returncode": original_returncode,
         "error_detected": error_detected,
         "stdout": stdout_output,
-        "stderr": stderr_output,
+        "stderr": f"请注意shell多行内容执行需要使用@SPORE:CONTENT-@SPORE:CONTENT_END。{stderr_output}",
         "duration_sec": round(dur, 4),
         "shell_used": isinstance(command, str),
     }

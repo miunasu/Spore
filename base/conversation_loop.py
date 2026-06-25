@@ -308,7 +308,6 @@ class ConversationLoop:
             request_id = self.ipc_manager.send_chat_request(
                 messages=compress_prompt + history_to_compress,
                 model=self.config.get_model(),
-                temperature=0.3,  # 使用较低温度以获得更稳定的总结
                 system="你是一个专业的对话总结助手，擅长提炼对话的核心内容和关键信息，你不会遗漏任何重要的信息。",
                 tool_calls=False,  # 不需要工具调用
                 tools=None
@@ -420,7 +419,6 @@ class ConversationLoop:
         request_id = self.ipc_manager.send_chat_request(
             messages=self.state.messages,
             model=self.config.get_model(),
-            temperature=self.config.get_temperature("main"),
             system=current_system_prompt,
             tool_calls=False,  # 文本协议不使用 function calling
             tools=None,

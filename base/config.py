@@ -48,6 +48,20 @@ class Config:
         self.anthropic_api_url: Optional[str] = os.getenv("ANTHROPIC_API_URL", "").strip() or None
         self.anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
         
+        # ========== 子 Agent LLM 配置 ==========
+        # 子 Agent 使用的 SDK（留空则继承主 Agent 配置）
+        self.sub_agent_llm_sdk: Optional[str] = os.getenv("SUB_AGENT_LLM_SDK", "").lower().strip() or None
+        
+        # 子 Agent OpenAI 配置（留空则继承主 Agent 配置）
+        self.sub_agent_openai_api_key: Optional[str] = os.getenv("SUB_AGENT_OPENAI_API_KEY", "").strip() or None
+        self.sub_agent_openai_api_url: Optional[str] = os.getenv("SUB_AGENT_OPENAI_API_URL", "").strip() or None
+        self.sub_agent_openai_model: Optional[str] = os.getenv("SUB_AGENT_OPENAI_MODEL", "").strip() or None
+        
+        # 子 Agent Anthropic 配置（留空则继承主 Agent 配置）
+        self.sub_agent_anthropic_api_key: Optional[str] = os.getenv("SUB_AGENT_ANTHROPIC_API_KEY", "").strip() or None
+        self.sub_agent_anthropic_api_url: Optional[str] = os.getenv("SUB_AGENT_ANTHROPIC_API_URL", "").strip() or None
+        self.sub_agent_anthropic_model: Optional[str] = os.getenv("SUB_AGENT_ANTHROPIC_MODEL", "").strip() or None
+        
         # 系统提示文件名（不含路径，位于 prompt 目录下）
         # 可选：prompt.md（默认）、prompt_claude.md（Claude 专用）
         self.system_prompt_file: str = os.getenv("SYSTEM_PROMPT_FILE", "prompt.md")
@@ -57,22 +71,6 @@ class Config:
         self.system_as_user: bool = os.getenv("SYSTEM_AS_USER", "false").lower() == "true"
         
         # ========== LLM 参数配置 ==========
-        # 主对话 temperature
-        try:
-            self.temperature_main: float = float(os.getenv("TEMPERATURE_MAIN", "0.7"))
-        except ValueError:
-            self.temperature_main = 0.7
-        
-        try:
-            self.temperature_coder: float = float(os.getenv("TEMPERATURE_CODER", "0.3"))
-        except ValueError:
-            self.temperature_coder = 0.3
-        
-        try:
-            self.temperature_supervisor: float = float(os.getenv("TEMPERATURE_SUPERVISOR", "0.1"))
-        except ValueError:
-            self.temperature_supervisor = 0.1
-        
         # max_tokens配置（LLM 单次输出的最大 token 数）
         try:
             self.max_output_tokens: int = int(os.getenv("MAX_OUTPUT_TOKENS", "15000"))
@@ -328,22 +326,44 @@ class Config:
             return self.anthropic_model
         return self.openai_model
     
-    def get_temperature(self, mode: str = "main") -> float:
-        """
-        根据模式获取对应的temperature
-        
-        Args:
-            mode: 模式名称，可选值：main, coder, supervisor
-        
-        Returns:
-            float: 对应的temperature值
-        """
-        mode_map = {
-            "main": self.temperature_main,
-            "coder": self.temperature_coder,
-            "supervisor": self.temperature_supervisor,
-        }
-        return mode_map.get(mode, self.temperature_main)
+    def get_sub_agent_sdk(self) -> str:
+        """获取子 Agent 使用的 SDK（若未配置则继承主 Agent）"""
+        return self.sub_agent_llm_sdk or self.llm_sdk
+    
+    def get_sub_agent_openai_api_key(self) -> str:
+        """获取子 Agent OpenAI API Key（若未配置则继承主 Agent）"""
+        return self.sub_agent_openai_api_key or self.openai_api_key
+    
+    def get_sub_agent_openai_api_url(self) -> Optional[str]:
+        """获取子 Agent OpenAI API URL（若未配置则继承主 Agent）"""
+        if self.sub_agent_openai_api_url is not None:
+            return self.sub_agent_openai_api_url
+        return self.openai_api_url
+    
+    def get_sub_agent_openai_model(self) -> str:
+        """获取子 Agent OpenAI 模型（若未配置则继承主 Agent）"""
+        return self.sub_agent_openai_model or self.openai_model
+    
+    def get_sub_agent_anthropic_api_key(self) -> str:
+        """获取子 Agent Anthropic API Key（若未配置则继承主 Agent）"""
+        return self.sub_agent_anthropic_api_key or self.anthropic_api_key
+    
+    def get_sub_agent_anthropic_api_url(self) -> Optional[str]:
+        """获取子 Agent Anthropic API URL（若未配置则继承主 Agent）"""
+        if self.sub_agent_anthropic_api_url is not None:
+            return self.sub_agent_anthropic_api_url
+        return self.anthropic_api_url
+    
+    def get_sub_agent_anthropic_model(self) -> str:
+        """获取子 Agent Anthropic 模型（若未配置则继承主 Agent）"""
+        return self.sub_agent_anthropic_model or self.anthropic_model
+    
+    def get_sub_agent_model(self) -> str:
+        """根据子 Agent SDK 获取对应的模型名称"""
+        sdk = self.get_sub_agent_sdk()
+        if sdk == "anthropic":
+            return self.get_sub_agent_anthropic_model()
+        return self.get_sub_agent_openai_model()
     
     def get_max_tokens(self) -> int:
         """
@@ -362,7 +382,6 @@ class Config:
             f"  llm_sdk={self.llm_sdk},\n"
             f"  model={self.get_model()},\n"
             f"  api_url={api_url},\n"
-            f"  temperature_main={self.temperature_main},\n"
             f"  context_max_tokens={self.context_max_tokens},\n"
             f"  api_timeout={self.api_timeout}s\n"
             f")"

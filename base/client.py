@@ -134,6 +134,46 @@ def load_async_anthropic_client() -> "AsyncAnthropic":
     return AsyncAnthropic(api_key=api_key)
 
 
+def load_sub_agent_openai_client() -> OpenAI:
+    """加载子 Agent 专用的 OpenAI 客户端"""
+    config = get_config()
+    api_key = config.get_sub_agent_openai_api_key()
+    base_url: Optional[str] = config.get_sub_agent_openai_api_url()
+    
+    # 根据配置决定是否清理 headers（OpenAI 不需要清理 auth header）
+    if config.clean_sdk_headers:
+        http_client = httpx.Client(transport=CleanHeadersTransport(clean_auth=False))
+        if base_url:
+            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
+        return OpenAI(api_key=api_key, http_client=http_client)
+    
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key)
+
+
+def load_sub_agent_anthropic_client() -> "Anthropic":
+    """加载子 Agent 专用的 Anthropic 客户端"""
+    if not _anthropic_available:
+        raise RuntimeError("Anthropic SDK 未安装。请运行: pip install anthropic")
+    
+    config = get_config()
+    api_key = config.get_sub_agent_anthropic_api_key()
+    base_url: Optional[str] = config.get_sub_agent_anthropic_api_url()
+    
+    # 根据配置决定是否清理 headers
+    if config.clean_sdk_headers or config.clean_auth_header:
+        transport = CleanHeadersTransport(clean_auth=config.clean_auth_header)
+        http_client = httpx.Client(transport=transport)
+        if base_url:
+            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client)
+        return Anthropic(api_key=api_key, http_client=http_client)
+    
+    if base_url:
+        return Anthropic(api_key=api_key, base_url=base_url)
+    return Anthropic(api_key=api_key)
+
+
 def load_llm_client() -> Union[OpenAI, "Anthropic"]:
     """根据配置加载对应的 LLM 客户端"""
     config = get_config()

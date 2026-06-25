@@ -178,9 +178,9 @@ class IPCManager:
         self,
         messages: List[Dict[str, str]],
         model: str,
-        temperature: float,
         system: Optional[str] = None,
         request_id: Optional[str] = None,
+        use_sub_agent_config: bool = False,
         **kwargs  # 兼容旧调用，忽略 tool_calls, tools 等参数
     ) -> str:
         """
@@ -189,9 +189,9 @@ class IPCManager:
         Args:
             messages: 消息列表
             model: 模型名称
-            temperature: 温度参数
             system: 系统提示
             request_id: 请求ID（可选，不提供则自动生成）
+            use_sub_agent_config: 是否使用子 Agent 配置（默认 False）
         
         Returns:
             request_id: 请求的唯一标识，用于获取响应
@@ -206,8 +206,8 @@ class IPCManager:
             "request_id": request_id,
             "messages": messages,
             "model": model,
-            "temperature": temperature,
-            "system": system
+            "system": system,
+            "use_sub_agent_config": use_sub_agent_config
         }
         
         # 预先创建条件变量

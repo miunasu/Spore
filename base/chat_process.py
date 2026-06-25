@@ -3,7 +3,7 @@ Chat 进程模块 - 独立进程负责与 LLM 通信
 支持多线程并发请求，统一中断控制
 """
 import multiprocessing as mp
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, Future
 import threading
 import signal
@@ -14,6 +14,10 @@ from .client import load_openai_client, load_anthropic_client
 from .logger import log_error
 from .config import get_config
 from . import config as _config
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+    from anthropic import Anthropic
 
 # 向后兼容的全局变量
 _current_conversation_id: Optional[str] = None
@@ -40,8 +44,14 @@ class ChatProcess:
         self.request_queue = request_queue
         self.response_queue = response_queue
         self.stop_event = stop_event
+        
+        # 主 Agent 客户端
         self.client = None
         self.anthropic_client = None
+        
+        # 子 Agent 客户端
+        self.sub_agent_client = None
+        self.sub_agent_anthropic_client = None
         
         # 并发控制
         self.config = get_config()
@@ -54,13 +64,23 @@ class ChatProcess:
         
         # SDK 类型
         self.llm_sdk = self.config.llm_sdk
+        self.sub_agent_llm_sdk = self.config.get_sub_agent_sdk()
         
     def initialize(self):
         """初始化 LLM 客户端和线程池"""
+        # 初始化主 Agent 客户端
         if self.llm_sdk == "anthropic":
             self.anthropic_client = load_anthropic_client()
         else:
             self.client = load_openai_client()
+        
+        # 初始化子 Agent 客户端
+        if self.sub_agent_llm_sdk == "anthropic":
+            from .client import load_sub_agent_anthropic_client
+            self.sub_agent_anthropic_client = load_sub_agent_anthropic_client()
+        else:
+            from .client import load_sub_agent_openai_client
+            self.sub_agent_client = load_sub_agent_openai_client()
         
         self.executor = ThreadPoolExecutor(
             max_workers=self.config.chat_max_workers,
@@ -90,35 +110,45 @@ class ChatProcess:
         
         messages = request_data.get("messages", [])
         model = request_data.get("model")
-        temperature = request_data.get("temperature", 0.7)
         system = request_data.get("system")
+        use_sub_agent_config = request_data.get("use_sub_agent_config", False)
+        
+        # 根据是否使用子 agent 配置选择 SDK 和客户端
+        if use_sub_agent_config:
+            # 使用子 agent 配置
+            sdk = self.sub_agent_llm_sdk
+            client = self.sub_agent_client if sdk == "openai" else self.sub_agent_anthropic_client
+        else:
+            # 使用主 agent 配置
+            sdk = self.llm_sdk
+            client = self.client if sdk == "openai" else self.anthropic_client
         
         # 根据 SDK 类型选择不同的调用方式
-        if self.llm_sdk == "anthropic":
-            return self._do_anthropic_call(request_id, messages, model, temperature, system)
+        if sdk == "anthropic":
+            return self._do_anthropic_call(request_id, messages, model, system, client)
         else:
-            return self._do_openai_call(request_id, messages, model, temperature, system)
+            return self._do_openai_call(request_id, messages, model, system, client)
     
     def _do_openai_call(
         self, 
         request_id: str, 
         messages: list, 
         model: str, 
-        temperature: float, 
-        system: Optional[str]
+        system: Optional[str],
+        client: "OpenAI"
     ) -> Dict[str, Any]:
         """使用 OpenAI SDK 调用 LLM（自动选择 Chat Completions 或 Responses API）"""
         if self.config.use_responses_api:
-            return self._do_openai_responses_call(request_id, messages, model, temperature, system)
-        return self._do_openai_chat_call(request_id, messages, model, temperature, system)
+            return self._do_openai_responses_call(request_id, messages, model, system, client)
+        return self._do_openai_chat_call(request_id, messages, model, system, client)
 
     def _do_openai_chat_call(
         self,
         request_id: str,
         messages: list,
         model: str,
-        temperature: float,
-        system: Optional[str]
+        system: Optional[str],
+        client: "OpenAI"
     ) -> Dict[str, Any]:
         """使用 OpenAI Chat Completions API"""
         # 构建最终消息列表
@@ -158,7 +188,6 @@ class ChatProcess:
             request_params = {
                 "model": model,
                 "messages": final_messages,
-                "temperature": temperature,
                 "max_tokens": max_tokens,
                 "timeout": timeout,
             }
@@ -167,7 +196,7 @@ class ChatProcess:
             if self.config.openai_reasoning_effort:
                 request_params["extra_body"] = {"reasoning_effort": self.config.openai_reasoning_effort}
             
-            completion = self.client.chat.completions.create(**request_params)
+            completion = client.chat.completions.create(**request_params)
             
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -235,8 +264,8 @@ class ChatProcess:
         request_id: str,
         messages: list,
         model: str,
-        temperature: float,
-        system: Optional[str]
+        system: Optional[str],
+        client: "OpenAI"
     ) -> Dict[str, Any]:
         """使用 OpenAI Responses API（client.responses.create）"""
         # Responses API 使用 `input` 字段传消息，`instructions` 传 system prompt
@@ -277,7 +306,7 @@ class ChatProcess:
             if self.config.openai_reasoning_effort:
                 request_params["reasoning"] = {"effort": self.config.openai_reasoning_effort}
 
-            response = self.client.responses.create(**request_params)
+            response = client.responses.create(**request_params)
 
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -341,8 +370,8 @@ class ChatProcess:
         request_id: str, 
         messages: list, 
         model: str, 
-        temperature: float, 
-        system: Optional[str]
+        system: Optional[str],
+        client: "Anthropic"
     ) -> Dict[str, Any]:
         """使用 Anthropic SDK 调用 LLM"""
         # Anthropic 消息格式转换
@@ -408,14 +437,13 @@ class ChatProcess:
                 "model": model or self.config.get_model(),
                 "messages": anthropic_messages,
                 "max_tokens": max_tokens,
-                "temperature": temperature,
             }
             
             # system 参数（仅在非 system_as_user 模式下使用）
             if anthropic_system:
                 request_params["system"] = anthropic_system
             
-            response = self.anthropic_client.messages.create(**request_params)
+            response = client.messages.create(**request_params)
             
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}

@@ -51,7 +51,6 @@ def select_context_mode(user_input: str) -> str:
         request_id = _ipc_manager.send_chat_request(
             messages=messages,
             model=_config.get_model(),
-            temperature=0.1,  # 使用较低的temperature确保稳定输出
             system=system_prompt,
             tool_calls=False
         )

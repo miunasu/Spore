@@ -19,8 +19,7 @@ USE_RESPONSES_API=true                  # 选择OPENAI API格式  默认使用Co
 ANTHROPIC_API_KEY=your_key
 MODEL_MAIN=claude-3-5-sonnet-20241022   # 主 Agent 模型
 
-# 温度和 Token 限制
-TEMPERATURE_MAIN=0.0                    # 主 Agent 温度
+# Token 限制
 MAX_TOKENS_MAIN=8000                    # 主 Agent 最大输出 Token
 ```
 

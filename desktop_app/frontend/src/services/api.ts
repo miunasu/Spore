@@ -439,7 +439,6 @@ export const settingsApi = {
         default_character: string;
         character_recommend_interval: number;
         context_mode: string;
-        temperature_main: number;
         max_output_tokens: number;
       };
       error?: string;

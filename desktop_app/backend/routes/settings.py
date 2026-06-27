@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ..core import get_instances
+from ..core import get_instances, apply_runtime_config
 
 router = APIRouter()
 
@@ -202,6 +202,18 @@ def open_env_file() -> Dict[str, Any]:
         }
 
 
+@router.post("/env/apply")
+def apply_env_file() -> Dict[str, Any]:
+    """Reload .env and apply runtime-safe settings to the current desktop backend."""
+    try:
+        return apply_runtime_config()
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 @router.post("/settings/update")
 def update_settings(request: SettingsUpdateRequest) -> Dict[str, Any]:
     """
@@ -257,6 +269,7 @@ def update_settings(request: SettingsUpdateRequest) -> Dict[str, Any]:
         # 更新内存中的配置（需要重新加载）
         if request.default_character is not None:
             config.default_character = request.default_character
+            apply_runtime_config()
         
         return {
             "success": True,

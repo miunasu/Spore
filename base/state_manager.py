@@ -30,6 +30,9 @@ class ConversationState:
         
         # LLM 回复计数器（用于规则提醒）
         self.llm_reply_count: int = 0
+
+        # 中断世代。每次用户中断递增，用于丢弃旧请求返回。
+        self.interrupt_epoch: int = 0
         
         # Token 统计（Desktop 模式专用）
         self.last_input_tokens: int = 0  # 上次请求的输入 token（完整 context）
@@ -61,6 +64,7 @@ class ConversationState:
         self.messages.clear()
         self.user_message_count = 0
         self.llm_reply_count = 0
+        self.interrupt_epoch += 1
         self.last_answer = ""
         self.current_answer = ""
         self.temp_msg = None

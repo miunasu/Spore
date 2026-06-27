@@ -822,20 +822,7 @@ class ConversationLoop:
         
         # 发送中断命令
         self.ipc_manager.interrupt_current_request()
-        
-        # 第一次清空队列
-        self.ipc_manager.clear_queues()
-        
-        # 等待 Chat 进程处理中断命令并可能发送响应
-        time.sleep(0.3)
-        
-        # 第二次清空队列，确保清除 Chat 进程在中断后发送的任何响应
-        cleared = self.ipc_manager.clear_queues()
-        if cleared > 0:
-            # 如果还有残留数据，再等待一下并清空
-            time.sleep(0.1)
-            self.ipc_manager.clear_queues()
-        
+
         # 清理打断时产生的残留消息
         self._cleanup_interrupted_messages()
         

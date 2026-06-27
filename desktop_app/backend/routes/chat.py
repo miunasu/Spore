@@ -83,6 +83,11 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None  # 新增：指定会话 ID
 
 
+class InterruptRequest(BaseModel):
+    """中断请求模型"""
+    conversation_id: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     """聊天响应模型"""
     status: str
@@ -124,6 +129,8 @@ async def send_message(req: ChatRequest):
     target_state = session_manager.get_session(conversation_id)
     if not target_state:
         raise HTTPException(status_code=404, detail=f"会话不存在: {conversation_id}")
+
+    request_epoch = target_state.interrupt_epoch
         
     # 根据会话的模式确定工具集
     if target_state.context_mode == "auto" and req.message.strip():
@@ -178,6 +185,9 @@ async def send_message(req: ChatRequest):
         # 在线程池中执行阻塞操作
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(_executor, _do_chat)
+
+        if target_state.interrupt_epoch != request_epoch:
+            return ChatResponse(status="interrupted")
         
         if response is None:
             return ChatResponse(status="interrupted")
@@ -192,6 +202,9 @@ async def send_message(req: ChatRequest):
         reply_data = response.get("data", {})
         reply = reply_data.get("content", "")
         sent_messages = reply_data.get("sent_messages", [])
+
+        if target_state.interrupt_epoch != request_epoch:
+            return ChatResponse(status="interrupted")
         
         # 使用文本协议验证和处理响应
         result = conv_loop.validate_and_check_response(reply)
@@ -213,18 +226,34 @@ async def send_message(req: ChatRequest):
 
 
 @router.post("/interrupt")
-def interrupt():
+def interrupt(req: InterruptRequest = InterruptRequest()):
     """
     中断当前请求 - 包括主 Agent 和所有子 Agent
     """
-    _, _, _, conv_loop, _ = get_instances()
+    _, session_manager, _, conv_loop, _ = get_instances()
+    from ..core import get_conv_loop_manager
+    conv_loop_manager = get_conv_loop_manager()
     
-    if not conv_loop:
+    if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
+
+    conversation_id = req.conversation_id or session_manager.current_session_id
+    target_state = session_manager.get_session(conversation_id)
+    if not target_state:
+        raise HTTPException(status_code=404, detail=f"会话不存在: {conversation_id}")
+
+    target_state.interrupt_epoch += 1
+
+    target_loop = None
+    if conv_loop_manager:
+        target_loop = conv_loop_manager._loops.get(conversation_id)
+    if target_loop is None:
+        target_loop = conv_loop
     
     try:
         # 1. 调用 conv_loop 的中断处理方法（处理主 Agent）
-        conv_loop.handle_keyboard_interrupt()
+        if target_loop:
+            target_loop.handle_keyboard_interrupt()
         
         # 2. 直接终止当前活动的Agent管理器（处理子 Agent）
         agent_manager = get_current_agent_manager()

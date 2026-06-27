@@ -77,9 +77,10 @@ export const createChatApi = (port: number) => ({
       body: JSON.stringify({ message, conversation_id: conversationId }),
     }),
 
-  interrupt: () =>
+  interrupt: (conversationId?: string) =>
     requestToPort<{ success: boolean }>(port, '/api/chat/interrupt', {
       method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
   history: (raw: boolean = false, sessionId?: string) =>
@@ -462,6 +463,16 @@ export const settingsApi = {
       '/api/settings/env/open',
       { method: 'POST' }
     ),
+
+  applyEnvFile: () =>
+    request<{
+      success: boolean;
+      context_mode?: string;
+      tool_names?: string[];
+      restarted_chat_process?: boolean;
+      message?: string;
+      error?: string;
+    }>('/api/settings/env/apply', { method: 'POST' }),
 };
 
 // Health check

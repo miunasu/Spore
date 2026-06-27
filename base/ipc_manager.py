@@ -27,6 +27,7 @@ class IPCManager:
         # 响应缓存：request_id -> (response, timestamp)
         self._response_cache: Dict[str, tuple] = {}
         self._cache_lock = threading.Lock()
+        self._cancelled_request_ids: set[str] = set()
         
         # 响应分发线程
         self._dispatcher_thread: Optional[threading.Thread] = None
@@ -43,6 +44,8 @@ class IPCManager:
         """启动 Chat 进程和响应分发线程"""
         if self.process_started:
             return
+
+        self.stop_event.clear()
         
         # 启动 Chat 进程
         self.chat_process = mp.Process(
@@ -90,6 +93,7 @@ class IPCManager:
         self._clear_queue(self.request_queue)
         self._clear_queue(self.response_queue)
         self._response_cache.clear()
+        self._cancelled_request_ids.clear()
         
         self.process_started = False
     
@@ -122,9 +126,16 @@ class IPCManager:
                         # 兼容：无 request_id 的响应放入默认位置
                         request_id = "__default__"
                         response["request_id"] = request_id
+
+                    with self._cache_lock:
+                        if request_id in self._cancelled_request_ids and response.get("status") != "cancelled":
+                            self._cancelled_request_ids.discard(request_id)
+                            continue
                     
                     # 存入缓存
                     with self._cache_lock:
+                        if response.get("status") == "cancelled":
+                            self._cancelled_request_ids.discard(request_id)
                         self._response_cache[request_id] = (response, time.time())
                     
                     # 通知等待者
@@ -146,6 +157,7 @@ class IPCManager:
             for request_id, condition in self._response_conditions.items():
                 # 为每个等待者设置取消响应
                 with self._cache_lock:
+                    self._cancelled_request_ids.add(request_id)
                     self._response_cache[request_id] = (
                         {"request_id": request_id, "status": "cancelled", "data": None},
                         time.time()

@@ -54,11 +54,9 @@ class ToolDocGenerator:
         lines = [f"#### {tool_name}"]
         
         # 添加描述（截取第一段或前200字符）
-        desc_lines = description.strip().split('\n')
-        short_desc = desc_lines[0] if desc_lines else description
-        if len(short_desc) > 200:
-            short_desc = short_desc[:200] + "..."
-        lines.append(short_desc)
+        full_desc = self._format_description(description)
+        if full_desc:
+            lines.append(full_desc)
         
         # 添加参数说明
         param_doc = self.format_parameters(parameters)
@@ -68,6 +66,12 @@ class ToolDocGenerator:
             lines.append(param_doc)
         
         return "\n".join(lines)
+    
+    def _format_description(self, description: str) -> str:
+        """Format a tool description without dropping multiline usage notes."""
+        if not description:
+            return ""
+        return description.strip()
     
     def format_parameters(self, parameters: Dict[str, Any]) -> str:
         """

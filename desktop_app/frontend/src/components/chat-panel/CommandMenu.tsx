@@ -73,7 +73,50 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         type: 'text',
         placeholder: '默认: https://api.openai.com/v1',
       },
-      { key: 'OPENAI_MODEL', label: '模型', type: 'text', placeholder: '默认: gpt-4' },
+      { key: 'OPENAI_MODEL', label: '模型', type: 'text', placeholder: '默认: gpt-4o-mini' },
+      {
+        key: 'USE_RESPONSES_API',
+        label: '使用 Responses API',
+        type: 'select',
+        options: [
+          { value: 'true', label: '是' },
+          { value: 'false', label: '否' },
+        ],
+        placeholder: '默认: false',
+      },
+      {
+        key: 'OPENAI_REASONING_EFFORT',
+        label: 'Reasoning Effort',
+        type: 'select',
+        options: [
+          { value: 'low', label: 'low' },
+          { value: 'medium', label: 'medium' },
+          { value: 'high', label: 'high' },
+          { value: 'xhigh', label: 'xhigh' },
+        ],
+        placeholder: '默认: 不传',
+      },
+    ],
+  },
+  {
+    title: '子 Agent LLM',
+    items: [
+      {
+        key: 'SUB_AGENT_LLM_SDK',
+        label: '子 Agent SDK',
+        type: 'select',
+        options: [
+          { value: 'openai', label: 'OpenAI SDK' },
+          { value: 'anthropic', label: 'Anthropic SDK' },
+        ],
+        placeholder: '默认: 继承主 Agent',
+      },
+      { key: 'SUB_AGENT_OPENAI_API_KEY', label: '子 Agent OpenAI Key', type: 'text', placeholder: '默认: 继承主 Agent' },
+      { key: 'SUB_AGENT_OPENAI_API_URL', label: '子 Agent OpenAI URL', type: 'text', placeholder: '默认: 继承主 Agent' },
+      { key: 'SUB_AGENT_OPENAI_MODEL', label: '子 Agent OpenAI 模型', type: 'text', placeholder: '默认: 继承主 Agent' },
+      { key: 'SUB_AGENT_ANTHROPIC_API_KEY', label: '子 Agent Anthropic Key', type: 'text', placeholder: '默认: 继承主 Agent' },
+      { key: 'SUB_AGENT_ANTHROPIC_API_URL', label: '子 Agent Anthropic URL', type: 'text', placeholder: '默认: 继承主 Agent' },
+      { key: 'SUB_AGENT_ANTHROPIC_MODEL', label: '子 Agent Anthropic 模型', type: 'text', placeholder: '默认: 继承主 Agent' },
     ],
   },
   {
@@ -90,20 +133,20 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         key: 'CONTEXT_MAX_TOKENS',
         label: '上下文最大 Token',
         type: 'text',
-        placeholder: '默认: 190000',
+        placeholder: '默认: 128000',
       },
       {
         key: 'CONTEXT_WARNING_THRESHOLD',
         label: '上下文警告阈值',
         type: 'text',
-        placeholder: '默认: 0.9',
+        placeholder: '默认: 0.8',
         description: '0.0-1.0，超过此比例时警告',
       },
       {
         key: 'MAX_SINGLE_MESSAGE_RATIO',
         label: '单消息最大比例',
         type: 'text',
-        placeholder: '默认: 0.20',
+        placeholder: '默认: 0.3',
         description: '相对于上下文最大Token',
       },
       {
@@ -175,6 +218,12 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         description: '控制工具集和上下文处理策略',
       },
       {
+        key: 'DEFAULT_CHARACTER',
+        label: '默认角色',
+        type: 'text',
+        placeholder: '默认: 无',
+      },
+      {
         key: 'RULE_REMINDER_INTERVAL',
         label: '规则提醒间隔',
         type: 'text',
@@ -236,6 +285,18 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         type: 'text',
         placeholder: '默认: 200 字符',
       },
+      { key: 'LOG_ERROR_FILENAME', label: '错误日志文件名', type: 'text', placeholder: '默认: error.log' },
+      { key: 'LOG_LLM_VALIDATION_FILENAME', label: 'LLM 校验日志', type: 'text', placeholder: '默认: llm_validation.log' },
+      { key: 'LOG_TOOL_EXECUTION_FILENAME', label: '工具执行日志', type: 'text', placeholder: '默认: tool_execution.log' },
+      { key: 'LOG_GENERAL_FILENAME', label: '通用日志', type: 'text', placeholder: '默认: general.log' },
+      { key: 'LOG_MONITOR_LOCK_FILENAME', label: '监控锁文件', type: 'text', placeholder: '默认: .monitor.lock' },
+      { key: 'LOG_MONITOR_CHECK_INTERVAL', label: '日志检查间隔', type: 'text', placeholder: '默认: 0.5 秒' },
+      {
+        key: 'LOG_MONITOR_TYPES',
+        label: '日志监控类型',
+        type: 'text',
+        placeholder: '默认: error,llm_validation,tool_execution',
+      },
     ],
   },
   {
@@ -257,7 +318,7 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         key: 'WEB_MAX_CONTENT_LENGTH',
         label: 'Web 内容最大长度',
         type: 'text',
-        placeholder: '默认: 20000 字符',
+        placeholder: '默认: 15000 字符',
       },
       {
         key: 'FILE_READ_DEFAULT_LIMIT',
@@ -282,13 +343,6 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         label: 'Shell 命令超时',
         type: 'text',
         placeholder: '默认: 60 秒',
-      },
-      {
-        key: 'VT_API_KEY',
-        label: 'VirusTotal API Key',
-        type: 'text',
-        placeholder: '默认: 无',
-        description: '用于文件安全扫描',
       },
     ],
   },
@@ -324,8 +378,18 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         key: 'MULTI_AGENT_JOIN_INTERVAL',
         label: '等待轮询间隔',
         type: 'text',
-        placeholder: '默认: 1.0 秒',
+        placeholder: '默认: 2.0 秒',
         description: '用于检查中断信号',
+      },
+      {
+        key: 'MULTI_AGENT_MONITOR_ENABLED',
+        label: '启用多 Agent 监控',
+        type: 'select',
+        options: [
+          { value: 'true', label: '是' },
+          { value: 'false', label: '否' },
+        ],
+        placeholder: '默认: true',
       },
     ],
   },
@@ -356,6 +420,34 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         type: 'text',
         placeholder: '默认: 0.1 秒',
       },
+    ],
+  },
+  {
+    title: '路径配置',
+    items: [
+      { key: 'SKILLS_DIR', label: 'Skills 目录', type: 'text', placeholder: '默认: skills' },
+      { key: 'CHARACTERS_DIR', label: 'Characters 目录', type: 'text', placeholder: '默认: characters' },
+      { key: 'PROMPT_DIR', label: 'Prompt 目录', type: 'text', placeholder: '默认: prompt' },
+      { key: 'LOG_DIR', label: '日志目录', type: 'text', placeholder: '默认: logs' },
+      { key: 'OUTPUT_DIR', label: '输出目录', type: 'text', placeholder: '默认: output' },
+      { key: 'UPLOAD_DIR', label: '上传目录', type: 'text', placeholder: '默认: uploads' },
+    ],
+  },
+  {
+    title: 'Desktop 启动配置',
+    items: [
+      {
+        key: 'LAUNCH_MODE',
+        label: '启动模式',
+        type: 'select',
+        options: [
+          { value: 'cli', label: 'CLI' },
+          { value: 'desktop', label: 'Desktop' },
+        ],
+        placeholder: '默认: cli',
+      },
+      { key: 'DESKTOP_API_HOST', label: 'API Host', type: 'text', placeholder: '默认: 127.0.0.1' },
+      { key: 'DESKTOP_API_PORT', label: 'API Port', type: 'text', placeholder: '默认: 8765' },
     ],
   },
 ];
@@ -544,11 +636,18 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     try {
       const newContent = updateEnvContent(envContent, envValues);
       await filesApi.write('.env', newContent);
+      const applyResponse = await settingsApi.applyEnvFile();
+      if (!applyResponse.success) {
+        throw new Error(applyResponse.error || '应用配置失败');
+      }
       setEnvContent(newContent);
       setEnvError(null);
-      setModalContent({ title: '成功', content: '配置已保存，部分配置需要重启生效' });
+      setModalContent({
+        title: '成功',
+        content: applyResponse.message || '配置已保存并应用到当前 Spore 进程',
+      });
     } catch (err) {
-      setEnvError('保存失败');
+      setEnvError(err instanceof Error ? err.message : '保存失败');
     } finally {
       setEnvSaving(false);
     }

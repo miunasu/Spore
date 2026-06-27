@@ -132,6 +132,71 @@ def get_config():
     return _config
 
 
+def apply_runtime_config() -> Dict[str, Any]:
+    """Reload .env and apply runtime-safe settings to the desktop backend."""
+    global _config
+
+    if not _initialized:
+        return {"success": False, "error": "后端未初始化"}
+
+    from base.config import reload_config
+    from base.agent_types import get_tools_for_mode
+    from base.prompt_loader import load_system_prompt
+    from base.text_protocol import ProtocolManager
+    from base.tools import TOOL_DEFINITIONS
+
+    new_config = reload_config()
+    _config = new_config
+
+    if _ipc_manager:
+        _ipc_manager._config = new_config
+        _ipc_manager.stop_chat_process()
+        _ipc_manager.start_chat_process()
+        _ipc_manager.setup_all_modules()
+
+    if _conv_loop_manager:
+        _conv_loop_manager.config = new_config
+
+    applied_mode = new_config.context_mode
+    effective_mode = "strong_context" if applied_mode == "auto" else applied_mode
+    current_tools = get_tools_for_mode(effective_mode)
+    tool_definitions = {
+        name: TOOL_DEFINITIONS[name]
+        for name in current_tools
+        if name in TOOL_DEFINITIONS
+    }
+    base_prompt = load_system_prompt() or ""
+    system_prompt = ProtocolManager().inject_protocol(base_prompt, tool_definitions)
+
+    if _state:
+        for session_id in _state.list_sessions():
+            session_state = _state.get_session(session_id)
+            if session_state:
+                session_state.context_mode = applied_mode
+
+            if _conv_loop_manager and session_id in _conv_loop_manager._loops:
+                loop = _conv_loop_manager._loops[session_id]
+                loop.config = new_config
+                loop.system_prompt = system_prompt
+                loop.tool_names = current_tools
+
+    if _conv_loop:
+        _conv_loop.config = new_config
+        _conv_loop.system_prompt = system_prompt
+        _conv_loop.tool_names = current_tools
+
+    if _cli_handler and _state:
+        _cli_handler.state = _state.current
+
+    return {
+        "success": True,
+        "context_mode": applied_mode,
+        "tool_names": current_tools,
+        "restarted_chat_process": bool(_ipc_manager),
+        "message": "配置已应用到当前进程；服务监听地址/端口变更需要重启应用"
+    }
+
+
 def get_instances_dict() -> Dict[str, Any]:
     """
     获取全局实例字典

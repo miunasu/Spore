@@ -405,6 +405,14 @@ def get_config() -> Config:
     return _config_instance
 
 
+def reload_config() -> Config:
+    """Reload .env and rebuild the global Config instance."""
+    global _config_instance
+    load_dotenv(dotenv_path=_ENV_PATH, override=True)
+    _config_instance = Config()
+    return _config_instance
+
+
 # 向后兼容接口已移除，请直接使用 get_config() 获取配置
 
 # 获取项目根目录

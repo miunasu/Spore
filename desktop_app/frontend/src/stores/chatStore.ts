@@ -89,12 +89,16 @@ const extractDisplayContent = (content: string): string => {
   return filteredLines.join('\n').trim();
 };
 
-// 中断标志（按对话 ID）
-const interruptFlags: Record<string, boolean> = {};
+// 请求 token（按对话 ID）。用于丢弃中断后迟到的旧响应。
+const activeRequestTokens: Record<string, string> = {};
+const cancelledRequestTokens = new Set<string>();
 
 // 生成唯一 ID
 const generateId = () =>
   `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const generateRequestToken = () =>
+  `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
 // 扩展 Conversation 类型，添加后端端口
 interface ConversationWithBackend extends Conversation {
@@ -317,10 +321,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       // 如果正在生成，先中断
       if (generatingConversations.has(id) && conv?.backendPort) {
-        interruptFlags[id] = true;
+        const token = activeRequestTokens[id];
+        if (token) {
+          cancelledRequestTokens.add(token);
+          delete activeRequestTokens[id];
+        }
         try {
           const chatApi = createChatApi(conv.backendPort);
-          await chatApi.interrupt();
+          await chatApi.interrupt(id);
         } catch (e) {
           frontendLog(`[错误] 关闭对话时中断失败: ${e}`);
         }
@@ -444,7 +452,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
 
       const chatApi = createChatApi(port);
-      interruptFlags[conversationId] = false;
+      const requestToken = generateRequestToken();
+      const previousToken = activeRequestTokens[conversationId];
+      if (previousToken) {
+        cancelledRequestTokens.add(previousToken);
+      }
+      activeRequestTokens[conversationId] = requestToken;
 
       const userMessage: Message = {
         id: Date.now().toString(),
@@ -464,7 +477,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
         let shouldContinue = true;
         let isFirstRequest = true;
 
-        while (shouldContinue && !interruptFlags[conversationId]) {
+        while (
+          shouldContinue &&
+          activeRequestTokens[conversationId] === requestToken &&
+          !cancelledRequestTokens.has(requestToken)
+        ) {
           roundCount++;
           const response = await chatApi.send(
             isFirstRequest ? content : '', 
@@ -472,7 +489,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
           );
           isFirstRequest = false;
 
-          if (interruptFlags[conversationId]) {
+          if (
+            activeRequestTokens[conversationId] !== requestToken ||
+            cancelledRequestTokens.has(requestToken)
+          ) {
             frontendLog(`[中断] 第${roundCount}轮被用户中断`);
             break;
           }
@@ -512,8 +532,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
       } catch (error) {
         frontendLog(`[错误] 发送失败: ${error}`);
       } finally {
-        setGenerating(conversationId, false);
-        delete interruptFlags[conversationId];
+        if (activeRequestTokens[conversationId] === requestToken) {
+          setGenerating(conversationId, false);
+          delete activeRequestTokens[conversationId];
+        }
+        cancelledRequestTokens.delete(requestToken);
       }
     },
 
@@ -525,14 +548,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (!conv?.backendPort) return;
 
       frontendLog(`[中断] 请求中断...`);
-      interruptFlags[activeConversationId] = true;
+      const requestToken = activeRequestTokens[activeConversationId];
+      if (requestToken) {
+        cancelledRequestTokens.add(requestToken);
+        delete activeRequestTokens[activeConversationId];
+      }
       
       // 立即更新 UI 状态
       setGenerating(activeConversationId, false);
       
       try {
         const chatApi = createChatApi(conv.backendPort);
-        await chatApi.interrupt();
+        await chatApi.interrupt(activeConversationId);
         frontendLog(`[中断] 成功`);
       } catch (error) {
         frontendLog(`[错误] 中断失败: ${error}`);

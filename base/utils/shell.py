@@ -41,6 +41,20 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     # 检测危险命令（包括 PowerShell 的 Remove-Item）
     dangerous_pattern = r'\b(del|rm|rmdir|rd|remove-item)\b'
     
+    # 检测文件写入命令（会加BOM，导致编码问题）
+    write_file_pattern = r'\b(set-content|out-file)\b'
+    write_match = re.search(write_file_pattern, cmd_lower)
+    if write_match:
+        detected_cmd = write_match.group(1)
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": f"错误: 不允许使用 '{detected_cmd}' 写文件（会产生BOM编码问题）。\n请使用 file type=write 工具来写入文件。",
+            "duration_sec": 0,
+            "shell_used": isinstance(command, str),
+        }
+    
     match = re.search(dangerous_pattern, cmd_lower)
     if match:
         detected_cmd = match.group(1)

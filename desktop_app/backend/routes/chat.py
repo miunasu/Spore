@@ -27,6 +27,17 @@ router = APIRouter()
 _executor = ThreadPoolExecutor(max_workers=16)
 
 
+def is_hidden_protocol_line(stripped: str) -> bool:
+    return stripped in {
+        "@SPORE:REPLY_START",
+        "@SPORE:REPLY_END",
+        "@SPORE:FINAL@",
+        "@SPORE:CONTENT_START",
+        "@SPORE:CONTENT_END",
+        "@SPORE:RESULT",
+    }
+
+
 def extract_user_visible_content(reply: str) -> str:
     """
     从 AI 回复中提取用户可见的内容，去除协议标记
@@ -50,8 +61,11 @@ def extract_user_visible_content(reply: str) -> str:
         if line.strip() == "@SPORE:REPLY_START":
             reply_lines = []
             for candidate in lines[i + 1:]:
-                if candidate.strip() == "@SPORE:REPLY_END":
+                stripped = candidate.strip()
+                if stripped in {"@SPORE:REPLY_END", "@SPORE:FINAL@"}:
                     return "\n".join(reply_lines).strip()
+                if is_hidden_protocol_line(stripped):
+                    continue
                 reply_lines.append(candidate)
             return "\n".join(reply_lines).strip()
     
@@ -66,7 +80,9 @@ def extract_user_visible_content(reply: str) -> str:
             in_protocol_block = False
             continue
 
-        if stripped in {"@SPORE:FINAL@", "@SPORE:CONTENT_START", "@SPORE:CONTENT_END"}:
+        if is_hidden_protocol_line(stripped):
+            if stripped == "@SPORE:FINAL@":
+                break
             continue
 
         if stripped.startswith('### RULE_REMINDER') or in_protocol_block:

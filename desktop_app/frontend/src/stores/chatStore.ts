@@ -17,6 +17,16 @@ const frontendLog = (message: string) => {
   useLogStore.getState().addFrontendLog(message);
 };
 
+const isHiddenProtocolLine = (trimmed: string): boolean =>
+  [
+    '@SPORE:REPLY_START',
+    '@SPORE:REPLY_END',
+    '@SPORE:FINAL@',
+    '@SPORE:CONTENT_START',
+    '@SPORE:CONTENT_END',
+    '@SPORE:RESULT',
+  ].includes(trimmed);
+
 // 提取消息的显示内容（处理新协议 @SPORE: 标记）
 const extractDisplayContent = (content: string): string => {
   if (!content) return '';
@@ -43,8 +53,12 @@ const extractDisplayContent = (content: string): string => {
       const trimmed = line.trim();
       
       // 遇到结束标记，停止提取
-      if (trimmed === replyEnd) {
+      if (trimmed === replyEnd || trimmed === '@SPORE:FINAL@') {
         break;
+      }
+
+      if (isHiddenProtocolLine(trimmed)) {
+        continue;
       }
       
       replyLines.push(line);
@@ -70,12 +84,10 @@ const extractDisplayContent = (content: string): string => {
       continue;
     }
 
-    if (
-      trimmed === '@SPORE:FINAL@' ||
-      trimmed === '@SPORE:CONTENT_START' ||
-      trimmed === '@SPORE:CONTENT_END' ||
-      trimmed === '@SPORE:RESULT'
-    ) {
+    if (isHiddenProtocolLine(trimmed)) {
+      if (trimmed === '@SPORE:FINAL@') {
+        break;
+      }
       continue;
     }
     

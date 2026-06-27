@@ -9,15 +9,17 @@ from typing import List, Optional
 RULE_REMINDER_TEMPLATE = """[系统提醒] 请严格遵守以下规则：
 
 ## 格式规范
-所有标识符必须独占一行：@SPORE:ACTION、@SPORE:TODO、@SPORE:REPLY、@SPORE:FINAL@
+所有协议块标识符必须独占一行，使用 REPLY_START/END、TODO_START/END、{action_block_marker_text} 和 @SPORE:FINAL@。
 
 工具调用示例：
 
-@SPORE:REPLY
+@SPORE:REPLY_START
 给用户的回复内容
+@SPORE:REPLY_END
 
-@SPORE:ACTION
+@SPORE:ACTION_SINGLE_START
 tool_name param1=value1 param2=value2
+@SPORE:ACTION_SINGLE_END
 
 
 ## 工具调用规则
@@ -26,17 +28,12 @@ tool_name param1=value1 param2=value2
 3. 不要自己输出 RESULT 或继续回复
 
 ## 回复格式
-给用户的回复内容必须放在 @SPORE:REPLY 块中
+给用户的回复内容必须放在 @SPORE:REPLY_START / @SPORE:REPLY_END 块中
 
 ## 任务完成标记
 完成后最后一次输出必须包含 @SPORE:FINAL@
 
-## 多Agent协作
-你可以派发子Agent：
-- 代码编写 → Coder
-- 网络搜索 → WebInfoCollector  
-- 文件分析 → FileContentAnalyzer
-- 文档编辑 → TextEditor
+{multi_agent_reminder}
 
 ## 其他规则
 - 操作后验证结果
@@ -51,9 +48,9 @@ tool_name param1=value1 param2=value2
 
 # 精简版本（token 敏感时使用）
 RULE_REMINDER_SHORT_TEMPLATE = """[系统提醒] 关键规则：
-1. **每次回复必须输出 @SPORE:ACTION 或 @SPORE:FINAL@**
-2. 工具调用：@SPORE:ACTION 必须独占一行
-3. 回复必须放在 @SPORE:REPLY 块中
+1. **工具调用必须输出 {action_blocks} 块；完成时输出 REPLY 块和 @SPORE:FINAL@**
+2. 所有 START/END 标识符必须独占一行并成对出现
+3. 回复必须放在 @SPORE:REPLY_START / @SPORE:REPLY_END 块中
 4. 任务完成后输出 @SPORE:FINAL@
 
 可用工具: {tools_short}
@@ -92,7 +89,15 @@ def _get_skill_names() -> List[str]:
         return []
 
 
-def get_rule_reminder(short: bool = False) -> str:
+def _visibility_for_tools(tool_names: List[str]) -> tuple[bool, bool]:
+    has_multi_agent = "multi_agent_dispatch" in tool_names
+    return not has_multi_agent, has_multi_agent
+
+
+def get_rule_reminder(
+    short: bool = False,
+    tool_names: Optional[List[str]] = None,
+) -> str:
     """
     获取规则提醒文本（包含动态工具和技能列表）
 
@@ -102,20 +107,32 @@ def get_rule_reminder(short: bool = False) -> str:
     Returns:
         规则提醒文本
     """
-    tool_names = _get_tool_names()
+    tool_names = tool_names if tool_names is not None else _get_tool_names()
     skill_names = _get_skill_names()
+    show_parallel, show_multi_agent = _visibility_for_tools(tool_names)
+    visible_tool_names = [name for name in tool_names if show_multi_agent or name != "multi_agent_dispatch"]
+    action_blocks = "ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL" if show_parallel else "ACTION_SINGLE 或 ACTION_SEQUENCE"
 
     if short:
-        tools_short = ", ".join(tool_names) if tool_names else "无"
+        tools_short = ", ".join(visible_tool_names) if visible_tool_names else "无"
         skills_short = ", ".join(skill_names) if skill_names else "无"
         return RULE_REMINDER_SHORT_TEMPLATE.format(
+            action_blocks=action_blocks,
             tools_short=tools_short,
             skills_short=skills_short
         )
     else:
-        tools = "\n".join(f"- {name}" for name in tool_names) if tool_names else "无"
+        tools = "\n".join(f"- {name}" for name in visible_tool_names) if visible_tool_names else "无"
         skills = "\n".join(f"- {name}" for name in skill_names) if skill_names else "无"
+        multi_agent_reminder = """## 多Agent协作
+你可以派发子Agent：
+- 代码编写 → Coder
+- 网络搜索 → WebInfoCollector
+- 文件分析 → FileContentAnalyzer
+- 文档编辑 → TextEditor""" if show_multi_agent else ""
         return RULE_REMINDER_TEMPLATE.format(
+            action_block_marker_text="ACTION_SINGLE/SEQUENCE/PARALLEL_START/END" if show_parallel else "ACTION_SINGLE/SEQUENCE_START/END",
+            multi_agent_reminder=multi_agent_reminder,
             tools=tools,
             skills=skills
         )

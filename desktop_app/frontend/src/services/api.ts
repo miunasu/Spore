@@ -456,6 +456,12 @@ export const settingsApi = {
         body: JSON.stringify(settings),
       }
     ),
+
+  openEnvFile: () =>
+    request<{ success: boolean; path?: string; error?: string }>(
+      '/api/settings/env/open',
+      { method: 'POST' }
+    ),
 };
 
 // Health check

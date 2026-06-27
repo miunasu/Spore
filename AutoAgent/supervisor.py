@@ -97,7 +97,7 @@ def end_check(last_answer: str, current_answer: str, reply: str) -> str:
     Args:
         last_answer: 上次回复内容
         current_answer: 本次回复内容
-        reply: 原始回复（用于检测 FINAL_RESPONSE）
+        reply: 原始回复（用于检测 FINAL）
     
     Returns:
         "End" 表示结束，"continue" 表示继续，"" 表示正常
@@ -106,7 +106,7 @@ def end_check(last_answer: str, current_answer: str, reply: str) -> str:
     if current_answer != "":
         print(f"{current_agent_name}> {current_answer}")
     
-    # 检测 FINAL_RESPONSE 标记（文本协议）
+    # 检测 FINAL 标记（文本协议）
     if "@SPORE:FINAL@" in reply:
         return "End"
     

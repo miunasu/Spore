@@ -2,7 +2,7 @@
 工具系统 (Tool System)
 
 本模块提供了模块化的工具定义系统，支持为不同的 Agent 定制所需的工具集。
-使用文本协议（ACTION/RESULT/FINAL_RESPONSE）进行工具调用，不使用 OpenAI function calling。
+使用文本协议（ACTION_SINGLE/ACTION_SEQUENCE/ACTION_PARALLEL/RESULT/FINAL）进行工具调用，不使用 OpenAI function calling。
 
 使用示例:
     # 1. 获取工具定义
@@ -88,7 +88,7 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": "在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。\n\n【多行PowerShell】使用@SPORE:CONTENT格式传参，直接写多行PS代码。示例：\ncommand=@SPORE:CONTENT\nNew-Item -Path C:/temp -ItemType Directory\nGet-ChildItem C:/temp\n@SPORE:CONTENT_END\n\n【多行Python】使用@SPORE:CONTENT格式传参，内容为PowerShell here-string管道给python。示例：\ncommand=@SPORE:CONTENT\n@'\nimport os\nprint(os.getcwd())\n'@ | python -\n@SPORE:CONTENT_END",
+            "description": "在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。\n\n【多行PowerShell】使用@SPORE:CONTENT格式传参，直接写多行PS代码。示例：\ncommand=@SPORE:CONTENT_START\nNew-Item -Path C:/temp -ItemType Directory\nGet-ChildItem C:/temp\n@SPORE:CONTENT_END\n\n【多行Python】使用@SPORE:CONTENT格式传参，内容为PowerShell here-string管道给python。示例：\ncommand=@SPORE:CONTENT_START\n@'\nimport os\nprint(os.getcwd())\n'@ | python -\n@SPORE:CONTENT_END",
             "parameters": {
                 "type": "object",
                 "properties": {

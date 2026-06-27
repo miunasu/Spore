@@ -1,491 +1,587 @@
 """
-文本协议管理器
+Spore text protocol manager.
 
-管理 Agent 与 LLM 之间的文本协议交互，包括：
-- 协议说明注入
-- 响应解析
-- 结果格式化
+This module injects protocol instructions, validates LLM responses, extracts
+user-visible blocks, and formats tool results.
 """
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Literal
+from typing import Any, Dict, List, Literal, Optional
+import re
 
-from .action_parser import ActionParser, ParsedAction
+from .action_parser import ActionMode, ActionParser, ParsedAction, ParsedActionBlock
 from .result_formatter import ResultFormatter
 from .tool_doc_generator import ToolDocGenerator
 
 
 def find_standalone_marker(text: str, marker: str) -> int:
-    """
-    查找独占一行的协议标记位置
-    
-    标记必须满足：在行首，且后面是换行符、空白字符或文本结束
-    
-    Args:
-        text: 文本内容
-        marker: 要查找的标记
-        
-    Returns:
-        标记位置，如果没找到返回 -1
-    """
+    """Find a marker that appears on its own line."""
     pos = 0
     while pos < len(text):
         found = text.find(marker, pos)
         if found == -1:
             return -1
-        # 检查是否在行首
-        if found > 0 and text[found - 1] != '\n':
+        if found > 0 and text[found - 1] != "\n":
             pos = found + len(marker)
             continue
-        # 检查后面是否是换行符、空白字符或文本结束
+
         end_pos = found + len(marker)
         if end_pos >= len(text):
-            # 文本结束
             return found
-        # 检查后面的字符
+
         next_char = text[end_pos]
-        if next_char == '\n':
-            # 换行符
+        if next_char == "\n":
             return found
-        # 允许标记后有空白字符（空格、制表符），但必须在行尾
-        if next_char in ' \t':
-            # 跳过所有空白字符，检查是否到达换行符或文本结束
+        if next_char in " \t":
             i = end_pos
-            while i < len(text) and text[i] in ' \t':
+            while i < len(text) and text[i] in " \t":
                 i += 1
-            if i >= len(text) or text[i] == '\n':
+            if i >= len(text) or text[i] == "\n":
                 return found
         pos = end_pos
     return -1
 
 
 def is_standalone_marker(text: str, marker: str) -> bool:
-    """
-    检查文本中是否包含独占一行的标记
-    
-    Args:
-        text: 文本内容
-        marker: 要查找的标记
-        
-    Returns:
-        True 如果找到独占一行的标记，否则 False
-    """
     return find_standalone_marker(text, marker) >= 0
 
 
 @dataclass
+class ProtocolError:
+    code: str
+    message: str
+
+
+@dataclass
 class ParsedResponse:
-    """解析后的 LLM 响应"""
-    
-    # 响应类型: action=有工具调用, final=任务完成, continue=需要继续
-    response_type: Literal["action", "final", "continue"]
-    
-    # ACTION 块之前的文本内容（用于显示给用户）
+    """Parsed LLM response."""
+
+    response_type: Literal["action", "final", "continue", "protocol_error"]
     prefix_text: Optional[str] = None
-    
-    # REPLY 块内容（用于显示给用户）
     reply_content: Optional[str] = None
-    
-    # 解析后的 ACTION（如果有）
     action: Optional[ParsedAction] = None
-    
-    # FINAL_RESPONSE 之后的内容（如果有）
+    action_block: Optional[ParsedActionBlock] = None
     final_content: Optional[str] = None
-    
-    # 原始响应文本
     raw_response: str = ""
+    protocol_error: Optional[ProtocolError] = None
 
 
-# 协议说明模板
 PROTOCOL_TEMPLATE = """
 ---
 
-## [IMPORTANT] 回复协议（最高优先级）
+## [IMPORTANT] Spore 回复协议（最高优先级）
 
-任务完成后，必须在回复末尾单独一行输出: @SPORE:FINAL@
+你必须使用 Spore 文本 DSL 协议回复。协议块标识符必须独占一行。
 
-示例1 - 简单任务:
+### 可用协议块
 
-    @SPORE:REPLY
-    你好，有什么可以帮你的？
+回复用户可见内容：
 
-    @SPORE:FINAL@
+```text
+@SPORE:REPLY_START
+给用户看的自然语言内容
+@SPORE:REPLY_END
+```
 
-示例2 - 调用工具:
+任务进度：
 
-    @SPORE:REPLY
-    我来读取文件内容。
-
-    @SPORE:ACTION
-    file type=read file_path="C:/test.txt"
-
-示例3 - 工具任务完成后:
-
-    @SPORE:REPLY
-    文件已修改完成，验证通过。
-
-    @SPORE:FINAL@
-
-示例4 - 带 TODO 的回复:
-
-    @SPORE:TODO
-    1. [completed] 读取文件
-    2. [pending] 修改内容
-
-    @SPORE:REPLY
-    我已经读取了文件，接下来会修改内容。
+```text
+@SPORE:TODO_START
+1. [pending] 步骤一
+2. [completed] 步骤二
+@SPORE:TODO_END
+```
 
 
-规则:
-- 给用户的回复内容必须放在 @SPORE:REPLY 块中
-- 完成任务 → 必须输出 @SPORE:FINAL@
-- **调用工具 → 必须输出 @SPORE:ACTION，不输出 @SPORE:FINAL@**
-- 不输出 @SPORE:FINAL@ = 系统认为任务未完成，会继续循环
-- **所有回复内容必须放在 @SPORE:REPLY 块中**，这样用户才能看到你的回复
-- 如果不输出回复内容，就不用写@SPORE:REPLY 块
-- **每次回复要么输出 @SPORE:ACTION（调用工具），要么输出 @SPORE:FINAL@（任务完成），不能两者都不输出**
+**CONTENT块（原始内容语法）**
 
-## 工具调用格式
+当参数值包含多行文本、代码、特殊字符时，使用CONTENT块传递。块内的所有内容原样保留，不会被解析器识别为协议指令或进行转义处理。类似于Python的raw string（`r""`），解决参数的转义问题。
 
-当需要使用工具时，按以下格式输出:
+格式：
 
-@SPORE:ACTION
-TOOL_NAME param=value
-
-**重要规则：**
-1. **每次回复只能包含一个 ACTION 块，即每次回复只能包含一个工具调用**
-2. 输出 ACTION 后等待系统返回工具执行结果
-3. 不要自己输出 RESULT
-系统会自动执行工具并返回结果，然后你可以根据结果继续回复。
+```text
+param=@SPORE:CONTENT_START
+任意内容，包括换行、引号、特殊字符
+都不会被转义或解析
+@SPORE:CONTENT_END
+```
 
 
-## 参数格式
+任务完成标记：
 
-- 简单值: param=value
-- 带空格: param="value with spaces"
-- 长文本/多行:
+```text
+@SPORE:FINAL@
+```
 
-    param=@SPORE:CONTENT
-    内容可包含任何字符
-    包括换行
-    @SPORE:CONTENT_END
+工具调用只能选择其中一种 ACTION 块。
 
-- JSON: param={{"key": "value"}}
+单个工具：
 
-**如果你的工具集中包含如下特定工具，则必须使用 @SPORE:CONTENT...@SPORE:CONTENT_END 格式的参数：**
-- file type=write 的 content 参数
-- edit 的 old_string 和 new_string 参数
-- edit type=multi 的 edits 中的 old_string 和 new_string
+```text
+@SPORE:ACTION_SINGLE_START
+file type=read file_path="C:/test.txt"
+@SPORE:ACTION_SINGLE_END
+```
 
-## 可用工具
+顺序执行多个工具，前一步失败时系统默认停止后续步骤：
+
+```text
+@SPORE:ACTION_SEQUENCE_START
+1. execute_command command="New-Item -ItemType Directory -Force output" working_dir="C:/project" timeout=30
+2. file type=write file_path="C:/project/output/a.txt" content=@SPORE:CONTENT_START
+hello
+@SPORE:CONTENT_END
+3. file type=read file_path="C:/project/output/a.txt"
+@SPORE:ACTION_SEQUENCE_END
+```
+
+{parallel_action_docs}
+
+### 隐形回复框架
+
+不要输出 REPLY_ONLY、ACTION_ONLY、FINAL_ONLY 这些框架名，它们只是系统内部概念。
+
+REPLY_ONLY：
+- 允许 REPLY 块
+- 可选 TODO 块
+- 禁止任意 ACTION 块
+
+ACTION_ONLY：
+- 可选简短 REPLY 块
+- 可选 TODO 块
+- 必须包含且只包含一个 {action_block_names} 块
+- 禁止包含 @SPORE:FINAL@
+- ACTION 块结束后立即停止输出
+
+FINAL_ONLY：
+- 必须包含 REPLY 块
+- 必须包含 @SPORE:FINAL@
+- 禁止任意 ACTION 块
+
+### 严格校验规则
+
+- 协议块外禁止出现非空内容
+- 所有 START/END 标记必须成对
+- 禁止未知 @SPORE: 标识符
+- 同一轮禁止出现多个 ACTION 块
+- ACTION 回复中禁止出现 @SPORE:FINAL@
+- 调用工具后不要自行输出 RESULT，系统会自动返回工具结果
+- 多行参数继续使用 `@SPORE:CONTENT_START ... @SPORE:CONTENT_END`
+
+### 可用工具
 
 {tool_docs}
 """
 
 
+PARALLEL_ACTION_DOCS = """并行执行多个工具，每个子操作必须有唯一 task_id：
+
+```text
+@SPORE:ACTION_PARALLEL_START
+task_id=read_readme tool=file type=read file_path="C:/project/README.md"
+task_id=grep_todos tool=Grep pattern="TODO" path="C:/project" output_mode=content -n=true head_limit=50
+@SPORE:ACTION_PARALLEL_END
+```
+"""
+
+
 class ProtocolManager:
-    """文本协议管理器"""
-    
-    TODO_MARKER = "@SPORE:TODO"
-    REPLY_MARKER = "@SPORE:REPLY"
-    
+    """Text protocol manager."""
+
+    BLOCK_MARKERS = {
+        "REPLY": ("@SPORE:REPLY_START", "@SPORE:REPLY_END"),
+        "TODO": ("@SPORE:TODO_START", "@SPORE:TODO_END"),
+        "ACTION_SINGLE": ("@SPORE:ACTION_SINGLE_START", "@SPORE:ACTION_SINGLE_END"),
+        "ACTION_SEQUENCE": ("@SPORE:ACTION_SEQUENCE_START", "@SPORE:ACTION_SEQUENCE_END"),
+        "ACTION_PARALLEL": ("@SPORE:ACTION_PARALLEL_START", "@SPORE:ACTION_PARALLEL_END"),
+    }
+    ACTION_BLOCK_NAMES = {"ACTION_SINGLE", "ACTION_SEQUENCE", "ACTION_PARALLEL"}
+    VALID_MARKERS = {
+        "@SPORE:REPLY_START",
+        "@SPORE:REPLY_END",
+        "@SPORE:TODO_START",
+        "@SPORE:TODO_END",
+        "@SPORE:ACTION_SINGLE_START",
+        "@SPORE:ACTION_SINGLE_END",
+        "@SPORE:ACTION_SEQUENCE_START",
+        "@SPORE:ACTION_SEQUENCE_END",
+        "@SPORE:ACTION_PARALLEL_START",
+        "@SPORE:ACTION_PARALLEL_END",
+        "@SPORE:FINAL@",
+        "@SPORE:CONTENT_START",
+        "@SPORE:CONTENT_END",
+    }
+    CONTENT_MARKERS = {"@SPORE:CONTENT_START", "@SPORE:CONTENT_END"}
+
     def __init__(self):
-        """初始化协议管理器"""
         self.action_parser = ActionParser()
         self.result_formatter = ResultFormatter()
         self.tool_doc_generator = ToolDocGenerator()
-    
-    def generate_protocol_instructions(self, tool_definitions: Dict[str, Dict[str, Any]]) -> str:
-        """
-        生成协议说明文本，包含工具文档
-        
-        Args:
-            tool_definitions: 工具定义字典
-            
-        Returns:
-            协议说明文本
-        """
-        # 生成工具文档
-        tool_docs = self.tool_doc_generator.generate(tool_definitions)
-        
-        # 填充模板
-        return PROTOCOL_TEMPLATE.format(tool_docs=tool_docs)
-    
-    def inject_protocol(self, original_prompt: str, tool_definitions: Dict[str, Dict[str, Any]]) -> str:
-        """
-        将协议说明注入到原始 prompt 中
-        
-        Args:
-            original_prompt: 原始 system prompt
-            tool_definitions: 工具定义字典
-            
-        Returns:
-            注入协议后的完整 prompt
-        """
-        protocol_instructions = self.generate_protocol_instructions(tool_definitions)
-        
-        # 在原始 prompt 后直接追加协议说明（模板已包含分隔符）
-        return original_prompt + protocol_instructions
-    
-    def _find_standalone_marker(self, response: str, marker: str) -> int:
-        """调用模块级函数"""
-        return find_standalone_marker(response, marker)
-    
-    def _extract_reply_content(self, response: str) -> Optional[str]:
-        """
-        从响应中提取 REPLY 块内容
-        
-        Args:
-            response: LLM 响应文本
-            
-        Returns:
-            REPLY 块内容，如果没有则返回 None
-        """
-        reply_pos = self._find_standalone_marker(response, self.REPLY_MARKER)
-        if reply_pos < 0:
-            return None
-        
-        # 提取 REPLY 块内容
-        content_start = reply_pos + len(self.REPLY_MARKER)
-        remaining = response[content_start:]
-        
-        # REPLY 块在下一个独占一行的标记处结束
-        end_markers = ["@SPORE:ACTION", "@SPORE:TODO", "@SPORE:RESULT", "@SPORE:FINAL@"]
-        min_end_pos = len(remaining)
-        for marker in end_markers:
-            # 使用 find_standalone_marker 查找独占一行的标记
-            pos = find_standalone_marker(remaining, marker)
-            if pos >= 0 and pos < min_end_pos:
-                min_end_pos = pos
-        
-        return remaining[:min_end_pos].strip() or None
-    
-    def parse_response(self, response: str) -> ParsedResponse:
-        """
-        解析 LLM 响应，提取 ACTION 或 FINAL_RESPONSE
-        
-        Args:
-            response: LLM 响应文本
-            
-        Returns:
-            ParsedResponse 对象
-        """
-        if not response:
-            return ParsedResponse(
-                response_type="continue",
-                raw_response=""
+
+    def _has_multi_agent_dispatch(self, tool_definitions: Dict[str, Dict[str, Any]]) -> bool:
+        return "multi_agent_dispatch" in tool_definitions
+
+    def _visibility_for_tools(self, tool_definitions: Dict[str, Dict[str, Any]]) -> tuple[bool, bool]:
+        has_multi_agent = self._has_multi_agent_dispatch(tool_definitions)
+        return not has_multi_agent, has_multi_agent
+
+    def _filter_prompt_for_tools(
+        self,
+        original_prompt: str,
+        tool_definitions: Dict[str, Dict[str, Any]],
+    ) -> str:
+        if not original_prompt:
+            return original_prompt
+
+        show_parallel, show_multi_agent = self._visibility_for_tools(tool_definitions)
+        prompt = original_prompt
+
+        if not show_parallel:
+            prompt = re.sub(
+                r"\n并行工具调用：\n\n@SPORE:ACTION_PARALLEL_START\n.*?@SPORE:ACTION_PARALLEL_END\n",
+                "\n",
+                prompt,
+                flags=re.S,
             )
-        
-        # 检查是否包含 FINAL_RESPONSE（必须独占一行）
-        final_marker = self.action_parser.FINAL_MARKER
-        final_pos = self._find_standalone_marker(response, final_marker)
-        if final_pos >= 0:
-            prefix_text = response[:final_pos].strip() if final_pos > 0 else None
-            final_content = response[final_pos + len(final_marker):].strip() or None
-            reply_content = self._extract_reply_content(response)
-            
+        else:
+            prompt = prompt.replace(
+                "- 无依赖的步骤可并发派发给子 Agent",
+                "- 无依赖的工具操作可使用 ACTION_PARALLEL 并发执行",
+            )
+
+        if not show_multi_agent:
+            prompt = re.sub(
+                r"\n---\n\n## 多 Agent 系统\n.*?(?=\n---\n\n## Skills 系统)",
+                "",
+                prompt,
+                flags=re.S,
+            )
+
+        return prompt
+
+    def generate_protocol_instructions(
+        self,
+        tool_definitions: Dict[str, Dict[str, Any]],
+    ) -> str:
+        show_parallel, show_multi_agent = self._visibility_for_tools(tool_definitions)
+        visible_tool_definitions = dict(tool_definitions)
+        if not show_multi_agent:
+            visible_tool_definitions.pop("multi_agent_dispatch", None)
+
+        tool_docs = self.tool_doc_generator.generate(visible_tool_definitions)
+        return PROTOCOL_TEMPLATE.format(
+            action_block_names="ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL" if show_parallel else "ACTION_SINGLE 或 ACTION_SEQUENCE",
+            parallel_action_docs=PARALLEL_ACTION_DOCS if show_parallel else "",
+            tool_docs=tool_docs,
+        )
+
+    def inject_protocol(
+        self,
+        original_prompt: str,
+        tool_definitions: Dict[str, Dict[str, Any]],
+    ) -> str:
+        return (
+            self._filter_prompt_for_tools(original_prompt, tool_definitions)
+            + self.generate_protocol_instructions(tool_definitions)
+        )
+
+    def _find_standalone_marker(self, response: str, marker: str) -> int:
+        return find_standalone_marker(response, marker)
+
+    def _extract_block_content(self, response: str, block_name: str) -> Optional[str]:
+        start_marker, end_marker = self.BLOCK_MARKERS[block_name]
+        start = self._find_standalone_marker(response, start_marker)
+        if start < 0:
+            return None
+        content_start = start + len(start_marker)
+        end = self._find_standalone_marker(response[content_start:], end_marker)
+        if end < 0:
+            return None
+        return response[content_start:content_start + end].strip() or None
+
+    def _scan_protocol(self, response: str) -> tuple[List[Dict[str, Any]], Optional[ProtocolError]]:
+        blocks: List[Dict[str, Any]] = []
+        stack: List[Dict[str, Any]] = []
+        content_spans: List[tuple[int, int]] = []
+        final_spans: List[tuple[int, int]] = []
+
+        marker_regex = re.compile(r"(?m)^[ \t]*(@SPORE:[A-Z_]+(?:_START|_END)?@?)[ \t]*(?:\r?\n|$)")
+        markers = list(marker_regex.finditer(response))
+        in_content = False
+
+        for match in markers:
+            marker = match.group(1)
+
+            if not in_content and stack and stack[-1]["name"] in self.ACTION_BLOCK_NAMES:
+                action_content_so_far = response[stack[-1]["content_start"]:match.start()]
+                if action_content_so_far.rfind("@SPORE:CONTENT_START") > action_content_so_far.rfind("@SPORE:CONTENT_END"):
+                    in_content = True
+
+            if in_content:
+                if marker == "@SPORE:CONTENT_END":
+                    in_content = False
+                continue
+
+            if marker not in self.VALID_MARKERS:
+                return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 标识符: {marker}")
+
+            if marker in self.CONTENT_MARKERS:
+                if not stack or stack[-1]["name"] not in self.ACTION_BLOCK_NAMES:
+                    return blocks, ProtocolError("unknown_protocol_block", f"{marker} 只能出现在 ACTION 参数内容中")
+                if marker == "@SPORE:CONTENT_START":
+                    in_content = True
+                else:
+                    return blocks, ProtocolError("mismatched_end_marker", "@SPORE:CONTENT_END 缺少对应的 @SPORE:CONTENT_START")
+                continue
+
+            if marker == "@SPORE:FINAL@":
+                final_spans.append((match.start(), match.end()))
+                blocks.append({
+                    "name": "FINAL",
+                    "start": match.start(),
+                    "end": match.end(),
+                    "content_start": match.start(),
+                    "content_end": match.end(),
+                    "content": "",
+                    "raw": match.group(0),
+                })
+                continue
+
+            if marker.endswith("_START"):
+                block_name = marker[len("@SPORE:"):-len("_START")]
+                if block_name not in self.BLOCK_MARKERS:
+                    return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 协议块: {marker}")
+                if stack:
+                    return blocks, ProtocolError("mismatched_end_marker", f"协议块不允许嵌套: {marker}")
+                stack.append({"name": block_name, "start_marker": marker, "start": match.start(), "content_start": match.end()})
+                continue
+
+            if marker.endswith("_END"):
+                block_name = marker[len("@SPORE:"):-len("_END")]
+                if block_name not in self.BLOCK_MARKERS:
+                    return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 协议块: {marker}")
+                if not stack:
+                    return blocks, ProtocolError("mismatched_end_marker", f"缺少开始标识符: {marker}")
+                open_block = stack.pop()
+                if open_block["name"] != block_name:
+                    return blocks, ProtocolError(
+                        "mismatched_end_marker",
+                        f"开始标识符 {open_block['start_marker']} 与结束标识符 {marker} 不匹配",
+                    )
+                blocks.append({
+                    "name": block_name,
+                    "start": open_block["start"],
+                    "end": match.end(),
+                    "content_start": open_block["content_start"],
+                    "content_end": match.start(),
+                    "content": response[open_block["content_start"]:match.start()].strip(),
+                    "raw": response[open_block["start"]:match.end()],
+                })
+                content_spans.append((open_block["start"], match.end()))
+
+        if in_content:
+            return blocks, ProtocolError("missing_end_marker", "缺少结束标识符: @SPORE:CONTENT_END")
+
+        if stack:
+            open_block = stack[-1]
+            return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: @SPORE:{open_block['name']}_END")
+
+        if len(final_spans) > 1:
+            return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:FINAL@")
+        if final_spans:
+            content_spans.append(final_spans[0])
+
+        uncovered = self._content_outside_spans(response, content_spans)
+        if uncovered:
+            return blocks, ProtocolError("content_outside_block", "协议块外存在非空内容")
+
+        return blocks, None
+
+    def _content_outside_spans(self, response: str, spans: List[tuple[int, int]]) -> str:
+        if not response.strip():
+            return ""
+
+        spans = sorted(spans)
+        parts: List[str] = []
+        cursor = 0
+        for start, end in spans:
+            if start > cursor:
+                parts.append(response[cursor:start])
+            cursor = max(cursor, end)
+        if cursor < len(response):
+            parts.append(response[cursor:])
+
+        return "".join(parts).strip()
+
+    def parse_response(self, response: str) -> ParsedResponse:
+        if not response:
+            return ParsedResponse(response_type="continue", raw_response="")
+
+        blocks, error = self._scan_protocol(response)
+        if error:
+            return ParsedResponse(
+                response_type="protocol_error",
+                raw_response=response,
+                protocol_error=error,
+            )
+
+        final_blocks = [block for block in blocks if block["name"] == "FINAL"]
+        final_pos = final_blocks[0]["start"] if final_blocks else -1
+        has_final = bool(final_blocks)
+        action_blocks = [block for block in blocks if block["name"] in self.ACTION_BLOCK_NAMES]
+        reply_blocks = [block for block in blocks if block["name"] == "REPLY"]
+        todo_blocks = [block for block in blocks if block["name"] == "TODO"]
+
+        if len(reply_blocks) > 1:
+            return ParsedResponse(
+                response_type="protocol_error",
+                raw_response=response,
+                protocol_error=ProtocolError("multiple_reply_blocks", "同一轮回复中只能包含一个 REPLY 块"),
+            )
+
+        if len(todo_blocks) > 1:
+            return ParsedResponse(
+                response_type="protocol_error",
+                raw_response=response,
+                protocol_error=ProtocolError("multiple_todo_blocks", "同一轮回复中只能包含一个 TODO 块"),
+            )
+
+        if len(action_blocks) > 1:
+            return ParsedResponse(
+                response_type="protocol_error",
+                raw_response=response,
+                protocol_error=ProtocolError("multiple_action_blocks", "同一轮回复中只能包含一个 ACTION 块"),
+            )
+
+        if action_blocks and has_final:
+            return ParsedResponse(
+                response_type="protocol_error",
+                raw_response=response,
+                protocol_error=ProtocolError("action_with_final", "ACTION 回复中禁止出现 @SPORE:FINAL@"),
+            )
+
+        reply_content = reply_blocks[0]["content"] if reply_blocks else None
+
+        if action_blocks:
+            action_block_info = action_blocks[0]
+            mode = self._action_name_to_mode(action_block_info["name"])
+            parsed_block = self.action_parser.parse_block(
+                response,
+                mode=mode,
+                content=action_block_info["content"],
+                raw_text=action_block_info["raw"],
+            )
+            if parsed_block is None:
+                return ParsedResponse(
+                    response_type="protocol_error",
+                    raw_response=response,
+                    protocol_error=ProtocolError("invalid_action_block", self._invalid_action_message(mode)),
+                )
+
+            return ParsedResponse(
+                response_type="action",
+                prefix_text=reply_content,
+                reply_content=reply_content,
+                action=parsed_block.first_action,
+                action_block=parsed_block,
+                raw_response=response,
+            )
+
+        if has_final:
+            if not reply_content:
+                return ParsedResponse(
+                    response_type="protocol_error",
+                    raw_response=response,
+                    protocol_error=ProtocolError("missing_reply_block", "FINAL_ONLY 回复必须包含 REPLY 块"),
+                )
+            final_content = response[final_pos + len(self.action_parser.FINAL_MARKER):].strip() or None
             return ParsedResponse(
                 response_type="final",
-                prefix_text=prefix_text,
+                prefix_text=reply_content,
                 reply_content=reply_content,
                 final_content=final_content,
-                raw_response=response
+                raw_response=response,
             )
-        
-        # 检查是否包含 ACTION（必须独占一行）
-        action_marker = self.action_parser.ACTION_MARKER
-        action_pos = self._find_standalone_marker(response, action_marker)
-        if action_pos >= 0:
-            prefix_text = response[:action_pos].strip() if action_pos > 0 else None
-            reply_content = self._extract_reply_content(response)
-            
-            # 解析 ACTION 块（只传递从 ACTION 标记开始的部分）
-            action = self.action_parser.parse(response[action_pos:])
-            
-            # 只有成功解析出 action 才返回 action 类型
-            # 如果 action 为 None（只有标记没有内容），则当作 continue 类型处理
-            if action:
-                return ParsedResponse(
-                    response_type="action",
-                    prefix_text=prefix_text,
-                    reply_content=reply_content,
-                    action=action,
-                    raw_response=response
-                )
-            else:
-                # ACTION 标记存在但解析失败，当作 continue 处理
-                return ParsedResponse(
-                    response_type="continue",
-                    prefix_text=prefix_text,
-                    reply_content=reply_content,
-                    raw_response=response
-                )
-        
-        # 既没有 ACTION 也没有 FINAL_RESPONSE
-        reply_content = self._extract_reply_content(response)
+
         return ParsedResponse(
             response_type="continue",
-            prefix_text=response.strip() if response.strip() else None,
+            prefix_text=reply_content,
             reply_content=reply_content,
-            raw_response=response
+            raw_response=response,
         )
-    
+
+    def _action_name_to_mode(self, name: str) -> ActionMode:
+        if name == "ACTION_SEQUENCE":
+            return "sequence"
+        if name == "ACTION_PARALLEL":
+            return "parallel"
+        return "single"
+
+    def _invalid_action_message(self, mode: ActionMode) -> str:
+        if mode == "sequence":
+            return "ACTION_SEQUENCE 必须包含按顺序编号的工具调用，例如 `1. file type=read ...`"
+        if mode == "parallel":
+            return "ACTION_PARALLEL 的每个子操作必须包含唯一 task_id，例如 `task_id=readme tool=file type=read ...`"
+        return "ACTION_SINGLE 必须包含且只包含一个有效工具调用"
+
     def format_result(self, result: Any, tool_name: Optional[str] = None) -> str:
-        """
-        格式化工具执行结果为 RESULT 块
-        
-        Args:
-            result: 工具执行结果
-            tool_name: 工具名称（可选）
-            
-        Returns:
-            格式化后的 RESULT 块字符串
-        """
         return self.result_formatter.format(result, tool_name)
-    
+
     def format_error(self, error_message: str, tool_name: Optional[str] = None) -> str:
-        """
-        格式化错误信息为 RESULT 块
-        
-        Args:
-            error_message: 错误信息
-            tool_name: 工具名称（可选）
-            
-        Returns:
-            格式化后的 RESULT 块字符串
-        """
         return self.result_formatter.format_error(error_message, tool_name)
-    
+
     def format_interrupt(self, tool_name: Optional[str] = None) -> str:
-        """
-        格式化中断信息为 RESULT 块
-        
-        Args:
-            tool_name: 被中断的工具名称（可选）
-            
-        Returns:
-            格式化后的 RESULT 块字符串
-        """
         return self.result_formatter.format_interrupt(tool_name)
-    
+
     def format_not_found(self, tool_name: str) -> str:
-        """
-        格式化工具未找到错误为 RESULT 块
-        
-        Args:
-            tool_name: 未找到的工具名称
-            
-        Returns:
-            格式化后的 RESULT 块字符串
-        """
         return self.result_formatter.format_not_found(tool_name)
-    
+
     def format_parse_error(self, error_message: str) -> str:
-        """
-        格式化解析错误为 RESULT 块
-        
-        Args:
-            error_message: 解析错误信息
-            
-        Returns:
-            格式化后的 RESULT 块字符串
-        """
         return self.result_formatter.format_parse_error(error_message)
-    
+
+    def format_protocol_error(self, error: ProtocolError) -> str:
+        return self.result_formatter.format_protocol_error(error.code, error.message)
+
     def parse_todo_from_response(self, response: str) -> Optional[List[Dict[str, str]]]:
-        """
-        从 LLM 响应中解析 TODO 块并转换为任务列表
-        
-        支持 TODO 在 ACTION 之前或之后的位置
-        支持两种格式：
-        - 状态在前: [status] content
-        - 状态在后: content [status] 或 content  [status]
-        
-        Args:
-            response: LLM 响应文本
-            
-        Returns:
-            任务列表，每项包含 content 和 status；如果没有 TODO 块返回 None
-        """
-        if not response:
-            return None
-        
-        # 找到独占一行的 TODO 标记
-        todo_pos = self._find_standalone_marker(response, self.TODO_MARKER)
-        if todo_pos < 0:
-            return None
-        
-        todo_content = response[todo_pos + len(self.TODO_MARKER):].strip()
-        
-        # TODO 块在下一个独占一行的标记处结束
-        end_markers = ["@SPORE:ACTION", "@SPORE:FINAL@", "@SPORE:TODO", "@SPORE:RESULT", "@SPORE:REPLY"]
-        min_end_pos = len(todo_content)
-        for marker in end_markers:
-            # 使用 find_standalone_marker 查找独占一行的标记
-            pos = find_standalone_marker(todo_content, marker)
-            if pos >= 0 and pos < min_end_pos:
-                min_end_pos = pos
-        
-        todo_content = todo_content[:min_end_pos].strip()
-        
+        todo_content = self._extract_block_content(response, "TODO")
         if not todo_content:
             return None
-        
-        # 解析 TODO 内容
-        # 支持格式: 
-        # - 1. [status] content（状态在前）
-        # - 1. content [status]（状态在后）
-        # - 1.content  [status]（无空格，状态在后）
-        tasks = []
-        lines = todo_content.split('\n')
-        
-        for line in lines:
+
+        tasks: List[Dict[str, str]] = []
+        for line in todo_content.split("\n"):
             line = line.strip()
             if not line:
                 continue
-            
-            # 移除序号前缀 (1. 2. 3. 或 - )
+
             if line[0].isdigit():
-                # 找到第一个非数字非点的位置
                 i = 0
-                while i < len(line) and (line[i].isdigit() or line[i] == '.'):
+                while i < len(line) and (line[i].isdigit() or line[i] == "."):
                     i += 1
                 line = line[i:].strip()
-            elif line.startswith('-'):
+            elif line.startswith("-"):
                 line = line[1:].strip()
-            
-            # 解析状态
+
             status = "pending"
             content = line
-            
-            # 先尝试状态在前的格式: [status] content
-            if line.startswith('['):
-                bracket_end = line.find(']')
+
+            if line.startswith("["):
+                bracket_end = line.find("]")
                 if bracket_end > 0:
-                    status_str = line[1:bracket_end].strip().lower()
+                    status = self._parse_status(line[1:bracket_end].strip().lower())
                     content = line[bracket_end + 1:].strip()
-                    status = self._parse_status(status_str)
             else:
-                # 尝试状态在后的格式: content [status] 或 content  [status]
-                # 查找最后一个 [...] 模式
-                import re
-                match = re.search(r'\[([^\]]*)\]\s*$', line)
+                match = re.search(r"\[([^\]]*)\]\s*$", line)
                 if match:
-                    status_str = match.group(1).strip().lower()
+                    status = self._parse_status(match.group(1).strip().lower())
                     content = line[:match.start()].strip()
-                    status = self._parse_status(status_str)
-            
+
             if content:
                 tasks.append({"content": content, "status": status})
-        
+
         return tasks if tasks else None
-    
+
     def _parse_status(self, status_str: str) -> str:
-        """解析状态字符串为标准状态值"""
-        # 映射各种状态表示
-        if status_str in ['completed', 'done', '完成', '已完成', '√', 'v', 'x√']:
+        if status_str in {"completed", "done", "完成", "已完成", "v", "x"}:
             return "completed"
-        elif status_str in ['failed', 'fail', '失败', '已失败', 'x', '×']:
+        if status_str in {"failed", "fail", "失败", "已失败"}:
             return "failed"
-        else:
-            # pending, 空格, 空字符串等都视为 pending
-            return "pending"
+        return "pending"

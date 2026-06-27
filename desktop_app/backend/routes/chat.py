@@ -32,9 +32,9 @@ def extract_user_visible_content(reply: str) -> str:
     从 AI 回复中提取用户可见的内容，去除协议标记
     
     协议标记包括：
-    - @SPORE:REPLY ... (提取其中的内容作为用户可见内容)
-    - @SPORE:TODO ... (到下一个标记或文本结束)
-    - @SPORE:ACTION ... (到 @SPORE:CONTENT_END 或下一个标记或文本结束)
+    - @SPORE:REPLY_START ... @SPORE:REPLY_END (提取其中的内容作为用户可见内容)
+    - @SPORE:TODO_START ... @SPORE:TODO_END
+    - @SPORE:ACTION_SINGLE/SEQUENCE/PARALLEL_START ... END
     - ### RULE_REMINDER
     - @SPORE:FINAL@
     - @SPORE:CONTENT_END
@@ -42,93 +42,36 @@ def extract_user_visible_content(reply: str) -> str:
     if not reply:
         return ""
     
-    # 优先提取 @SPORE:REPLY 块内容
-    reply_marker = "@SPORE:REPLY"
-    reply_pos = -1
-    lines = reply.split('\n')
-    for i, line in enumerate(lines):
-        # 只匹配独占一行的 @SPORE:REPLY（避免误匹配回复内容中提到的标记）
-        if line.strip() == reply_marker:
-            reply_pos = i
-            break
-    
-    if reply_pos >= 0:
-        # 找到 REPLY 块，提取其内容
-        reply_lines = []
-        end_markers = ['@SPORE:ACTION', '@SPORE:TODO', '@SPORE:RESULT', '@SPORE:FINAL@']
-        for i in range(reply_pos + 1, len(lines)):
-            line = lines[i]
-            stripped = line.strip()
-            # 检查是否遇到结束标记（也要求独占一行）
-            is_end = False
-            for marker in end_markers:
-                if stripped == marker:
-                    is_end = True
-                    break
-            if is_end:
-                break
-            reply_lines.append(line)
-        return '\n'.join(reply_lines).strip()
-    
-    # 没有 REPLY 块，使用原有逻辑
-    # 先找到 @SPORE:ACTION 的位置，截取之前的内容
-    action_pos = -1
-    for i, line in enumerate(lines):
-        if line.strip().startswith('@SPORE:ACTION'):
-            action_pos = i
-            break
-    
-    # 如果有 ACTION，只处理 ACTION 之前的内容
-    if action_pos >= 0:
-        lines = lines[:action_pos]
-    
     visible_lines = []
-    in_todo_block = False
-    
-    # 协议结束标记
-    end_markers = ['@SPORE:FINAL@', '@SPORE:CONTENT_END']
+    in_protocol_block = False
+    lines = reply.split('\n')
+
+    for i, line in enumerate(lines):
+        if line.strip() == "@SPORE:REPLY_START":
+            reply_lines = []
+            for candidate in lines[i + 1:]:
+                if candidate.strip() == "@SPORE:REPLY_END":
+                    return "\n".join(reply_lines).strip()
+                reply_lines.append(candidate)
+            return "\n".join(reply_lines).strip()
     
     for line in lines:
         stripped = line.strip()
-        
-        # 检查是否是 TODO 块开始
-        if stripped.startswith('@SPORE:TODO'):
-            in_todo_block = True
+
+        if re.match(r"^@SPORE:(TODO|ACTION_SINGLE|ACTION_SEQUENCE|ACTION_PARALLEL)_START$", stripped):
+            in_protocol_block = True
             continue
-        
-        # 检查是否是 RULE_REMINDER（单行跳过）
-        if stripped.startswith('### RULE_REMINDER'):
+
+        if re.match(r"^@SPORE:(TODO|ACTION_SINGLE|ACTION_SEQUENCE|ACTION_PARALLEL)_END$", stripped):
+            in_protocol_block = False
             continue
-        
-        # TODO 块内：直到遇到下一个标记或空行结束
-        if in_todo_block:
-            if stripped.startswith('@SPORE:'):
-                in_todo_block = False
-                # 如果是其他协议标记，继续跳过
-                if stripped.startswith('@SPORE:TODO') or stripped.startswith('### RULE_REMINDER'):
-                    continue
-            elif stripped == '':
-                # 空行可能是 TODO 块结束，也可能是 TODO 内的空行
-                # 保守处理：继续跳过
-                continue
-            else:
-                # TODO 块内的内容，跳过
-                continue
-        
-        # 跳过/清理结束标记
-        has_marker = False
-        for marker in end_markers:
-            if marker in line:
-                has_marker = True
-                line = line.replace(marker, '')
-                break
-        
-        if has_marker:
-            if line.strip():
-                visible_lines.append(line)
+
+        if stripped in {"@SPORE:FINAL@", "@SPORE:CONTENT_START", "@SPORE:CONTENT_END"}:
             continue
-        
-        # 普通内容
+
+        if stripped.startswith('### RULE_REMINDER') or in_protocol_block:
+            continue
+
         visible_lines.append(line)
     
     return '\n'.join(visible_lines).strip()
@@ -197,7 +140,10 @@ async def send_message(req: ChatRequest):
     }
     base_prompt = load_system_prompt() or ""
     protocol_manager = ProtocolManager()
-    system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
+    system_prompt = protocol_manager.inject_protocol(
+        base_prompt,
+        tool_definitions,
+    )
     
     # 获取或创建该会话的 ConversationLoop 实例
     conv_loop = conv_loop_manager.get_loop(

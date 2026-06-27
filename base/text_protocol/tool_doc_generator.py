@@ -210,7 +210,7 @@ class ToolDocGenerator:
         required = parameters.get("required", [])
         
         if not properties:
-            return f"```\n@SPORE:ACTION\n{name}\n```"
+            return f"```\n@SPORE:ACTION_SINGLE_START\n{name}\n@SPORE:ACTION_SINGLE_END\n```"
         
         # 构建示例参数
         example_params = []
@@ -221,9 +221,9 @@ class ToolDocGenerator:
         
         if example_params:
             params_str = " ".join(example_params)
-            return f"```\n@SPORE:ACTION\n{name} {params_str}\n```"
+            return f"```\n@SPORE:ACTION_SINGLE_START\n{name} {params_str}\n@SPORE:ACTION_SINGLE_END\n```"
         else:
-            return f"```\n@SPORE:ACTION\n{name}\n```"
+            return f"```\n@SPORE:ACTION_SINGLE_START\n{name}\n@SPORE:ACTION_SINGLE_END\n```"
     
     def _get_example_value(self, param_name: str, param_def: Dict[str, Any]) -> str:
         """获取参数的示例值"""

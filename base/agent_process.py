@@ -10,6 +10,7 @@ import time
 import multiprocessing as mp
 import logging
 import json
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,7 +21,7 @@ from .event_signal import EventSignalManager, get_event_signal_manager
 from .tools import TOOL_DEFINITIONS, TOOL_HANDLERS
 from .logger import log_error, log_info, log_tool_error
 from .multi_agent_monitor import create_agent_terminal, close_all_terminals, AgentTerminal
-from .text_protocol import ProtocolManager
+from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock
 from .utils import check_tool_result_error
 
 
@@ -388,40 +389,43 @@ class SubAgentThread(threading.Thread):
                 parsed = self.protocol_manager.parse_response(reply_content)
                 
                 if parsed.response_type == "action":
-                    # 检查 ACTION 是否解析成功
-                    if parsed.action is None:
-                        # ACTION 块存在但解析失败（可能只有标记没有内容）
-                        self.log_output("检测到 ACTION 标记但没有工具调用内容", "WARNING")
-                        self._log_to_agent_file(
-                            f"ACTION 解析失败 (迭代 {iteration})\n回复内容: {reply_content}",
-                            "WARNING"
-                        )
-                        
-                        # 添加到消息历史
+                    if parsed.action_block is None:
                         self.messages.append({
                             "role": "assistant",
                             "content": reply_content
                         })
-                        
-                        # 提示 LLM 正确输出工具调用
                         self.messages.append({
                             "role": "user",
-                            "content": "你输出了 @SPORE:ACTION 标记，但没有提供工具名称和参数。请按照以下格式输出：\n\n@SPORE:ACTION\nTOOL_NAME param1=value1 param2=value2\n\n或者如果任务已完成，请输出 @SPORE:FINAL@ 标记。"
+                            "content": self.protocol_manager.format_parse_error("ACTION 块解析失败")
                         })
                         continue
-                    
-                    # 有 ACTION 块，执行工具
-                    result = self._handle_action(parsed.action, parsed.prefix_text, reply_content)
+                    result = self._handle_action_block(parsed.action_block, parsed.prefix_text, reply_content)
                     if result == "break":
                         return
                     # 重置循环检测
                     self._last_answer = ""
                     continue
+
+                elif parsed.response_type == "protocol_error":
+                    self.log_output(f"协议错误: {parsed.protocol_error.code}", "WARNING")
+                    self._log_to_agent_file(
+                        f"协议错误 (迭代 {iteration}) {parsed.protocol_error.code}: {parsed.protocol_error.message}\n回复内容: {reply_content}",
+                        "WARNING"
+                    )
+                    self.messages.append({
+                        "role": "assistant",
+                        "content": reply_content
+                    })
+                    self.messages.append({
+                        "role": "user",
+                        "content": self.protocol_manager.format_protocol_error(parsed.protocol_error)
+                    })
+                    continue
                 
                 elif parsed.response_type == "final":
-                    # 检测到 FINAL_RESPONSE，任务完成
-                    if parsed.prefix_text:
-                        self.log_output(f"回复: {parsed.prefix_text}")
+                    # 检测到 FINAL，任务完成
+                    if parsed.reply_content:
+                        self.log_output(f"回复: {parsed.reply_content}")
                     
                     # 添加 assistant 消息到对话历史
                     self.messages.append({
@@ -442,8 +446,8 @@ class SubAgentThread(threading.Thread):
                     return
                 
                 else:
-                    # continue 类型：既没有 ACTION 也没有 FINAL_RESPONSE
-                    current_answer = parsed.prefix_text or reply_content.strip()
+                    # continue 类型：既没有 ACTION 也没有 FINAL
+                    current_answer = parsed.reply_content or parsed.prefix_text or reply_content.strip()
                     
                     # 过滤掉只包含 < 或 <<< 等不完整标记的情况
                     display_answer = ""
@@ -486,11 +490,11 @@ class SubAgentThread(threading.Thread):
                     # 添加user消息提示继续执行
                     self.messages.append({
                         "role": "user",
-                        "content": "请继续执行任务。如果需要使用工具，请输出ACTION块；如果任务已完成，请输出@SPORE:FINAL@标记。"
+                        "content": "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请输出 REPLY 块和 @SPORE:FINAL@ 标记。"
                     })
                     
                     self._log_to_agent_file(
-                        f"LLM未输出ACTION或FINAL_RESPONSE，提示继续执行",
+                        f"LLM未输出ACTION或FINAL，提示继续执行",
                         "WARNING"
                     )
                     continue
@@ -548,28 +552,12 @@ class SubAgentThread(threading.Thread):
             )
             self.log_output(f"工具返回错误: {error_msg}", "WARNING")
     
-    def _handle_action(self, action, prefix_text: str, full_reply: str) -> str:
-        """
-        处理 ACTION 块中的工具调用（文本协议）
-        
-        Args:
-            action: 解析后的 ACTION 数据
-            prefix_text: ACTION 块之前的文本内容
-            full_reply: 完整的 LLM 回复
-        
-        Returns:
-            如果需要中断返回 "break"，否则返回 "continue"
-        """
+    def _execute_single_action(self, action: ParsedAction, prefix_text: str = "") -> Dict[str, Any]:
+        """执行一个工具调用并返回结构化状态。"""
         tool_name = action.tool_name
         args = action.parameters
-        
-        # 显示 LLM 的说明内容（如果有）
-        if prefix_text:
-            self.log_output(f"说明: {prefix_text}")
-        
+
         self.log_output(f"调用工具: {tool_name}")
-        
-        # 记录工具调用到数据库
         self.database.record_tool_call(
             tool_name=tool_name,
             arguments=args,
@@ -583,64 +571,125 @@ class SubAgentThread(threading.Thread):
             f"调用工具: {tool_name}\n参数:\n{args_str}",
             "INFO"
         )
-        
-        # 添加 assistant 消息到对话历史（包含完整的 ACTION 块）
+
+        handler = TOOL_HANDLERS.get(tool_name)
+        if handler is None:
+            log_tool_error(tool_name, "未找到工具处理器", args,
+                          context={"available_tools": list(TOOL_HANDLERS.keys()), "requested_tool": tool_name})
+            return {"status": "error", "tool_name": tool_name, "arguments": args, "error": f"Tool not found: {tool_name}"}
+
+        try:
+            from base.utils.system_io import set_current_agent_id
+            set_current_agent_id(self.agent_id)
+
+            tool_result = handler(args)
+            if tool_result is None:
+                self.log_output("工具执行被中断")
+                self.database.set_status(AgentStatus.INTERRUPTED)
+                return {"status": "interrupted", "tool_name": tool_name, "arguments": args, "error": f"Tool interrupted: {tool_name}"}
+
+            self._check_and_log_tool_result_error(tool_name, tool_result, args)
+            result_preview = tool_result[:500] if isinstance(tool_result, str) and len(tool_result) > 500 else tool_result
+            self._log_to_agent_file(
+                f"工具执行完成: {tool_name}\n结果预览: {result_preview}",
+                "INFO"
+            )
+            return {"status": "success", "tool_name": tool_name, "arguments": args, "result": tool_result}
+
+        except Exception as e:
+            log_tool_error(tool_name, f"工具执行异常: {str(e)}", args, e)
+            self.log_output(f"工具执行异常: {e}", "ERROR")
+            return {"status": "error", "tool_name": tool_name, "arguments": args, "error": str(e)}
+
+    def _format_single_execution_result(self, execution: Dict[str, Any]) -> str:
+        status = execution.get("status")
+        tool_name = execution.get("tool_name")
+        if status == "success":
+            return self.protocol_manager.format_result(execution.get("result"), tool_name)
+        if status == "interrupted":
+            return self.protocol_manager.format_interrupt(tool_name)
+        if status == "error" and str(execution.get("error", "")).startswith("Tool not found:"):
+            return self.protocol_manager.format_not_found(tool_name)
+        return self.protocol_manager.format_error(execution.get("error", "Tool execution failed"), tool_name)
+
+    def _handle_action_block(
+        self,
+        action_block: ParsedActionBlock,
+        prefix_text: str,
+        full_reply: str,
+    ) -> str:
+        """处理 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块。"""
+        if prefix_text:
+            self.log_output(f"说明: {prefix_text}")
+
         self.messages.append({
             "role": "assistant",
             "content": full_reply
         })
-        
-        # 获取工具处理器
-        handler = TOOL_HANDLERS.get(tool_name)
-        
-        if handler is None:
-            # 工具未找到
-            result_text = self.protocol_manager.format_not_found(tool_name)
-            log_tool_error(tool_name, "未找到工具处理器", args,
-                          context={"available_tools": list(TOOL_HANDLERS.keys()), "requested_tool": tool_name})
+
+        should_break = False
+        if action_block.mode == "single":
+            execution = self._execute_single_action(action_block.first_action, prefix_text)
+            result_text = self._format_single_execution_result(execution)
+            should_break = execution.get("status") == "interrupted"
+
+        elif action_block.mode == "sequence":
+            results = []
+            stopped_at = None
+            for action in action_block.actions:
+                execution = self._execute_single_action(action, prefix_text)
+                step_result = {
+                    "step": action.step_index,
+                    "tool_name": action.tool_name,
+                    "status": execution.get("status"),
+                }
+                if "result" in execution:
+                    step_result["result"] = execution["result"]
+                if "error" in execution:
+                    step_result["error"] = execution["error"]
+                results.append(step_result)
+
+                if execution.get("status") != "success":
+                    stopped_at = action.step_index
+                    should_break = execution.get("status") == "interrupted"
+                    break
+
+            result_text = self.protocol_manager.format_result({
+                "mode": "sequence",
+                "stop_on_error": True,
+                "stopped_at": stopped_at,
+                "results": results,
+            }, "ACTION_SEQUENCE")
+
         else:
-            try:
-                # 直接在当前线程执行工具（不使用 ThreadPoolExecutor）
-                # 这样可以保持 threading.local() 的读取标志在同一线程中
-                # 子Agent本身已经在独立线程中运行，不需要额外的线程池
-                tool_result = handler(args)
-                
-                # 如果工具返回 None，表示被中断
-                if tool_result is None:
-                    result_text = self.protocol_manager.format_interrupt(tool_name)
-                    self.messages.append({
-                        "role": "user",
-                        "content": result_text
-                    })
-                    self.log_output("工具执行被中断")
-                    self.database.set_status(AgentStatus.INTERRUPTED)
-                    return "break"
-                
-                # 检查工具返回结果是否包含错误（JSON格式的错误响应）
-                self._check_and_log_tool_result_error(tool_name, tool_result, args)
-                
-                # 格式化工具结果
-                result_text = self.protocol_manager.format_result(tool_result, tool_name)
-                
-                # 记录工具执行结果到子Agent日志
-                result_preview = tool_result[:500] if isinstance(tool_result, str) and len(tool_result) > 500 else tool_result
-                self._log_to_agent_file(
-                    f"工具执行完成: {tool_name}\n结果预览: {result_preview}",
-                    "INFO"
-                )
-                
-            except Exception as e:
-                result_text = self.protocol_manager.format_error(str(e), tool_name)
-                log_tool_error(tool_name, f"工具执行异常: {str(e)}", args, e)
-                self.log_output(f"工具执行异常: {e}", "ERROR")
+            results = {}
+            max_workers = max(1, len(action_block.actions))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [(executor.submit(self._execute_single_action, action, prefix_text), action) for action in action_block.actions]
+                for future, action in futures:
+                    execution = future.result()
+                    task_id = action.task_id or action.tool_name
+                    entry = {
+                        "task_id": task_id,
+                        "tool_name": action.tool_name,
+                        "status": execution.get("status"),
+                    }
+                    if "result" in execution:
+                        entry["result"] = execution["result"]
+                    if "error" in execution:
+                        entry["error"] = execution["error"]
+                    results[task_id] = entry
+                    if execution.get("status") == "interrupted":
+                        should_break = True
+
+            result_text = self.protocol_manager.format_result({"mode": "parallel", "results": results}, "ACTION_PARALLEL")
         
-        # 添加 RESULT 到对话历史（作为 user 消息）
         self.messages.append({
             "role": "user",
             "content": result_text
         })
-        
-        return "continue"
+
+        return "break" if should_break else "continue"
     
     def terminate(self) -> None:
         """中断此Agent"""

@@ -99,14 +99,24 @@ def main() -> int:
     # 注入文本协议（主agent使用指定的工具子集）
     tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tools if name in TOOL_DEFINITIONS}
     protocol_manager = ProtocolManager()
-    system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
+    initial_effective_mode = "strong_context" if context_mode == "auto" else context_mode
+    system_prompt = protocol_manager.inject_protocol(
+        base_prompt,
+        tool_definitions,
+    )
 
     # 设置主 Agent 的 agent_id（用于文件修改标志）
     from base.utils.system_io import set_current_agent_id
     set_current_agent_id("main_agent")
 
     # 初始化对话循环处理器（传入工具列表用于动态重载prompt时注入协议）
-    conv_loop = ConversationLoop(state, ipc_manager, config, system_prompt, tool_names=current_tools)
+    conv_loop = ConversationLoop(
+        state,
+        ipc_manager,
+        config,
+        system_prompt,
+        tool_names=current_tools,
+    )
     
     # 打印帮助信息
     cli_handler.print_help()
@@ -132,6 +142,20 @@ def main() -> int:
         
         # 使用processed_input或原始user_input作为实际输入
         actual_input = processed_input if processed_input else user_input
+
+        # CLI mode 命令只更新 state，这里同步本轮实际工具集。
+        if state.context_mode != "auto":
+            new_tools = get_tools_for_mode(state.context_mode)
+            if new_tools != current_tools:
+                current_tools = new_tools
+                tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tools if name in TOOL_DEFINITIONS}
+                system_prompt = protocol_manager.inject_protocol(
+                    base_prompt,
+                    tool_definitions,
+                )
+                conv_loop.system_prompt = system_prompt
+                conv_loop.tool_names = current_tools
+                print(f"[系统] 已切换到 {state.context_mode} 模式的工具集")
         
         # 如果是auto模式，先判断应该使用哪种模式
         if state.context_mode == "auto":
@@ -143,7 +167,10 @@ def main() -> int:
             if new_tools != current_tools:
                 current_tools = new_tools
                 tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tools if name in TOOL_DEFINITIONS}
-                system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
+                system_prompt = protocol_manager.inject_protocol(
+                    base_prompt,
+                    tool_definitions,
+                )
                 conv_loop.system_prompt = system_prompt
                 conv_loop.tool_names = current_tools
                 print(f"[系统] 已切换到 {selected_mode} 模式的工具集")
@@ -163,7 +190,10 @@ def main() -> int:
         # 检查是否需要注入规则提醒（防止长对话遗忘）
         # 基于 LLM 回复次数触发，而不是用户消息次数
         if should_remind(state.llm_reply_count, config.rule_reminder_interval):
-            reminder = get_rule_reminder(short=config.rule_reminder_short)
+            reminder = get_rule_reminder(
+                short=config.rule_reminder_short,
+                tool_names=current_tools,
+            )
             # 将提醒追加到最后一条用户消息中
             if state.messages and state.messages[-1]["role"] == "user":
                 state.messages[-1]["content"] += f"\n\n{reminder}"
@@ -187,7 +217,7 @@ def main() -> int:
                 reply = reply_data.get("content", "")
                 
                 # 使用文本协议验证和处理响应
-                # validate_and_check_response 会解析 ACTION/FINAL_RESPONSE 并处理
+                # validate_and_check_response 会解析 ACTION/FINAL 并处理
                 validation_result = conv_loop.validate_and_check_response(reply)
                 if validation_result == "continue":
                     continue

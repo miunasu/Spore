@@ -2,7 +2,7 @@
 对话循环处理器
 
 处理主要的对话循环逻辑，包括消息管理、子agent恢复、LLM交互等。
-使用文本协议（ACTION / RESULT / FINAL_RESPONSE）与 LLM 交互。
+使用文本协议（ACTION_SINGLE / ACTION_SEQUENCE / ACTION_PARALLEL / RESULT / FINAL）与 LLM 交互。
 """
 import json
 import time
@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from .state_manager import ConversationState
 from .tools import TOOL_HANDLERS, TOOL_DEFINITIONS
-from .text_protocol import ProtocolManager, ParsedAction, is_standalone_marker
+from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock, is_standalone_marker
 from .utils import (
     json_query, 
     validate_json_response, 
@@ -30,7 +30,6 @@ from .utils.system_io import set_current_agent_id, get_current_agent_id
 from .todo_manager import todo_write
 from .logger import log_error, log_tool_error
 from .prompt_loader import load_system_prompt
-from AutoAgent import end_check
 from AutoAgent.supervisor import supervisor
 from .utils import terminal
 from . import config as _config
@@ -60,6 +59,17 @@ class ConversationLoop:
     def state(self):
         """动态获取当前会话状态"""
         return self.session_manager.current
+
+    def _get_current_tool_names(self) -> list:
+        """Return the active main-agent tool names without falling back to all tools."""
+        if self.tool_names:
+            return self.tool_names
+
+        from .agent_types import get_tools_for_mode
+
+        context_mode = getattr(self.state, "context_mode", "strong_context")
+        effective_mode = "strong_context" if context_mode == "auto" else context_mode
+        return get_tools_for_mode(effective_mode)
     
     def manage_context_length(self) -> None:
         """
@@ -145,7 +155,7 @@ class ConversationLoop:
         # 查找并删除对应的 assistant 消息（包含 ACTION 块）
         for i in range(len(self.state.messages) - 1, -1, -1):
             msg = self.state.messages[i]
-            if msg.get("role") == "assistant" and is_standalone_marker(msg.get("content", ""), "@SPORE:ACTION"):
+            if msg.get("role") == "assistant" and self._parse_action_block_from_message(msg.get("content", "")) is not None:
                 # 尝试解析 ACTION 块获取工具信息
                 action = self.protocol_manager.action_parser.parse(msg.get("content", ""))
                 tool_name = action.tool_name if action else "未知工具"
@@ -174,6 +184,12 @@ class ConversationLoop:
         terminal.extra_line += 2
         return True
 
+    def _parse_action_block_from_message(self, content: str) -> Optional[ParsedActionBlock]:
+        parsed = self.protocol_manager.parse_response(content)
+        if parsed.response_type == "action":
+            return parsed.action_block
+        return None
+
     def _preprocess_messages_for_compression(self, messages: list) -> list:
         """
         预处理消息列表，将工具调用转换为易读的自然语言格式（文本协议版本）
@@ -191,22 +207,22 @@ class ConversationLoop:
             role = msg.get("role")
             content = msg.get("content", "")
             
-            if role == "assistant" and is_standalone_marker(content, "@SPORE:ACTION"):
+            if role == "assistant" and self._parse_action_block_from_message(content) is not None:
                 # 处理包含 ACTION 块的 assistant 消息
                 content_parts = []
                 
                 # 解析 ACTION 块
-                action = self.protocol_manager.action_parser.parse(content)
-                if action:
+                action_block = self._parse_action_block_from_message(content)
+                if action_block:
                     # 提取 ACTION 之前的文本
-                    action_pos = content.find("@SPORE:ACTION")
+                    action_pos = min([p for p in [content.find("@SPORE:ACTION_SINGLE_START"), content.find("@SPORE:ACTION_SEQUENCE_START"), content.find("@SPORE:ACTION_PARALLEL_START")] if p >= 0], default=-1)
                     if action_pos > 0:
                         prefix = content[:action_pos].strip()
                         if prefix:
                             content_parts.append(prefix)
                     
                     # 简化参数显示
-                    args_str = str(action.parameters)
+                    args_str = str([a.parameters for a in action_block.actions])
                     if len(args_str) > 200:
                         args_str = args_str[:200] + "..."
                     content_parts.append(f"[执行操作: {action.tool_name}({args_str})]")
@@ -351,7 +367,7 @@ class ConversationLoop:
             if msg.get("role") == "assistant":
                 content = msg.get("content", "")
                 # 检查是否包含 ACTION 块
-                if is_standalone_marker(content, "@SPORE:ACTION"):
+                if self._parse_action_block_from_message(content) is not None:
                     # 检查后续是否有 RESULT 响应
                     has_response = False
                     for j in range(i + 1, len(self.state.messages)):
@@ -384,27 +400,32 @@ class ConversationLoop:
             self.ipc_manager.clear_queues()
             self._interrupted_flag = False
         
-        # 检查是否需要注入规则提醒（防止长对话遗忘）
-        # 基于 LLM 回复次数触发
-        from .rule_reminder import should_remind, get_rule_reminder
-        if should_remind(self.state.llm_reply_count, self.config.rule_reminder_interval):
-            reminder = get_rule_reminder(short=self.config.rule_reminder_short)
-            # 将提醒追加到最后一条用户消息中
-            if self.state.messages and self.state.messages[-1]["role"] == "user":
-                self.state.messages[-1]["content"] += f"\n\n{reminder}"
-        
         # 每次请求前重新加载 system_prompt，确保动态内容（TODO、角色、目录等）是最新的
         from .prompt_loader import load_system_prompt
         from .tools import TOOL_DEFINITIONS
         
         base_prompt = load_system_prompt()
-        if base_prompt and self.tool_names:
+        current_tool_names = self._get_current_tool_names()
+
+        # 检查是否需要注入规则提醒（防止长对话遗忘）
+        # 基于 LLM 回复次数触发
+        from .rule_reminder import should_remind, get_rule_reminder
+        if should_remind(self.state.llm_reply_count, self.config.rule_reminder_interval):
+            reminder = get_rule_reminder(
+                short=self.config.rule_reminder_short,
+                tool_names=current_tool_names,
+            )
+            # 将提醒追加到最后一条用户消息中
+            if self.state.messages and self.state.messages[-1]["role"] == "user":
+                self.state.messages[-1]["content"] += f"\n\n{reminder}"
+
+        if base_prompt:
             # 使用指定的工具子集注入协议
-            tool_definitions = {name: TOOL_DEFINITIONS[name] for name in self.tool_names if name in TOOL_DEFINITIONS}
-            current_system_prompt = self.protocol_manager.inject_protocol(base_prompt, tool_definitions)
-        elif base_prompt:
-            # 没有指定工具列表，使用全部工具
-            current_system_prompt = self.protocol_manager.inject_protocol(base_prompt, TOOL_DEFINITIONS)
+            tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tool_names if name in TOOL_DEFINITIONS}
+            current_system_prompt = self.protocol_manager.inject_protocol(
+                base_prompt,
+                tool_definitions,
+            )
         else:
             current_system_prompt = self.system_prompt
         
@@ -450,126 +471,154 @@ class ConversationLoop:
         
         return response
     
-    def handle_action(self, action: ParsedAction, prefix_text: Optional[str] = None) -> Optional[str]:
-        """
-        处理 ACTION 块中的工具调用（文本协议）
-        
-        参数:
-            action: 解析后的 ACTION 数据
-            prefix_text: ACTION 块之前的文本内容（用于显示）
-        
-        返回:
-            如果需要中断循环返回 "break"，如果需要继续返回 "continue"，否则返回 None
-        """
-        # 清除上次的TODO显示
+    def _execute_single_action(self, action: ParsedAction) -> Dict[str, Any]:
+        """Execute one parsed tool call and return a structured status."""
+        tool_name = action.tool_name
+        args = action.parameters
+        handler = TOOL_HANDLERS.get(tool_name)
+
+        if handler is None:
+            log_tool_error(
+                tool_name,
+                "Tool handler not found",
+                args,
+                context={"available_tools": list(TOOL_HANDLERS.keys()), "requested_tool": tool_name},
+            )
+            return {"status": "error", "tool_name": tool_name, "arguments": args, "error": f"Tool not found: {tool_name}"}
+
+        try:
+            no_timeout_tools = ["multi_agent_dispatch", "file"]
+            timed_out = False
+
+            if tool_name in no_timeout_tools:
+                tool_result = handler(args)
+            else:
+                tool_timeout = self.config.tool_execution_timeout
+                current_agent_id = get_current_agent_id() or "main_agent"
+
+                def execute_with_agent_id():
+                    set_current_agent_id(current_agent_id)
+                    return handler(args)
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(execute_with_agent_id)
+                    try:
+                        tool_result = future.result(timeout=tool_timeout)
+                    except FuturesTimeoutError:
+                        future.cancel()
+                        timed_out = True
+                        tool_result = None
+                        log_tool_error(tool_name, "Tool execution timeout", args)
+
+            if tool_result is None:
+                if timed_out:
+                    return {"status": "timeout", "tool_name": tool_name, "arguments": args, "error": f"Tool timed out: {tool_name}"}
+                return {"status": "interrupted", "tool_name": tool_name, "arguments": args, "error": f"Tool interrupted: {tool_name}"}
+
+            self._log_tool_result(tool_name, tool_result, args)
+            return {"status": "success", "tool_name": tool_name, "arguments": args, "result": tool_result}
+        except Exception as e:
+            log_tool_error(tool_name, f"Tool execution failed: {str(e)}", args, e)
+            return {"status": "error", "tool_name": tool_name, "arguments": args, "error": str(e)}
+
+    def _format_single_execution_result(self, execution: Dict[str, Any]) -> str:
+        status = execution.get("status")
+        tool_name = execution.get("tool_name")
+        if status == "success":
+            return self.protocol_manager.format_result(execution.get("result"), tool_name)
+        if status == "interrupted":
+            return self.protocol_manager.format_interrupt(tool_name)
+        return self.protocol_manager.format_error(execution.get("error", "Tool execution timeout"), tool_name)
+
+    def handle_action_block(
+        self,
+        action_block: ParsedActionBlock,
+        prefix_text: Optional[str] = None,
+        full_reply: Optional[str] = None,
+    ) -> Optional[str]:
+        """Execute ACTION_SINGLE, ACTION_SEQUENCE, or ACTION_PARALLEL."""
         last_todo_content = get_last_todo_content()
         if last_todo_content != "":
             clear_todo_block(last_todo_content)
             clear_last_todo_content()
-        
-        tool_name = action.tool_name
-        args = action.parameters
-        
-        # 显示 LLM 的说明内容（如果有，过滤掉 TODO 块）
+
         if prefix_text:
             content = self._filter_todo_block(prefix_text)
             if content:
-                if content.endswith(":") or content.endswith("："):
-                    content = content[:-1] + "。"
+                if content.endswith(":") or content.endswith("?"):
+                    content = content[:-1] + "?"
                 safe_print(f"{_config.current_agent_name}> {content}")
-        
-        # 显示 TODO
-        if _config.current_agent_name == "Spore" and tool_name != "multi_agent_dispatch":
+
+        first_tool = action_block.first_action.tool_name if action_block.first_action else ""
+        if _config.current_agent_name == "Spore" and first_tool != "multi_agent_dispatch":
             todo_print()
-        
-        # 添加 assistant 消息到对话历史（包含完整的 ACTION 块）
-        assistant_content = prefix_text + "\n\n" + action.raw_text if prefix_text else action.raw_text
-        self.state.messages.append({
-            "role": "assistant",
-            "content": assistant_content
-        })
-        
-        # 获取工具处理器
-        handler = TOOL_HANDLERS.get(tool_name)
-        
-        if handler is None:
-            # 工具未找到
-            result_text = self.protocol_manager.format_not_found(tool_name)
-            log_tool_error(tool_name, "未找到工具处理器", args,
-                          context={"available_tools": list(TOOL_HANDLERS.keys()), "requested_tool": tool_name})
+
+        assistant_content = full_reply or (prefix_text + "\n\n" + action_block.raw_text if prefix_text else action_block.raw_text)
+        self.state.messages.append({"role": "assistant", "content": assistant_content})
+
+        should_break = False
+        if action_block.mode == "single":
+            execution = self._execute_single_action(action_block.first_action)
+            result_text = self._format_single_execution_result(execution)
+            should_break = execution.get("status") == "interrupted"
+
+        elif action_block.mode == "sequence":
+            results = []
+            stopped_at = None
+            for action in action_block.actions:
+                execution = self._execute_single_action(action)
+                step_result = {
+                    "step": action.step_index,
+                    "tool_name": action.tool_name,
+                    "status": execution.get("status"),
+                }
+                if "result" in execution:
+                    step_result["result"] = execution["result"]
+                if "error" in execution:
+                    step_result["error"] = execution["error"]
+                results.append(step_result)
+
+                if execution.get("status") != "success":
+                    stopped_at = action.step_index
+                    should_break = execution.get("status") == "interrupted"
+                    break
+
+            result_text = self.protocol_manager.format_result({
+                "mode": "sequence",
+                "stop_on_error": True,
+                "stopped_at": stopped_at,
+                "results": results,
+            }, "ACTION_SEQUENCE")
+
         else:
-            try:
-                # 某些工具不限时
-                no_timeout_tools = ["multi_agent_dispatch", "file"]
-                
-                if tool_name in no_timeout_tools:
-                    tool_result = handler(args)
-                else:
-                    tool_timeout = self.config.tool_execution_timeout
-                    current_agent_id = get_current_agent_id() or "main_agent"
-                    
-                    def execute_with_agent_id():
-                        # 在工作线程中设置 agent_id
-                        set_current_agent_id(current_agent_id)
-                        return handler(args)
-                    
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(execute_with_agent_id)
-                        try:
-                            tool_result = future.result(timeout=tool_timeout)
-                        except FuturesTimeoutError:
-                            print(f"[警告] 工具 {tool_name} 执行超时（{tool_timeout}秒）")
-                            future.cancel()
-                            tool_result = None
-                            result_text = self.protocol_manager.format_error(
-                                f"工具执行超时: {tool_name} 执行超过{tool_timeout}秒",
-                                tool_name
-                            )
-                            log_tool_error(tool_name, "工具执行超时", args)
-                
-                # 如果工具返回 None，表示被中断或超时
-                if tool_result is None:
-                    # 检查是否已设置 result_text（超时会设置，中断不会）
-                    is_timeout = 'result_text' in locals()
-                    
-                    if not is_timeout:
-                        # 没有设置 result_text，说明是中断
-                        result_text = self.protocol_manager.format_interrupt(tool_name)
-                    
-                    self.state.messages.append({
-                        "role": "user",
-                        "content": result_text
-                    })
-                    
-                    # 区分中断和超时：
-                    # - 超时：继续让 LLM 看到超时信息并做出回应
-                    # - 中断：直接结束对话循环
-                    return "continue" if is_timeout else "break"
-                
-                # 格式化工具结果
-                result_text = self.protocol_manager.format_result(tool_result, tool_name)
-                
-                # 记录工具执行日志
-                self._log_tool_result(tool_name, tool_result, args)
-                
-            except Exception as e:
-                result_text = self.protocol_manager.format_error(str(e), tool_name)
-                log_tool_error(tool_name, f"工具执行异常: {str(e)}", args, e)
-        
-        # 添加 RESULT 到对话历史（作为 user 消息）
-        self.state.messages.append({
-            "role": "user",
-            "content": result_text
-        })
-        
-        # 检查工具返回是否超大
+            results = {}
+            max_workers = max(1, len(action_block.actions))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [(executor.submit(self._execute_single_action, action), action) for action in action_block.actions]
+                for future, action in futures:
+                    execution = future.result()
+                    task_id = action.task_id or action.tool_name
+                    entry = {
+                        "task_id": task_id,
+                        "tool_name": action.tool_name,
+                        "status": execution.get("status"),
+                    }
+                    if "result" in execution:
+                        entry["result"] = execution["result"]
+                    if "error" in execution:
+                        entry["error"] = execution["error"]
+                    results[task_id] = entry
+                    if execution.get("status") == "interrupted":
+                        should_break = True
+
+            result_text = self.protocol_manager.format_result({"mode": "parallel", "results": results}, "ACTION_PARALLEL")
+
+        self.state.messages.append({"role": "user", "content": result_text})
         self._check_and_handle_oversized_tool_result()
-        
-        # 保存临时消息
         self.state.save_temp_messages()
-        
-        return "continue"
-    
+
+        return "break" if should_break else "continue"
+
     def _get_tool_names_list(self) -> str:
         """
         获取工具名称列表（只列名称）
@@ -577,12 +626,12 @@ class ConversationLoop:
         Returns:
             工具名称列表字符串
         """
-        tool_names = list(TOOL_DEFINITIONS.keys())
+        tool_names = self._get_current_tool_names()
         return "\n".join(f"- {name}" for name in tool_names)
     
     def _filter_todo_block(self, text: str) -> str:
         """
-        过滤掉文本中的 @SPORE:TODO 块
+        过滤掉文本中的 TODO 协议块
         
         Args:
             text: 原始文本
@@ -590,17 +639,17 @@ class ConversationLoop:
         Returns:
             过滤后的文本
         """
-        if not text or "@SPORE:TODO" not in text:
+        if not text or "@SPORE:TODO_START" not in text:
             return text
         
         # 找到 TODO 块的位置
-        todo_pos = text.find("@SPORE:TODO")
+        todo_pos = text.find("@SPORE:TODO_START")
         
         # TODO 块之前的内容
         before_todo = text[:todo_pos].strip()
         
         # TODO 块之后的内容（找到下一个 ### 或结束）
-        after_todo_start = todo_pos + len("@SPORE:TODO")
+        after_todo_start = todo_pos + len("@SPORE:TODO_START")
         remaining = text[after_todo_start:]
         
         # 找到 TODO 块的结束位置（下一个 ### 标记或文本结束）
@@ -637,7 +686,7 @@ class ConversationLoop:
         """
         验证响应并检查状态（文本协议版本）
         
-        使用 ProtocolManager 解析响应，检测 ACTION、FINAL_RESPONSE 或继续状态
+        使用 ProtocolManager 解析响应，检测 ACTION、FINAL 或继续状态
         同时解析 TODO 块并更新任务状态
         
         参数:
@@ -646,27 +695,44 @@ class ConversationLoop:
         返回:
             如果需要中断循环返回 "break"，如果需要继续返回 "continue"，否则返回 None
         """
-        # 解析并更新 TODO（如果 LLM 回复中包含 @SPORE:TODO）
+        # 解析并更新 TODO（如果 LLM 回复中包含 TODO 协议块）
         self._update_todo_from_response(reply)
         
         # 使用 ProtocolManager 解析响应
         parsed = self.protocol_manager.parse_response(reply)
         
         # 特殊值，表示上次有 ACTION
-        ACTION_MARKER = "__ACTION__"
+        ACTION_STATE_MARKER = "__ACTION__"
         
         if parsed.response_type == "action":
+            if parsed.action_block is None:
+                result_text = self.protocol_manager.format_parse_error("ACTION 块解析失败")
+                self.state.messages.append({"role": "assistant", "content": reply})
+                self.state.messages.append({"role": "user", "content": result_text})
+                return "continue"
             # 有 ACTION 块，执行工具
             self._no_action_count = 0  # 重置无 ACTION 计数器
             # 标记本次有 ACTION
-            self.state.last_answer = ACTION_MARKER
+            self.state.last_answer = ACTION_STATE_MARKER
             # 如果有 REPLY 内容，先显示
             if parsed.reply_content:
                 safe_print(f"{_config.current_agent_name}> {parsed.reply_content}")
-            return self.handle_action(parsed.action, parsed.prefix_text)
+            return self.handle_action_block(parsed.action_block, parsed.prefix_text, reply)
+        
+        elif parsed.response_type == "protocol_error":
+            result_text = self.protocol_manager.format_protocol_error(parsed.protocol_error)
+            self.state.messages.append({
+                "role": "assistant",
+                "content": reply
+            })
+            self.state.messages.append({
+                "role": "user",
+                "content": result_text
+            })
+            return "continue"
         
         elif parsed.response_type == "final":
-            # 检测到 FINAL_RESPONSE，任务完成
+            # 检测到 FINAL，任务完成
             self._no_action_count = 0  # 重置无 ACTION 计数器
             # 优先显示 REPLY 内容，否则显示 prefix_text（过滤掉 TODO 块）
             display_text = parsed.reply_content
@@ -686,7 +752,7 @@ class ConversationLoop:
             return "break"
         
         else:
-            # continue 类型：既没有 ACTION 也没有 FINAL_RESPONSE
+            # continue 类型：既没有 ACTION 也没有 FINAL
             # 优先使用 REPLY 内容
             current_answer = parsed.reply_content or parsed.prefix_text or reply.strip()
             # 过滤掉只包含 < 或 <<< 等不完整标记的情况
@@ -705,7 +771,7 @@ class ConversationLoop:
             
             # 只有当上次和本次都没有 ACTION 时才调用 supervisor
             last = self.state.last_answer if self.state.last_answer else ""
-            if last != ACTION_MARKER and last != "":
+            if last != ACTION_STATE_MARKER and last != "":
                 # 上次没有 ACTION，本次也没有 ACTION，调用 supervisor
                 if supervisor(last, current_answer):
                     should_end = True
@@ -797,12 +863,12 @@ class ConversationLoop:
         elif last_msg.get("role") == "assistant":
             content = last_msg.get("content", "")
             
-            # 检查是否包含 FINAL_RESPONSE，说明是完整回复
+            # 检查是否包含 FINAL，说明是完整回复
             if is_standalone_marker(content, "@SPORE:FINAL@"):
                 pass  # 保留完整的最终响应
             
             # 检查是否包含未完成的 ACTION 块
-            elif is_standalone_marker(content, "@SPORE:ACTION"):
+            elif self._parse_action_block_from_message(content) is not None:
                 # 有 ACTION 但没有对应的 RESULT，移除
                 self.state.messages.pop()
             

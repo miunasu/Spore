@@ -20,7 +20,6 @@ STRONG_CONTEXT_TOOLS = [
     "file",
     "edit",
     "Grep",
-    "multi_agent_dispatch",
     "web_browser",
 ]
 

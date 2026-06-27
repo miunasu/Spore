@@ -22,12 +22,13 @@ const extractDisplayContent = (content: string): string => {
   if (!content) return '';
   
   const lines = content.split('\n');
-  const replyMarker = '@SPORE:REPLY';
-  
-  // 查找 @SPORE:REPLY 标记（必须独占一行）
+  const replyStart = '@SPORE:REPLY_START';
+  const replyEnd = '@SPORE:REPLY_END';
+
+  // 查找 REPLY 块（必须独占一行）
   let replyPos = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === replyMarker) {
+    if (lines[i].trim() === replyStart) {
       replyPos = i;
       break;
     }
@@ -36,14 +37,13 @@ const extractDisplayContent = (content: string): string => {
   if (replyPos >= 0) {
     // 找到 REPLY 块，提取其内容
     const replyLines: string[] = [];
-    const endMarkers = ['@SPORE:ACTION', '@SPORE:TODO', '@SPORE:RESULT', '@SPORE:FINAL@'];
     
     for (let i = replyPos + 1; i < lines.length; i++) {
       const line = lines[i];
       const trimmed = line.trim();
       
       // 遇到结束标记，停止提取
-      if (endMarkers.some(marker => trimmed === marker || trimmed.startsWith(marker))) {
+      if (trimmed === replyEnd) {
         break;
       }
       
@@ -60,22 +60,26 @@ const extractDisplayContent = (content: string): string => {
   for (const line of lines) {
     const trimmed = line.trim();
     
-    // 检查是否是协议标记
-    if (trimmed === '@SPORE:ACTION' || 
-        trimmed === '@SPORE:TODO' || 
-        trimmed === '@SPORE:RESULT' || 
-        trimmed === '@SPORE:FINAL@') {
+    if (/^@SPORE:(TODO|ACTION_SINGLE|ACTION_SEQUENCE|ACTION_PARALLEL)_START$/.test(trimmed)) {
       inProtocolBlock = true;
       continue;
     }
+
+    if (/^@SPORE:(TODO|ACTION_SINGLE|ACTION_SEQUENCE|ACTION_PARALLEL)_END$/.test(trimmed)) {
+      inProtocolBlock = false;
+      continue;
+    }
+
+    if (
+      trimmed === '@SPORE:FINAL@' ||
+      trimmed === '@SPORE:CONTENT_START' ||
+      trimmed === '@SPORE:CONTENT_END' ||
+      trimmed === '@SPORE:RESULT'
+    ) {
+      continue;
+    }
     
-    // 如果在协议块中，检查是否遇到下一个标记或空行后的内容
     if (inProtocolBlock) {
-      if (trimmed === '') {
-        // 空行可能表示协议块结束
-        continue;
-      }
-      // 继续跳过协议块内容
       continue;
     }
     

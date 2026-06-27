@@ -14,7 +14,7 @@ _config = None
 _initialized = False
 
 # 主 Agent 工具列表（从 agent_types 导入）
-from base.agent_types import MAIN_AGENT_TOOLS
+from base.agent_types import get_tools_for_mode
 
 
 def initialize_desktop_backend() -> Dict[str, Any]:
@@ -68,13 +68,19 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     
     # 7. 加载系统提示并注入协议
     base_prompt = load_system_prompt() or ""
+    initial_context_mode = _state.current.context_mode
+    initial_effective_mode = "strong_context" if initial_context_mode == "auto" else initial_context_mode
+    initial_tools = get_tools_for_mode(initial_effective_mode)
     tool_definitions = {
         name: TOOL_DEFINITIONS[name]
-        for name in MAIN_AGENT_TOOLS
+        for name in initial_tools
         if name in TOOL_DEFINITIONS
     }
     protocol_manager = ProtocolManager()
-    system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
+    system_prompt = protocol_manager.inject_protocol(
+        base_prompt,
+        tool_definitions,
+    )
     
     # 设置主 Agent 的 agent_id（用于文件修改标志）
     from base.utils.system_io import set_current_agent_id
@@ -91,7 +97,7 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     _conv_loop = _conv_loop_manager.get_loop(
         session_id="default",
         system_prompt=system_prompt,
-        tool_names=MAIN_AGENT_TOOLS
+        tool_names=initial_tools,
     )
     
     _initialized = True

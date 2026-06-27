@@ -157,11 +157,9 @@ Agent 会自动调用 `skill_query` 工具查询你的 `SKILL.md` 文档。
 Agent 可以通过 `skill_query` 工具查询技能文档：
 
 ```
-@SPORE:ACTION
-tool_name: skill_query
-parameters:
-  skill_name: your-skill
-  query: 如何使用工具1
+@SPORE:ACTION_SINGLE_START
+skill_query skill_name="your-skill"
+@SPORE:ACTION_SINGLE_END
 ```
 
 工具会搜索 `SKILL.md` 中包含"工具1"的相关内容并返回。

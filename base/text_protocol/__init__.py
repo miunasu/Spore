@@ -16,7 +16,7 @@ from .protocol_manager import (
     find_standalone_marker,
     is_standalone_marker,
 )
-from .action_parser import ActionParser, ParsedAction
+from .action_parser import ActionParser, ParsedAction, ParsedActionBlock
 from .result_formatter import ResultFormatter
 from .tool_doc_generator import ToolDocGenerator
 
@@ -25,6 +25,7 @@ __all__ = [
     'ParsedResponse',
     'ActionParser',
     'ParsedAction',
+    'ParsedActionBlock',
     'ResultFormatter',
     'ToolDocGenerator',
     'find_standalone_marker',

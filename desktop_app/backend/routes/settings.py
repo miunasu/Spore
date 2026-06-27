@@ -5,11 +5,20 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from ..core import get_instances
 
 router = APIRouter()
+
+
+def _get_env_path() -> Path:
+    """Return the .env file used by the desktop backend."""
+    from base.config import _PROJECT_ROOT
+
+    return _PROJECT_ROOT / '.env'
 
 
 class CharacterSelectRequest(BaseModel):
@@ -163,6 +172,36 @@ def get_settings() -> Dict[str, Any]:
         }
 
 
+@router.post("/env/open")
+def open_env_file() -> Dict[str, Any]:
+    """Open the .env file currently used by Spore."""
+    try:
+        env_path = _get_env_path()
+
+        if not env_path.exists():
+            return {
+                "success": False,
+                "error": ".env 文件不存在"
+            }
+
+        if sys.platform == "win32":
+            os.startfile(str(env_path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(env_path)])
+        else:
+            subprocess.Popen(["xdg-open", str(env_path)])
+
+        return {
+            "success": True,
+            "path": str(env_path)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
 @router.post("/settings/update")
 def update_settings(request: SettingsUpdateRequest) -> Dict[str, Any]:
     """
@@ -178,10 +217,10 @@ def update_settings(request: SettingsUpdateRequest) -> Dict[str, Any]:
         }
     """
     try:
-        from base.config import get_config, _PROJECT_ROOT
+        from base.config import get_config
         
         config = get_config()
-        env_path = _PROJECT_ROOT / '.env'
+        env_path = _get_env_path()
         
         if not env_path.exists():
             return {

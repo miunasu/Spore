@@ -176,7 +176,14 @@ class CLICommandHandler:
                     print(f"  {content}")
                 
                 # 显示工具调用信息（文本协议模式，检查标记是否独占一行）
-                if role == "assistant" and is_standalone_marker(content, "@SPORE:ACTION"):
+                if (
+                    role == "assistant"
+                    and (
+                        is_standalone_marker(content, "@SPORE:ACTION_SINGLE_START")
+                        or is_standalone_marker(content, "@SPORE:ACTION_SEQUENCE_START")
+                        or is_standalone_marker(content, "@SPORE:ACTION_PARALLEL_START")
+                    )
+                ):
                     print(f"  [包含工具调用]")
                 if role == "user" and is_standalone_marker(content, "@SPORE:RESULT"):
                     print(f"  [工具返回结果]")

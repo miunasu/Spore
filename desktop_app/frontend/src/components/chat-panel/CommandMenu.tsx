@@ -425,6 +425,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [envLoading, setEnvLoading] = useState(false);
   const [envSaving, setEnvSaving] = useState(false);
+  const [envOpening, setEnvOpening] = useState(false);
   const [envError, setEnvError] = useState<string | null>(null);
   const [modalContent, setModalContent] = useState<{ title: string; content: string } | null>(null);
   
@@ -550,6 +551,21 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       setEnvError('保存失败');
     } finally {
       setEnvSaving(false);
+    }
+  };
+
+  const openEnvFile = async () => {
+    setEnvOpening(true);
+    setEnvError(null);
+    try {
+      const response = await settingsApi.openEnvFile();
+      if (!response.success) {
+        setEnvError(response.error || '打开 .env 失败');
+      }
+    } catch (err) {
+      setEnvError('打开 .env 失败');
+    } finally {
+      setEnvOpening(false);
     }
   };
 
@@ -761,13 +777,22 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                   <span className="text-xs text-spore-error">{envError}</span>
                 )}
                 {settingsTab === 'env' && (
-                  <button
-                    onClick={saveEnvFile}
-                    disabled={envSaving || envLoading}
-                    className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                  >
-                    {envSaving ? '保存中...' : '保存配置'}
-                  </button>
+                  <>
+                    <button
+                      onClick={openEnvFile}
+                      disabled={envOpening || envLoading}
+                      className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    >
+                      {envOpening ? '打开中...' : '打开 .env'}
+                    </button>
+                    <button
+                      onClick={saveEnvFile}
+                      disabled={envSaving || envLoading}
+                      className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                    >
+                      {envSaving ? '保存中...' : '保存配置'}
+                    </button>
+                  </>
                 )}
                 <button
                   onClick={() => setShowSettings(false)}

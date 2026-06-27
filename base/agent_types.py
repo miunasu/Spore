@@ -30,6 +30,7 @@ LONG_CONTEXT_TOOLS = [
     "file",
     "edit",
     "Grep",
+    "web_browser",
     "multi_agent_dispatch",
 ]
 

@@ -230,8 +230,8 @@ def interrupt(req: InterruptRequest = InterruptRequest()):
     """
     中断当前请求 - 包括主 Agent 和所有子 Agent
     """
-    _, session_manager, _, conv_loop, _ = get_instances()
     from ..core import get_conv_loop_manager
+    session_manager = get_session_manager()
     conv_loop_manager = get_conv_loop_manager()
     
     if not session_manager:
@@ -248,7 +248,7 @@ def interrupt(req: InterruptRequest = InterruptRequest()):
     if conv_loop_manager:
         target_loop = conv_loop_manager._loops.get(conversation_id)
     if target_loop is None:
-        target_loop = conv_loop
+        target_loop = get_instances()[3]
     
     try:
         # 1. 调用 conv_loop 的中断处理方法（处理主 Agent）
@@ -313,7 +313,7 @@ def get_history(raw: bool = False, session_id: Optional[str] = None) -> Dict[str
 @router.post("/new")
 def new_conversation():
     """新建对话 - 清空当前会话状态"""
-    _, session_manager, _, _, _ = get_instances()
+    session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")

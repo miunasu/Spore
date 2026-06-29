@@ -72,6 +72,10 @@ PROTOCOL_TEMPLATE = """
 
 你必须使用 Spore 文本 DSL 协议回复。协议块标识符必须独占一行。
 
+当前没有任何隐藏工具可直接调用；所有工具调用都必须使用 ACTION 协议块（ACTION_SINGLE/ACTION_SEQUENCE/ACTION_PARALLEL）输出，由用户侧系统执行。
+所有输出内容必须被包裹在协议块内，协议块外不得出现任何非空内容。
+
+
 ### 可用协议块
 
 回复用户可见内容：

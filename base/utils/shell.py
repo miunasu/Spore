@@ -166,7 +166,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         
         if ps_exe:
             # 自动设置编码：$OutputEncoding 确保管道传中文，PYTHONIOENCODING 确保 Python stdout 输出 UTF-8
-            full_command = '$env:PYTHONIOENCODING="utf-8"; $OutputEncoding = [System.Text.Encoding]::UTF8; ' + command
+            full_command = '$env:PYTHONIOENCODING="utf-8"; $OutputEncoding = New-Object System.Text.UTF8Encoding $false; ' + command
             encoded = base64.b64encode(full_command.encode('utf-16-le')).decode('ascii')
             ps_args = [ps_exe, '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded]
             shell_used = False  # 改为 False，因为我们直接调用可执行文件

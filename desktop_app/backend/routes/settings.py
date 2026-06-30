@@ -31,6 +31,19 @@ class SettingsUpdateRequest(BaseModel):
     default_character: Optional[str] = None
 
 
+class ConfigProfileSaveRequest(BaseModel):
+    """Save or update an API config profile."""
+    name: str
+    values: Dict[str, str]
+    profile_id: Optional[str] = None
+    description: str = ""
+
+
+class ConfigProfileApplyRequest(BaseModel):
+    """Apply an API config profile to .env."""
+    profile_id: str
+
+
 @router.get("/characters/list")
 def list_characters() -> Dict[str, Any]:
     """
@@ -211,6 +224,76 @@ def apply_env_file() -> Dict[str, Any]:
         return {
             "success": False,
             "error": str(e)
+        }
+
+
+@router.get("/profiles/list")
+def list_profiles() -> Dict[str, Any]:
+    """List saved API config profiles."""
+    try:
+        from base.config_profiles import list_config_profiles
+
+        return list_config_profiles(_get_env_path())
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "profiles": [],
+            "active_profile_id": None,
+        }
+
+
+@router.post("/profiles/save")
+def save_profile(request: ConfigProfileSaveRequest) -> Dict[str, Any]:
+    """Save the current API settings as a reusable profile."""
+    try:
+        from base.config_profiles import save_config_profile
+
+        return save_config_profile(
+            name=request.name,
+            values=request.values,
+            profile_id=request.profile_id,
+            description=request.description,
+        )
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@router.post("/profiles/apply")
+def apply_profile(request: ConfigProfileApplyRequest) -> Dict[str, Any]:
+    """Apply a saved API config profile, then reload runtime config."""
+    try:
+        from base.config_profiles import apply_config_profile
+
+        profile_result = apply_config_profile(request.profile_id, _get_env_path())
+        runtime_result = apply_runtime_config()
+
+        return {
+            **runtime_result,
+            "profile": profile_result.get("profile"),
+            "env_values": profile_result.get("env_values"),
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@router.delete("/profiles/{profile_id}")
+def delete_profile(profile_id: str) -> Dict[str, Any]:
+    """Delete a saved API config profile."""
+    try:
+        from base.config_profiles import delete_config_profile
+
+        return delete_config_profile(profile_id)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
         }
 
 

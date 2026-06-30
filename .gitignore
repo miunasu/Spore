@@ -55,6 +55,7 @@ temp/
 # 对话历史和输出
 history/
 output/
+.spore_config_profiles.json
 
 # 测试
 .pytest_cache/

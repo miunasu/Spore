@@ -27,6 +27,60 @@ interface EnvConfigItem {
   description?: string;
 }
 
+interface ConfigProfile {
+  id: string;
+  name: string;
+  description?: string;
+  values: Record<string, string>;
+  keys: string[];
+  is_active: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+const MAIN_SDK_PROFILE_KEYS = {
+  openai: [
+    'OPENAI_API_KEY',
+    'OPENAI_API_URL',
+    'OPENAI_MODEL',
+    'USE_RESPONSES_API',
+    'OPENAI_REASONING_EFFORT',
+  ],
+  anthropic: [
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_API_URL',
+    'ANTHROPIC_MODEL',
+  ],
+} as const;
+
+const SUB_AGENT_SDK_PROFILE_KEYS = {
+  openai: [
+    'SUB_AGENT_OPENAI_API_KEY',
+    'SUB_AGENT_OPENAI_API_URL',
+    'SUB_AGENT_OPENAI_MODEL',
+  ],
+  anthropic: [
+    'SUB_AGENT_ANTHROPIC_API_KEY',
+    'SUB_AGENT_ANTHROPIC_API_URL',
+    'SUB_AGENT_ANTHROPIC_MODEL',
+  ],
+} as const;
+
+const COMMON_PROFILE_KEYS = [
+  'CLEAN_SDK_HEADERS',
+  'SYSTEM_AS_USER',
+  'SYSTEM_PROMPT_FILE',
+  'MAX_OUTPUT_TOKENS',
+  'CONTEXT_MAX_TOKENS',
+  'CONTEXT_WARNING_THRESHOLD',
+  'MAX_SINGLE_MESSAGE_RATIO',
+  'API_TIMEOUT',
+] as const;
+
+const ANTHROPIC_COMPAT_PROFILE_KEYS = [
+  'CLEAN_AUTH_HEADER',
+] as const;
+
 // ENV 配置分组
 const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
   {
@@ -519,6 +573,9 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [envSaving, setEnvSaving] = useState(false);
   const [envOpening, setEnvOpening] = useState(false);
   const [envError, setEnvError] = useState<string | null>(null);
+  const [configProfiles, setConfigProfiles] = useState<ConfigProfile[]>([]);
+  const [activeProfileId, setActiveProfileId] = useState<string>('');
+  const [profileBusy, setProfileBusy] = useState(false);
   const [modalContent, setModalContent] = useState<{ title: string; content: string } | null>(null);
   
   // Characters 系统状态
@@ -565,6 +622,21 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       setEnvError('加载 .env 失败');
     } finally {
       setEnvLoading(false);
+    }
+  };
+
+  // 加载 API 配置套
+  const loadConfigProfiles = async () => {
+    try {
+      const response = await settingsApi.listConfigProfiles();
+      if (response.success) {
+        setConfigProfiles(response.profiles || []);
+        setActiveProfileId(response.active_profile_id || '');
+      } else {
+        setEnvError(response.error || '加载配置套失败');
+      }
+    } catch {
+      setEnvError('加载配置套失败');
     }
   };
 
@@ -621,6 +693,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const openSettings = () => {
     setShowSettings(true);
     loadEnvFile();
+    loadConfigProfiles();
     loadCharacters();
   };
 
@@ -630,6 +703,135 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   };
 
   // 保存 .env 文件
+  const collectProfileValues = () => {
+    const values: Record<string, string> = {};
+    const appendValue = (key: string) => {
+      const value = (envValues[key] || '').trim();
+      if (value) {
+        values[key] = value;
+      }
+    };
+
+    const mainSdk = (envValues['LLM_SDK'] || 'openai').trim().toLowerCase();
+    if (mainSdk === 'openai' || mainSdk === 'anthropic') {
+      values['LLM_SDK'] = mainSdk;
+      MAIN_SDK_PROFILE_KEYS[mainSdk].forEach(appendValue);
+    }
+
+    const subAgentSdk = (envValues['SUB_AGENT_LLM_SDK'] || '').trim().toLowerCase();
+    if (subAgentSdk === 'openai' || subAgentSdk === 'anthropic') {
+      values['SUB_AGENT_LLM_SDK'] = subAgentSdk;
+      SUB_AGENT_SDK_PROFILE_KEYS[subAgentSdk].forEach(appendValue);
+    }
+
+    COMMON_PROFILE_KEYS.forEach(appendValue);
+
+    if (mainSdk === 'anthropic' || subAgentSdk === 'anthropic') {
+      ANTHROPIC_COMPAT_PROFILE_KEYS.forEach(appendValue);
+    }
+
+    return values;
+  };
+
+  const handleApplyConfigProfile = async (profileId: string) => {
+    if (!profileId) {
+      setActiveProfileId('');
+      return;
+    }
+
+    setProfileBusy(true);
+    setEnvError(null);
+    try {
+      const response = await settingsApi.applyConfigProfile(profileId);
+      if (!response.success) {
+        throw new Error(response.error || '应用配置套失败');
+      }
+
+      await loadEnvFile();
+      await loadConfigProfiles();
+      setActiveProfileId(profileId);
+      setModalContent({
+        title: '成功',
+        content: response.message || '配置套已应用到当前 Spore 进程',
+      });
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : '应用配置套失败');
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const handleSaveConfigProfile = async () => {
+    const currentProfile = activeProfileId
+      ? configProfiles.find((profile) => profile.id === activeProfileId)
+      : undefined;
+    const name = window.prompt(
+      '配置套名称',
+      currentProfile?.name || ''
+    );
+    if (!name) {
+      return;
+    }
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    setProfileBusy(true);
+    setEnvError(null);
+    try {
+      const values = collectProfileValues();
+      if (Object.keys(values).length === 0) {
+        throw new Error('当前没有可保存到配置套的配置项');
+      }
+      const response = await settingsApi.saveConfigProfile({
+        name: trimmedName,
+        profile_id: currentProfile?.name === trimmedName ? activeProfileId : undefined,
+        values,
+      });
+      if (!response.success || !response.profile) {
+        throw new Error(response.error || '保存配置套失败');
+      }
+
+      await loadConfigProfiles();
+      setActiveProfileId(response.profile.id);
+      setModalContent({
+        title: '成功',
+        content: `配置套 "${response.profile.name}" 已保存`,
+      });
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : '保存配置套失败');
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const handleDeleteConfigProfile = async () => {
+    if (!activeProfileId) {
+      return;
+    }
+
+    const profile = configProfiles.find((item) => item.id === activeProfileId);
+    if (!window.confirm(`删除配置套 "${profile?.name || activeProfileId}"？`)) {
+      return;
+    }
+
+    setProfileBusy(true);
+    setEnvError(null);
+    try {
+      const response = await settingsApi.deleteConfigProfile(activeProfileId);
+      if (!response.success) {
+        throw new Error(response.error || '删除配置套失败');
+      }
+      setActiveProfileId('');
+      await loadConfigProfiles();
+    } catch (err) {
+      setEnvError(err instanceof Error ? err.message : '删除配置套失败');
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
   const saveEnvFile = async () => {
     setEnvSaving(true);
     setEnvError(null);
@@ -641,6 +843,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
         throw new Error(applyResponse.error || '应用配置失败');
       }
       setEnvContent(newContent);
+      await loadConfigProfiles();
       setEnvError(null);
       setModalContent({
         title: '成功',
@@ -1019,6 +1222,52 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                 </div>
               ) : (
                 <div className="space-y-6">
+                  <div className="space-y-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-spore-text">API 配置套</div>
+                        <div className="text-xs text-spore-muted">按当前 SDK 保存对应的 API 地址、Key、模型和兼容参数。</div>
+                      </div>
+                      <button
+                        onClick={handleSaveConfigProfile}
+                        disabled={profileBusy || envLoading}
+                        className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                      >
+                        保存当前
+                      </button>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <select
+                        value={activeProfileId}
+                        onChange={(e) => handleApplyConfigProfile(e.target.value)}
+                        disabled={profileBusy || envLoading || configProfiles.length === 0}
+                        className="flex-1 px-3 py-2 text-sm bg-spore-card border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 disabled:opacity-50"
+                      >
+                        <option value="">
+                          {configProfiles.length === 0 ? '暂无配置套' : '未匹配配置套'}
+                        </option>
+                        {configProfiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => activeProfileId && handleApplyConfigProfile(activeProfileId)}
+                        disabled={profileBusy || envLoading || !activeProfileId}
+                        className="px-3 py-2 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                      >
+                        {profileBusy ? '处理中...' : '应用'}
+                      </button>
+                      <button
+                        onClick={handleDeleteConfigProfile}
+                        disabled={profileBusy || envLoading || !activeProfileId}
+                        className="px-3 py-2 bg-spore-bg hover:bg-spore-error/10 text-spore-muted hover:text-spore-error border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </div>
                   {envLoading ? (
                     <div className="flex items-center justify-center h-32">
                       <span className="text-spore-muted">加载中...</span>

@@ -473,6 +473,73 @@ export const settingsApi = {
       message?: string;
       error?: string;
     }>('/api/settings/env/apply', { method: 'POST' }),
+
+  listConfigProfiles: () =>
+    request<{
+      success: boolean;
+      profiles: Array<{
+        id: string;
+        name: string;
+        description?: string;
+        values: Record<string, string>;
+        keys: string[];
+        is_active: boolean;
+        created_at: number;
+        updated_at: number;
+      }>;
+      active_profile_id: string | null;
+      storage_path?: string;
+      env_keys?: string[];
+      error?: string;
+    }>('/api/settings/profiles/list'),
+
+  saveConfigProfile: (profile: {
+    name: string;
+    values: Record<string, string>;
+    profile_id?: string;
+    description?: string;
+  }) =>
+    request<{
+      success: boolean;
+      profile?: {
+        id: string;
+        name: string;
+        description?: string;
+        values: Record<string, string>;
+        created_at: number;
+        updated_at: number;
+      };
+      error?: string;
+    }>('/api/settings/profiles/save', {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }),
+
+  applyConfigProfile: (profileId: string) =>
+    request<{
+      success: boolean;
+      profile?: {
+        id: string;
+        name: string;
+        description?: string;
+        values: Record<string, string>;
+      };
+      env_values?: Record<string, string>;
+      context_mode?: string;
+      tool_names?: string[];
+      restarted_chat_process?: boolean;
+      message?: string;
+      error?: string;
+    }>('/api/settings/profiles/apply', {
+      method: 'POST',
+      body: JSON.stringify({ profile_id: profileId }),
+    }),
+
+  deleteConfigProfile: (profileId: string) =>
+    request<{ success: boolean; error?: string }>(
+      `/api/settings/profiles/${encodeURIComponent(profileId)}`,
+      { method: 'DELETE' }
+    ),
 };
 
 // Health check

@@ -19,12 +19,12 @@ class Config:
         """初始化配置，从环境变量加载"""
         # ========== LLM SDK 配置 ==========
         # 选择使用的 SDK：openai 或 anthropic
-        self.llm_sdk: str = os.getenv("LLM_SDK", "openai").lower().strip()
+        self.llm_sdk: str = os.getenv("LLM_SDK", "openai").lower().strip() or "openai"
         
         # ========== OpenAI API 配置 ==========
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
         self.openai_api_url: Optional[str] = os.getenv("OPENAI_API_URL", "").strip() or None
-        self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
         
         # 是否使用 OpenAI Responses API（替代 Chat Completions API）
         # 启用后使用 client.responses.create，支持 o 系列模型的原生接口
@@ -46,7 +46,7 @@ class Config:
         # ========== Anthropic API 配置 ==========
         self.anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
         self.anthropic_api_url: Optional[str] = os.getenv("ANTHROPIC_API_URL", "").strip() or None
-        self.anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+        self.anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514").strip() or "claude-sonnet-4-20250514"
         
         # ========== 子 Agent LLM 配置 ==========
         # 子 Agent 使用的 SDK（留空则继承主 Agent 配置）
@@ -64,7 +64,7 @@ class Config:
         
         # 系统提示文件名（不含路径，位于 prompt 目录下）
         # 可选：prompt.md（默认）、prompt_claude.md（Claude 专用）
-        self.system_prompt_file: str = os.getenv("SYSTEM_PROMPT_FILE", "prompt.md")
+        self.system_prompt_file: str = os.getenv("SYSTEM_PROMPT_FILE", "prompt.md").strip() or "prompt.md"
         
         # 是否将 system prompt 作为第一条 user 消息发送（兼容不支持 system role 的模型，如某些 Claude API）
         # 启用后，system prompt 只会在对话开始时作为第一条 user 消息发送一次，后续不会重复
@@ -284,7 +284,7 @@ class Config:
         
         # ========== 桌面模式配置 ==========
         # 启动模式: cli 或 desktop
-        self.launch_mode: str = os.getenv("LAUNCH_MODE", "cli").lower().strip()
+        self.launch_mode: str = os.getenv("LAUNCH_MODE", "cli").lower().strip() or "cli"
         
         # 桌面模式 API 服务器主机地址
         self.desktop_api_host: str = os.getenv("DESKTOP_API_HOST", "127.0.0.1")
@@ -300,7 +300,7 @@ class Config:
         # strong_context: 强上下文关联模式（当前默认行为）
         # long_context: 长上下文处理模式（使用不同的工具集）
         # auto: 自动选择模式（由LLM判断使用哪种模式）
-        self.context_mode: str = os.getenv("CONTEXT_MODE", "strong_context").lower().strip()
+        self.context_mode: str = os.getenv("CONTEXT_MODE", "strong_context").lower().strip() or "strong_context"
         
     def validate(self) -> bool:
         """

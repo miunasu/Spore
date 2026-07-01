@@ -93,7 +93,36 @@ class ChatProcess:
             self.executor.shutdown(wait=False)
             self.executor = None
     
+    # API 重试延迟（秒）：立即、5s、15s、25s
+    _RETRY_DELAYS = [0, 5, 15, 25]
+
     def _do_llm_call(self, request_id: str, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        执行 LLM 调用（带重试）
+        
+        重试策略：立即重试 → 5s → 15s → 25s，共4次机会。
+        全部失败后返回最后一次的错误。
+        """
+        last_result = None
+        for attempt, delay in enumerate(self._RETRY_DELAYS):
+            if delay > 0:
+                time.sleep(delay)
+            if self.global_cancel_flag.is_set():
+                return {"request_id": request_id, "status": "cancelled", "data": None}
+            result = self._do_single_llm_call(request_id, request_data)
+            if result["status"] != "error":
+                return result
+            last_result = result
+            # 如果是被取消的，不重试
+            if result["status"] == "cancelled":
+                return result
+            log_error(
+                "LLM_API_RETRY",
+                f"API call failed (attempt {attempt + 1}/{len(self._RETRY_DELAYS)}): {result.get('data', '')}"
+            )
+        return last_result
+
+    def _do_single_llm_call(self, request_id: str, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行单个 LLM 调用（在工作线程中运行）
         

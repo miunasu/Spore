@@ -295,6 +295,9 @@ class Config:
         except ValueError:
             self.desktop_api_port = 8765
         
+        # 桌面模式 WebSocket 推送端口（API 端口 + 1）
+        self.desktop_ws_port: int = self.desktop_api_port + 1
+        
         # ========== 上下文处理模式配置 ==========
         # 上下文处理模式: strong_context, long_context, auto
         # strong_context: 强上下文关联模式（当前默认行为）

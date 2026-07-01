@@ -20,7 +20,10 @@ def send_ws_message(message: Dict[str, Any]):
 
 def start_ipc_consumer():
     """启动 WebSocket 推送进程"""
-    start_ws_process(port=8766)
+    from base.config import get_config
+    config = get_config()
+    port = getattr(config, 'desktop_ws_port', config.desktop_api_port + 1)
+    start_ws_process(port=port)
 
 
 def stop_ipc_consumer():

@@ -553,7 +553,10 @@ class SubAgentThread(threading.Thread):
                 tool_name, 
                 f"工具返回错误: {error_msg}", 
                 args,
-                context={"result": tool_result[:500]}
+                context={
+                    "result": tool_result,
+                    "result_length": len(tool_result) if isinstance(tool_result, str) else None,
+                }
             )
             self.log_output(f"工具返回错误: {error_msg}", "WARNING")
     

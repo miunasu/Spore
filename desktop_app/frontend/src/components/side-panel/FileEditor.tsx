@@ -2,6 +2,7 @@
  * 文件编辑器组件
  */
 import React, { useRef, useEffect, useCallback } from 'react';
+import { LineNumberedTextarea } from '../common/LineNumberedTextarea';
 import { useFileStore } from '../../stores/fileStore';
 
 export const FileEditor: React.FC = () => {
@@ -16,7 +17,7 @@ export const FileEditor: React.FC = () => {
     isDirty,
   } = useFileStore();
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
   const dirty = isDirty();
 
   // Ctrl+S 保存快捷键
@@ -34,8 +35,9 @@ export const FileEditor: React.FC = () => {
 
   // 恢复滚动位置
   useEffect(() => {
-    if (textareaRef.current && editingScrollTop > 0) {
-      textareaRef.current.scrollTop = editingScrollTop;
+    const textarea = editorRef.current?.querySelector('textarea');
+    if (textarea && editingScrollTop > 0) {
+      textarea.scrollTop = editingScrollTop;
     }
   }, [editingFile]); // 只在文件切换时恢复
 
@@ -80,14 +82,14 @@ export const FileEditor: React.FC = () => {
       </div>
 
       {/* 编辑区域 */}
-      <textarea
-        ref={textareaRef}
-        value={editingContent}
-        onChange={(e) => setEditingContent(e.target.value)}
-        onScroll={handleScroll}
-        className="flex-1 bg-spore-bg p-3 text-sm font-mono resize-none focus:outline-none"
-        spellCheck={false}
-      />
+      <div ref={editorRef} className="flex-1 overflow-hidden p-2">
+        <LineNumberedTextarea
+          value={editingContent}
+          onChange={(e) => setEditingContent(e.target.value)}
+          onScroll={handleScroll}
+          spellCheck={false}
+        />
+      </div>
     </div>
   );
 };

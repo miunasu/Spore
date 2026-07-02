@@ -7,6 +7,145 @@ from typing import Optional, Dict, Any, List, Union
 from .encoding import smart_decode
 
 
+MULTILINE_COMMAND_HINT = (
+    "For multiline PowerShell or Python commands, pass real newlines with "
+    "@SPORE:CONTENT_START ... @SPORE:CONTENT_END. PowerShell here-strings "
+    "require a real newline immediately after @' or @\"."
+)
+
+
+def _is_unescaped_backslash(text: str, index: int) -> bool:
+    backslashes = 0
+    pos = index - 1
+    while pos >= 0 and text[pos] == "\\":
+        backslashes += 1
+        pos -= 1
+    return backslashes % 2 == 0
+
+
+def _escaped_newline_length(text: str, index: int) -> int:
+    if not _is_unescaped_backslash(text, index):
+        return 0
+    if text.startswith("\\r\\n", index):
+        return 4
+    if text.startswith("\\n", index):
+        return 2
+    return 0
+
+
+def _looks_like_here_string_start(command: str, index: int) -> bool:
+    if index > 0:
+        prev = command[index - 1]
+        if not (prev.isspace() or prev in ";|=([{,"):
+            return False
+    return command.startswith("@'", index) or command.startswith('@"', index)
+
+
+def _replace_escaped_newlines_outside_quotes(text: str) -> str:
+    result: List[str] = []
+    in_single = False
+    in_double = False
+    escaped = False
+    i = 0
+
+    while i < len(text):
+        escaped_newline_len = _escaped_newline_length(text, i)
+        if escaped_newline_len and not in_single and not in_double:
+            result.append("\n")
+            i += escaped_newline_len
+            escaped = False
+            continue
+
+        char = text[i]
+        result.append(char)
+
+        if char == "\\":
+            escaped = not escaped
+        else:
+            if char == "'" and not in_double and not escaped:
+                in_single = not in_single
+            elif char == '"' and not in_single and not escaped:
+                in_double = not in_double
+            escaped = False
+
+        i += 1
+
+    return "".join(result)
+
+
+def _find_escaped_here_string_close(command: str, start: int, quote: str) -> tuple[int, int]:
+    i = start
+    while i < len(command):
+        newline_len = _escaped_newline_length(command, i)
+        if newline_len and command.startswith(f"{quote}@", i + newline_len):
+            return i, newline_len
+        i += 1
+    return -1, 0
+
+
+def _normalize_escaped_powershell_here_strings(command: str) -> tuple[str, bool]:
+    """Recover common quoted-tool-call output like @'\\n...\\n'@."""
+    result: List[str] = []
+    changed = False
+    i = 0
+
+    while i < len(command):
+        if _looks_like_here_string_start(command, i):
+            quote = command[i + 1]
+            body_start = i + 2
+            opener_newline_len = _escaped_newline_length(command, body_start)
+            if opener_newline_len:
+                content_start = body_start + opener_newline_len
+                close_start, close_newline_len = _find_escaped_here_string_close(
+                    command, content_start, quote
+                )
+                if close_start >= 0:
+                    body = command[content_start:close_start]
+                    result.append(command[i:i + 2])
+                    result.append("\n")
+                    result.append(_replace_escaped_newlines_outside_quotes(body))
+                    result.append("\n")
+                    result.append(f"{quote}@")
+                    i = close_start + close_newline_len + 2
+                    changed = True
+                    continue
+
+        result.append(command[i])
+        i += 1
+
+    return "".join(result), changed
+
+
+def _validate_powershell_here_strings(command: str) -> Optional[str]:
+    i = 0
+    while i < len(command):
+        if _looks_like_here_string_start(command, i):
+            after = i + 2
+            if after >= len(command) or command[after] not in "\r\n":
+                return (
+                    "Invalid PowerShell here-string header: @' or @\" must be "
+                    "followed by a real newline, not inline text or an escaped "
+                    "\\n sequence."
+                )
+        i += 1
+    return None
+
+
+def _attach_hints(result: Dict[str, Any], hints: List[str]) -> Dict[str, Any]:
+    if hints:
+        result["hints"] = hints
+    return result
+
+
+def _is_powershell_progress_noise(stderr: str) -> bool:
+    stripped = stderr.strip()
+    return (
+        stripped.startswith("#< CLIXML")
+        and '<Obj S="progress"' in stripped
+        and '<S S="Error">' not in stripped
+    )
+
+
 def execute_command(command: Union[str, List[str]], timeout: Optional[int] = None, encoding: str = None, working_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     使用原生 PowerShell 执行系统命令。
@@ -35,6 +174,24 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         - LLM应综合 returncode、error_detected、stderr、stdout 判断执行结果
     """
     # 命令安全检查：拦截危险的删除命令
+    hints: List[str] = []
+    if isinstance(command, str):
+        command, normalized_here_string = _normalize_escaped_powershell_here_strings(command)
+        if normalized_here_string:
+            hints.append("Normalized escaped PowerShell here-string newlines in command input.")
+
+        here_string_error = _validate_powershell_here_strings(command)
+        if here_string_error:
+            return _attach_hints({
+                "ok": False,
+                "returncode": -1,
+                "error_detected": False,
+                "stdout": "",
+                "stderr": here_string_error,
+                "duration_sec": 0,
+                "shell_used": True,
+            }, [MULTILINE_COMMAND_HINT])
+
     cmd_str = command if isinstance(command, str) else ' '.join(command)
     cmd_lower = cmd_str.strip().lower()
     
@@ -165,6 +322,9 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
             ps_exe = shutil.which('powershell')  # 回退到 PowerShell 5.x
         
         if ps_exe:
+            if encoding is None:
+                prefer_encoding = 'utf-8'
+                env['PYTHONIOENCODING'] = 'utf-8'
             # 自动设置编码：$OutputEncoding 确保管道传中文，PYTHONIOENCODING 确保 Python stdout 输出 UTF-8
             full_command = '$env:PYTHONIOENCODING="utf-8"; $OutputEncoding = New-Object System.Text.UTF8Encoding $false; ' + command
             encoded = base64.b64encode(full_command.encode('utf-16-le')).decode('ascii')
@@ -250,6 +410,8 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     stderr_bytes = b"".join(stderr_chunks)
     stdout_output = smart_decode(stdout_bytes, prefer_encoding)
     stderr_output = smart_decode(stderr_bytes, prefer_encoding)
+    if _is_powershell_progress_noise(stderr_output):
+        stderr_output = ""
     
     # 错误检测策略
     original_returncode = proc.returncode
@@ -317,12 +479,12 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     error_detected = has_error and original_returncode == 0
     ok = not has_error
     
-    return {
+    return _attach_hints({
         "ok": ok,
         "returncode": original_returncode,
         "error_detected": error_detected,
         "stdout": stdout_output,
-        "stderr": f"请注意shell多行内容执行需要使用@SPORE:CONTENT_START-@SPORE:CONTENT_END。{stderr_output}",
+        "stderr": stderr_output,
         "duration_sec": round(dur, 4),
         "shell_used": isinstance(command, str),
-    }
+    }, hints)

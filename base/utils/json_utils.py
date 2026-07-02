@@ -4,6 +4,55 @@ from typing import Optional, Dict, Any, Tuple
 from ..logger import log_llm_validation_error, log_tool_error, log_info
 
 
+def _tool_result_log_context(tool_result: Any) -> Dict[str, Any]:
+    context: Dict[str, Any] = {"result": tool_result}
+    if isinstance(tool_result, str):
+        context["result_length"] = len(tool_result)
+    return context
+
+
+def _text_tail(text: str, limit: int = 2000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[-limit:]
+
+
+def _is_powershell_progress_noise(stderr: str) -> bool:
+    stripped = stderr.strip()
+    return (
+        stripped.startswith("#< CLIXML")
+        and '<Obj S="progress"' in stripped
+        and '<S S="Error">' not in stripped
+    )
+
+
+def _format_execute_command_error(result_data: Dict[str, Any]) -> str:
+    returncode = result_data.get("returncode")
+    stderr = result_data.get("stderr") or ""
+    stdout = result_data.get("stdout") or ""
+    hints = result_data.get("hints") or []
+
+    if stderr and not _is_powershell_progress_noise(stderr):
+        message = stderr
+    else:
+        message = (
+            result_data.get("error")
+            or result_data.get("message")
+            or f"Command execution failed (exit code {returncode})"
+        )
+        if stdout:
+            message = f"{message}\nstdout tail:\n{_text_tail(stdout)}"
+
+    if hints:
+        if isinstance(hints, list):
+            hint_text = "\n".join(str(hint) for hint in hints)
+        else:
+            hint_text = str(hints)
+        message = f"{message}\nHint:\n{hint_text}"
+
+    return message
+
+
 def _strip_think_tags(text: str) -> str:
     """
     移除文本中的 <think>...</think> 标签及其内容。
@@ -230,11 +279,8 @@ def check_tool_result_error(tool_result: str) -> Tuple[bool, Optional[str]]:
             if returncode == 1 and not stderr and not stdout:
                 return False, None
             
-            # 有 stderr 时使用 stderr 作为错误信息
-            if stderr:
-                error_msg = stderr
-            else:
-                error_msg = result_data.get("error") or result_data.get("message") or "命令执行失败"
+            # Build an actionable command error without losing stdout context.
+            error_msg = _format_execute_command_error(result_data)
             return True, error_msg
         
         return False, None
@@ -255,7 +301,7 @@ def log_tool_result(tool_name: str, tool_result: str, args: Dict[str, Any]) -> N
     is_error, error_msg = check_tool_result_error(tool_result)
     
     if is_error:
-        log_tool_error(tool_name, error_msg, args, context={"result": tool_result[:500]})
+        log_tool_error(tool_name, error_msg, args, context=_tool_result_log_context(tool_result))
     else:
         # 额外检查 execute_command 的 returncode
         try:

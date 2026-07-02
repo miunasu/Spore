@@ -486,7 +486,7 @@ export const ChatPanel: React.FC = () => {
         <div className="absolute inset-0 bg-spore-highlight/10 flex items-center justify-center z-20 pointer-events-none">
           <div className="bg-spore-card border border-spore-highlight rounded-xl px-6 py-4 shadow-lg">
             <span className="text-spore-highlight font-medium">
-              {draggingFile ? `释放以编辑: ${draggingFile.name}` : '释放以编辑文件'}
+              {draggingFile ? `释放以查看: ${draggingFile.name}` : '释放以查看文件'}
             </span>
           </div>
         </div>

@@ -8,6 +8,7 @@ import json
 import time
 import os
 import uuid
+import contextvars
 from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -30,6 +31,7 @@ from .utils.system_io import set_current_agent_id, get_current_agent_id
 from .todo_manager import todo_write
 from .logger import log_error, log_tool_error
 from .prompt_loader import load_system_prompt
+from .session_context import get_current_conversation_id
 from AutoAgent.supervisor import supervisor
 from .utils import terminal
 from . import config as _config
@@ -50,6 +52,7 @@ class ConversationLoop:
         self.ipc_manager = ipc_manager
         self.config = config
         self.system_prompt = system_prompt
+        self.session_id = None
         self.tool_names = tool_names  # 用于重新加载prompt时使用
         
         # 初始化文本协议管理器
@@ -70,7 +73,10 @@ class ConversationLoop:
         context_mode = getattr(self.state, "context_mode", "strong_context")
         effective_mode = "strong_context" if context_mode == "auto" else context_mode
         return get_tools_for_mode(effective_mode)
-    
+
+    def _conversation_id_for_context(self) -> Optional[str]:
+        return getattr(self, "session_id", None) or get_current_conversation_id()
+
     def manage_context_length(self) -> None:
         """
         管理对话历史长度
@@ -496,9 +502,11 @@ class ConversationLoop:
                 tool_timeout = self.config.tool_execution_timeout
                 current_agent_id = get_current_agent_id() or "main_agent"
 
+                parent_context = contextvars.copy_context()
+
                 def execute_with_agent_id():
                     set_current_agent_id(current_agent_id)
-                    return handler(args)
+                    return parent_context.run(handler, args)
 
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(execute_with_agent_id)
@@ -594,7 +602,10 @@ class ConversationLoop:
             results = {}
             max_workers = max(1, len(action_block.actions))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [(executor.submit(self._execute_single_action, action), action) for action in action_block.actions]
+                futures = []
+                for action in action_block.actions:
+                    ctx = contextvars.copy_context()
+                    futures.append((executor.submit(ctx.run, self._execute_single_action, action), action))
                 for future, action in futures:
                     execution = future.result()
                     task_id = action.task_id or action.tool_name
@@ -680,7 +691,7 @@ class ConversationLoop:
         tasks = self.protocol_manager.parse_todo_from_response(reply)
         if tasks:
             # 更新 TODO
-            todo_write(tasks)
+            todo_write(tasks, session_id=self._conversation_id_for_context())
     
     def validate_and_check_response(self, reply: str) -> Optional[str]:
         """
@@ -746,7 +757,7 @@ class ConversationLoop:
             
             # 清理状态
             self.state.restore_temp_messages()
-            todo_write([])
+            todo_write([], session_id=self._conversation_id_for_context())
             clear_last_todo_content()
             self.state.last_answer = ""  # 重置
             return "break"
@@ -786,7 +797,7 @@ class ConversationLoop:
                     "content": reply
                 })
                 self.state.restore_temp_messages()
-                todo_write([])
+                todo_write([], session_id=self._conversation_id_for_context())
                 clear_last_todo_content()
                 self.state.last_answer = ""  # 重置
                 return "break"
@@ -818,7 +829,7 @@ class ConversationLoop:
         """处理键盘中断"""
         print("\nInterrupt LLM...")
         clear_last_todo_content()
-        todo_write([])
+        todo_write([], session_id=self._conversation_id_for_context())
         
         # 发送中断命令
         self.ipc_manager.interrupt_current_request()

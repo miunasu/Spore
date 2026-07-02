@@ -10,6 +10,7 @@ import os
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
 from .logger import log_tool_error
+from .session_context import get_current_conversation_id
 
 # Todo 更新回调
 _todo_update_callback: Optional[Callable[[str, List[Dict]], None]] = None
@@ -36,16 +37,33 @@ class TodoManager:
         """
         self.session_manager = session_manager
     
-    def _get_current_todos(self) -> List[Dict]:
-        """获取当前会话的TODO列表"""
-        if self.session_manager:
-            return self.session_manager.current.todos
-        return []
+    def _resolve_session_id(self, session_id: Optional[str] = None) -> str:
+        if session_id:
+            return session_id
+        context_session_id = get_current_conversation_id()
+        if context_session_id:
+            return context_session_id
+        return self._get_current_session_id()
     
-    def _set_current_todos(self, todos: List[Dict]) -> None:
-        """设置当前会话的TODO列表"""
-        if self.session_manager:
-            self.session_manager.current.todos = todos
+    def _get_session_state(self, session_id: Optional[str] = None):
+        if not self.session_manager:
+            return None
+        resolved_session_id = self._resolve_session_id(session_id)
+        state = self.session_manager.get_session(resolved_session_id)
+        if state is None:
+            state = self.session_manager.create_session(resolved_session_id)
+        return state
+
+    def _get_current_todos(self, session_id: Optional[str] = None) -> List[Dict]:
+        """获取指定会话的TODO列表"""
+        state = self._get_session_state(session_id)
+        return state.todos if state else []
+
+    def _set_current_todos(self, todos: List[Dict], session_id: Optional[str] = None) -> None:
+        """设置指定会话的TODO列表"""
+        state = self._get_session_state(session_id)
+        if state:
+            state.todos = todos
     
     def _get_current_session_id(self) -> str:
         """获取当前会话ID"""
@@ -53,7 +71,7 @@ class TodoManager:
             return self.session_manager.current_session_id
         return "default"
     
-    def write_todos(self, tasks: List[Dict]) -> List[Dict]:
+    def write_todos(self, tasks: List[Dict], session_id: Optional[str] = None) -> List[Dict]:
         """写入完整的TODO列表（声明式更新）
         
         Args:
@@ -89,21 +107,21 @@ class TodoManager:
             todos.append(todo)
         
         # 保存到当前会话
-        self._set_current_todos(todos)
+        resolved_session_id = self._resolve_session_id(session_id)
+        self._set_current_todos(todos, resolved_session_id)
         
         # 触发回调（传递会话ID）
         if _todo_update_callback:
             try:
-                session_id = self._get_current_session_id()
-                _todo_update_callback(session_id, todos)
+                _todo_update_callback(resolved_session_id, todos)
             except Exception:
                 pass
         
         return todos
     
-    def get_todos(self) -> List[Dict]:
+    def get_todos(self, session_id: Optional[str] = None) -> List[Dict]:
         """获取当前会话的TODO列表"""
-        return self._get_current_todos().copy()
+        return self._get_current_todos(session_id).copy()
     
     def format_for_prompt(self) -> str:
         """格式化TODO列表用于prompt显示"""
@@ -144,7 +162,7 @@ def get_todo_manager() -> Optional[TodoManager]:
     """获取全局TODO管理器实例"""
     return _todo_manager
 
-def todo_write(tasks: List[Dict]) -> Dict:
+def todo_write(tasks: List[Dict], session_id: Optional[str] = None) -> Dict:
     """
     TODO写入函数 - 供LLM通过function call调用
     声明式更新整个任务列表
@@ -172,7 +190,7 @@ def todo_write(tasks: List[Dict]) -> Dict:
             return {"success": False, "error": error_msg}
         
         # 写入TODO列表
-        todos = _todo_manager.write_todos(tasks)
+        todos = _todo_manager.write_todos(tasks, session_id=session_id)
         
         # 统计各状态数量
         status_count = {"pending": 0, "completed": 0, "failed": 0}

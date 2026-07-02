@@ -19,6 +19,7 @@ from base.todo_manager import todo_write
 from base.agent_process import get_current_agent_manager
 from base.interrupt_handler import get_interrupt_handler
 from AutoAgent import select_context_mode
+from base.session_context import conversation_context
 
 router = APIRouter()
 
@@ -104,6 +105,10 @@ class InterruptRequest(BaseModel):
     conversation_id: Optional[str] = None
 
 
+class ConversationRequest(BaseModel):
+    conversation_id: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     """聊天响应模型"""
     status: str
@@ -161,7 +166,8 @@ async def send_message(req: ChatRequest):
         for name in current_tools
         if name in TOOL_DEFINITIONS
     }
-    base_prompt = load_system_prompt() or ""
+    with conversation_context(conversation_id):
+        base_prompt = load_system_prompt() or ""
     protocol_manager = ProtocolManager()
     system_prompt = protocol_manager.inject_protocol(
         base_prompt,
@@ -189,13 +195,14 @@ async def send_message(req: ChatRequest):
         # conv_loop.state 绑定到特定的会话状态，不会被其他请求影响
         
         # 管理上下文长度
-        conv_loop.manage_context_length()
+        with conversation_context(conversation_id):
+            conv_loop.manage_context_length()
         
         # 修复不完整的消息
-        conv_loop.fix_incomplete_messages()
+            conv_loop.fix_incomplete_messages()
         
         # 发送请求并获取响应
-        return conv_loop.send_chat_request(conversation_id=conversation_id)
+            return conv_loop.send_chat_request(conversation_id=conversation_id)
     
     try:
         # 在线程池中执行阻塞操作
@@ -223,7 +230,8 @@ async def send_message(req: ChatRequest):
             return ChatResponse(status="interrupted")
         
         # 使用文本协议验证和处理响应
-        result = conv_loop.validate_and_check_response(reply)
+        with conversation_context(conversation_id):
+            result = conv_loop.validate_and_check_response(reply)
         
         # 提取用户可见内容（去除协议标记）
         clean_reply = extract_user_visible_content(reply)
@@ -327,16 +335,22 @@ def get_history(raw: bool = False, session_id: Optional[str] = None) -> Dict[str
 
 
 @router.post("/new")
-def new_conversation():
-    """新建对话 - 清空当前会话状态"""
+def new_conversation(req: Optional[ConversationRequest] = None):
+    """新建对话 - 清空目标会话状态"""
     session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
     try:
+        conversation_id = (req.conversation_id if req else None) or session_manager.current_session_id
+        target_state = session_manager.get_session(conversation_id)
+        if not target_state:
+            target_state = session_manager.create_session(conversation_id)
+
+        target_state.clear_all()
         clear_last_todo_content()
-        todo_write([])
+        todo_write([], session_id=conversation_id)
         
         return {"success": True, "message": "已创建新对话"}
     except Exception as e:

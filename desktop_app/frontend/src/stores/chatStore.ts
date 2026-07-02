@@ -296,24 +296,42 @@ export const useChatStore = create<ChatStore>((set, get) => {
           await chatApi.switchSession(id);
           
           // 从后端加载该会话的消息历史
-          const historyResponse = await chatApi.history(false, id);
+          const historyResponse = await chatApi.history(true, id);
           
-          const messages: Message[] = historyResponse.messages
-            .filter((msg) => {
-              // 只保留 user 和 assistant 消息
-              if (msg.role !== 'user' && msg.role !== 'assistant') return false;
-              // 过滤掉工具结果消息（以 @SPORE:RESULT 开头）
-              if (msg.role === 'user' && msg.content?.trim().startsWith('@SPORE:RESULT')) return false;
-              return true;
+          const allMessages = historyResponse.messages.filter((msg) => (
+            msg.role === 'user' || msg.role === 'assistant'
+          ));
+
+          const messages: Message[] = allMessages
+            .map((msg, index) => {
+              const baseMessage = {
+                id: index.toString(),
+                role: msg.role as 'user' | 'assistant',
+                timestamp: Date.now(),
+              };
+
+              if (msg.role === 'assistant') {
+                const prevMsg = index > 0 ? allMessages[index - 1] : null;
+                const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
+
+                return {
+                  ...baseMessage,
+                  content: extractDisplayContent(msg.content),
+                  sent_messages,
+                  raw_response: msg.content,
+                };
+              }
+
+              if (msg.content?.trim().startsWith('@SPORE:RESULT')) {
+                return null;
+              }
+
+              return {
+                ...baseMessage,
+                content: msg.content,
+              };
             })
-            .map((msg, index) => ({
-              id: index.toString(),
-              role: msg.role as 'user' | 'assistant',
-              // assistant 消息提取显示内容
-              content: msg.role === 'assistant' ? extractDisplayContent(msg.content) : msg.content,
-              timestamp: Date.now(),
-            }))
-            .filter((msg) => msg.content.trim() !== ''); // 过滤掉空内容
+            .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
           
           // 更新该对话的消息
           get().setMessages(messages, id);
@@ -586,23 +604,41 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
       try {
         const chatApi = createChatApi(conv.backendPort);
-        const response = await chatApi.history(false, conv.id);
-        const messages: Message[] = response.messages
-          .filter((msg) => {
-            // 只保留 user 和 assistant 消息
-            if (msg.role !== 'user' && msg.role !== 'assistant') return false;
-            // 过滤掉工具结果消息（以 @SPORE:RESULT 开头）
-            if (msg.role === 'user' && msg.content?.trim().startsWith('@SPORE:RESULT')) return false;
-            return true;
+        const response = await chatApi.history(true, conv.id);
+        const allMessages = response.messages.filter((msg) => (
+          msg.role === 'user' || msg.role === 'assistant'
+        ));
+
+        const messages: Message[] = allMessages
+          .map((msg, index) => {
+            const baseMessage = {
+              id: index.toString(),
+              role: msg.role as 'user' | 'assistant',
+              timestamp: Date.now(),
+            };
+
+            if (msg.role === 'assistant') {
+              const prevMsg = index > 0 ? allMessages[index - 1] : null;
+              const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
+
+              return {
+                ...baseMessage,
+                content: extractDisplayContent(msg.content),
+                sent_messages,
+                raw_response: msg.content,
+              };
+            }
+
+            if (msg.content?.trim().startsWith('@SPORE:RESULT')) {
+              return null;
+            }
+
+            return {
+              ...baseMessage,
+              content: msg.content,
+            };
           })
-          .map((msg, index) => ({
-            id: index.toString(),
-            role: msg.role as 'user' | 'assistant',
-            // assistant 消息提取显示内容
-            content: msg.role === 'assistant' ? extractDisplayContent(msg.content) : msg.content,
-            timestamp: Date.now(),
-          }))
-          .filter((msg) => msg.content.trim() !== ''); // 过滤掉空内容
+          .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
         get().setMessages(messages);
       } catch (error) {
         frontendLog(`[错误] 加载历史失败: ${error}`);
@@ -627,11 +663,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
         await chatApi.switchSession(newConv.id);
 
         // 3. 加载历史文件到当前会话
-        const loadResponse = await commandsApi.load(filename);
+        const loadResponse = await commandsApi.load(filename, newConv.id);
         
         if (loadResponse.success) {
           // 4. 获取加载后的历史消息（使用 raw=true 获取原始内容）
-          const historyResponse = await chatApi.history(true);
+          const historyResponse = await chatApi.history(true, newConv.id);
           
           // 先过滤消息，保留所有消息用于构建上下文
           const allMessages = historyResponse.messages.filter((msg) => {
@@ -727,7 +763,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       try {
         const cmdApi = createCommandsApi(conv.backendPort);
-        await cmdApi.save();
+        await cmdApi.save(conv.id);
       } catch (error) {
         frontendLog(`[错误] 保存对话失败: ${error}`);
       }

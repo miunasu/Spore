@@ -89,9 +89,10 @@ export const createChatApi = (port: number) => ({
       `/api/chat/history${raw ? '?raw=true' : ''}${sessionId ? (raw ? '&' : '?') + `session_id=${sessionId}` : ''}`
     ),
 
-  newConversation: () =>
+  newConversation: (conversationId?: string) =>
     requestToPort<{ success: boolean }>(port, '/api/chat/new', {
       method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
   // 会话管理
@@ -125,49 +126,55 @@ export const createChatApi = (port: number) => ({
 
 // 创建针对特定端口的 Commands API
 export const createCommandsApi = (port: number) => ({
-  getPrompt: () =>
+  getPrompt: (conversationId?: string) =>
     requestToPort<{ prompt: string; token_count: number }>(
       port,
-      '/api/commands/prompt'
+      `/api/commands/prompt${conversationId ? `?conversation_id=${conversationId}` : ''}`
     ),
 
-  getContext: (full = false) =>
+  getContext: (full = false, conversationId?: string) =>
     requestToPort<{ messages: unknown[]; message_count?: number }>(
       port,
-      `/api/commands/context?full=${full}`
+      `/api/commands/context?full=${full}${conversationId ? `&conversation_id=${conversationId}` : ''}`
     ),
 
-  clearMemory: () =>
+  clearMemory: (conversationId?: string) =>
     requestToPort<{ success: boolean }>(port, '/api/commands/memory/clear', {
       method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
   getSkills: () =>
     requestToPort<{ skills: string }>(port, '/api/commands/skills'),
 
-  toggleSaveMode: () =>
+  toggleSaveMode: (conversationId?: string) =>
     requestToPort<{ save_mode: boolean }>(port, '/api/commands/savemode', {
       method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
-  save: () =>
+  save: (conversationId?: string) =>
     requestToPort<{ success: boolean }>(port, '/api/commands/save', {
       method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
-  load: (filename: string) =>
+  load: (filename: string, conversationId?: string) =>
     requestToPort<{ success: boolean; message_count: number }>(
       port,
       '/api/commands/load',
-      { method: 'POST', body: JSON.stringify({ filename }) }
+      { method: 'POST', body: JSON.stringify({ filename, conversation_id: conversationId }) }
     ),
 
-  continueRecent: () =>
+  continueRecent: (conversationId?: string) =>
     requestToPort<{
       success: boolean;
       filename: string;
       message_count: number;
-    }>(port, '/api/commands/continue', { method: 'POST' }),
+    }>(port, '/api/commands/continue', {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
+    }),
 
   getTokens: (conversationId?: string) =>
     requestToPort<{
@@ -187,9 +194,10 @@ export const createCommandsApi = (port: number) => ({
       body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
-  triggerCharacter: () =>
+  triggerCharacter: (conversationId?: string) =>
     requestToPort<{ success: boolean }>(port, '/api/commands/character', {
       method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
     }),
 
   listHistory: () =>
@@ -230,7 +238,7 @@ export const createCommandsApi = (port: number) => ({
     }>(port, `/api/commands/logs/auto-clean?min_lines=${minLines}`, { method: 'POST' }),
 
   // 上下文模式管理
-  getMode: () =>
+  getMode: (conversationId?: string) =>
     requestToPort<{
       mode: string;
       description: string;
@@ -239,9 +247,9 @@ export const createCommandsApi = (port: number) => ({
         label: string;
         description: string;
       }>;
-    }>(port, '/api/commands/mode'),
+    }>(port, `/api/commands/mode${conversationId ? `?conversation_id=${conversationId}` : ''}`),
 
-  setMode: (mode: string) =>
+  setMode: (mode: string, conversationId?: string) =>
     requestToPort<{
       success: boolean;
       mode: string;
@@ -249,7 +257,7 @@ export const createCommandsApi = (port: number) => ({
       message: string;
     }>(port, '/api/commands/mode', {
       method: 'POST',
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode, conversation_id: conversationId }),
     }),
 });
 

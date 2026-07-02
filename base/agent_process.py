@@ -10,6 +10,7 @@ import time
 import multiprocessing as mp
 import logging
 import json
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
@@ -23,6 +24,7 @@ from .logger import log_error, log_info, log_tool_error
 from .multi_agent_monitor import create_agent_terminal, close_all_terminals, AgentTerminal
 from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock
 from .utils import check_tool_result_error
+from .session_context import get_current_conversation_id, conversation_context
 
 
 # 全局IPC管理器引用
@@ -73,7 +75,8 @@ class SubAgentThread(threading.Thread):
         monitor_queue: Optional[mp.Queue] = None,
         max_iterations: int = 100,
         working_dir: Optional[str] = None,
-        skill: Optional[str] = None
+        skill: Optional[str] = None,
+        parent_conversation_id: Optional[str] = None
     ):
         """
         初始化子Agent线程
@@ -104,6 +107,7 @@ class SubAgentThread(threading.Thread):
         self.max_iterations = max_iterations
         self.working_dir = working_dir  # 工作目录
         self.skill = skill  # 指定使用的skill
+        self.parent_conversation_id = parent_conversation_id
         
         # 构建工具定义字典（用于文本协议）
         self.tool_definitions = {name: TOOL_DEFINITIONS[name] for name in agent_type.tools_list if name in TOOL_DEFINITIONS}
@@ -199,7 +203,8 @@ class SubAgentThread(threading.Thread):
             level: 日志级别
         """
         if self.terminal:
-            self.terminal.log(message, level)
+            with conversation_context(self.parent_conversation_id):
+                self.terminal.log(message, level)
     
     def start_terminal(self) -> None:
         """启动独立监控终端"""
@@ -554,6 +559,10 @@ class SubAgentThread(threading.Thread):
     
     def _execute_single_action(self, action: ParsedAction, prefix_text: str = "") -> Dict[str, Any]:
         """执行一个工具调用并返回结构化状态。"""
+        if self.parent_conversation_id and get_current_conversation_id() != self.parent_conversation_id:
+            with conversation_context(self.parent_conversation_id):
+                return self._execute_single_action(action, prefix_text)
+
         tool_name = action.tool_name
         args = action.parameters
 
@@ -582,7 +591,8 @@ class SubAgentThread(threading.Thread):
             from base.utils.system_io import set_current_agent_id
             set_current_agent_id(self.agent_id)
 
-            tool_result = handler(args)
+            with conversation_context(self.parent_conversation_id):
+                tool_result = handler(args)
             if tool_result is None:
                 self.log_output("工具执行被中断")
                 self.database.set_status(AgentStatus.INTERRUPTED)
@@ -665,7 +675,10 @@ class SubAgentThread(threading.Thread):
             results = {}
             max_workers = max(1, len(action_block.actions))
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [(executor.submit(self._execute_single_action, action, prefix_text), action) for action in action_block.actions]
+                futures = []
+                for action in action_block.actions:
+                    ctx = contextvars.copy_context()
+                    futures.append((executor.submit(ctx.run, self._execute_single_action, action, prefix_text), action))
                 for future, action in futures:
                     execution = future.result()
                     task_id = action.task_id or action.tool_name
@@ -777,7 +790,8 @@ class AgentProcessManager:
                     event_manager=self.event_manager,
                     monitor_queue=self.monitor_queue,
                     working_dir=task.working_dir,
-                    skill=task.skill  # 传递指定skill
+                    skill=task.skill,  # 传递指定skill
+                    parent_conversation_id=get_current_conversation_id()
                 )
                 self.sub_agents[task.task_id] = agent_thread
         

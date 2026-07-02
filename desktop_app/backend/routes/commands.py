@@ -8,13 +8,28 @@ import re
 from pathlib import Path
 
 from ..core import get_session_manager
+from base.session_context import conversation_context
 
 router = APIRouter()
+
+
+def _get_target_state(session_manager, conversation_id: Optional[str] = None):
+    if conversation_id:
+        state = session_manager.get_session(conversation_id)
+        if not state:
+            raise HTTPException(status_code=404, detail=f"会话不存在: {conversation_id}")
+        return state, conversation_id
+    return session_manager.current, session_manager.current_session_id
 
 
 class LoadRequest(BaseModel):
     """加载对话请求"""
     filename: str
+    conversation_id: Optional[str] = None
+
+
+class ConversationCommandRequest(BaseModel):
+    conversation_id: Optional[str] = None
 
 
 class RenameHistoryRequest(BaseModel):
@@ -27,25 +42,26 @@ class DeleteHistoryRequest(BaseModel):
 
 
 @router.get("/prompt")
-def get_prompt() -> Dict[str, Any]:
+def get_prompt(conversation_id: Optional[str] = None) -> Dict[str, Any]:
     """获取系统提示词"""
     from base.prompt_loader import load_system_prompt
     
-    prompt = load_system_prompt()
+    with conversation_context(conversation_id):
+        prompt = load_system_prompt()
     return {
         "prompt": prompt
     }
 
 
 @router.get("/context")
-def get_context(full: bool = False) -> Dict[str, Any]:
+def get_context(full: bool = False, conversation_id: Optional[str] = None) -> Dict[str, Any]:
     """获取上下文 - 复用 state.messages"""
     session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
-    state = session_manager.current
+    state, _ = _get_target_state(session_manager, conversation_id)
     
     if full:
         return {"messages": state.messages}
@@ -65,7 +81,7 @@ def get_context(full: bool = False) -> Dict[str, Any]:
 
 
 @router.post("/memory/clear")
-def clear_memory():
+def clear_memory(req: Optional[ConversationCommandRequest] = None):
     """清除记忆 - 复用 CLICommandHandler._handle_memclean_command 逻辑"""
     session_manager = get_session_manager()
     
@@ -76,9 +92,11 @@ def clear_memory():
         from base.utils import clear_last_todo_content
         from base.todo_manager import todo_write
         
-        session_manager.current.clear_all()
+        conversation_id = req.conversation_id if req else None
+        state, resolved_conversation_id = _get_target_state(session_manager, conversation_id)
+        state.clear_all()
         clear_last_todo_content()
-        todo_write([])
+        todo_write([], session_id=resolved_conversation_id)
         
         return {"success": True, "message": "记忆已清除"}
     except Exception as e:
@@ -95,19 +113,21 @@ def get_skills() -> Dict[str, Any]:
 
 
 @router.post("/savemode")
-def toggle_savemode() -> Dict[str, Any]:
+def toggle_savemode(req: Optional[ConversationCommandRequest] = None) -> Dict[str, Any]:
     """切换节省模式 - 复用 state.toggle_save_mode"""
     session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
-    is_enabled = session_manager.current.toggle_save_mode()
+    conversation_id = req.conversation_id if req else None
+    state, _ = _get_target_state(session_manager, conversation_id)
+    is_enabled = state.toggle_save_mode()
     return {"save_mode": is_enabled}
 
 
 @router.post("/save")
-def save_conversation():
+def save_conversation(req: Optional[ConversationCommandRequest] = None):
     """保存对话 - 复用 memory_manager.save_messages"""
     session_manager = get_session_manager()
     
@@ -116,7 +136,9 @@ def save_conversation():
     
     try:
         from base.memory_manager import save_messages
-        save_messages(session_manager.current.messages)
+        conversation_id = req.conversation_id if req else None
+        state, _ = _get_target_state(session_manager, conversation_id)
+        save_messages(state.messages)
         return {"success": True, "message": "对话已保存"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -132,7 +154,7 @@ def load_conversation(req: LoadRequest):
     
     try:
         from base.memory_manager import load_messages
-        state = session_manager.current
+        state, _ = _get_target_state(session_manager, req.conversation_id)
         state.messages = load_messages(req.filename)
         state.user_message_count = 0
         return {"success": True, "message_count": len(state.messages)}
@@ -143,7 +165,7 @@ def load_conversation(req: LoadRequest):
 
 
 @router.post("/continue")
-def continue_recent():
+def continue_recent(req: Optional[ConversationCommandRequest] = None):
     """继续最近对话 - 复用 memory_manager.get_latest_history_file"""
     session_manager = get_session_manager()
     
@@ -154,7 +176,8 @@ def continue_recent():
         from base.memory_manager import load_messages, get_latest_history_file
         from base import config as _config
         
-        state = session_manager.current
+        conversation_id = req.conversation_id if req else None
+        state, _ = _get_target_state(session_manager, conversation_id)
         latest_file = get_latest_history_file()
         state.messages = load_messages(latest_file)
         state.user_message_count = 0
@@ -232,14 +255,15 @@ def set_active_conversation(request: SetConversationRequest) -> Dict[str, Any]:
 
 
 @router.post("/character")
-def trigger_character():
+def trigger_character(req: Optional[ConversationCommandRequest] = None):
     """触发角色选择 - 复用 AutoAgent.character_choose_agent"""
     session_manager = get_session_manager()
     
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
-    state = session_manager.current
+    conversation_id = req.conversation_id if req else None
+    state, _ = _get_target_state(session_manager, conversation_id)
     if not state.messages:
         raise HTTPException(status_code=400, detail="没有对话历史")
     
@@ -464,10 +488,11 @@ def auto_clean_short_logs(min_lines: int = 10) -> Dict[str, Any]:
 class SetModeRequest(BaseModel):
     """设置上下文模式请求"""
     mode: str
+    conversation_id: Optional[str] = None
 
 
 @router.get("/mode")
-def get_context_mode() -> Dict[str, Any]:
+def get_context_mode(conversation_id: Optional[str] = None) -> Dict[str, Any]:
     """获取当前会话的上下文处理模式"""
     from AutoAgent import get_mode_description
     
@@ -479,8 +504,9 @@ def get_context_mode() -> Dict[str, Any]:
         config = get_config()
         mode = config.context_mode
     else:
-        # 从当前会话获取模式
-        mode = session_manager.current.context_mode
+        # 从目标会话获取模式
+        state, _ = _get_target_state(session_manager, conversation_id)
+        mode = state.context_mode
     
     return {
         "mode": mode,
@@ -518,8 +544,9 @@ def set_context_mode(req: SetModeRequest) -> Dict[str, Any]:
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
-    # 设置当前会话的模式
-    session_manager.current.context_mode = req.mode
+    # 设置目标会话的模式
+    state, _ = _get_target_state(session_manager, req.conversation_id)
+    state.context_mode = req.mode
     
     return {
         "success": True,

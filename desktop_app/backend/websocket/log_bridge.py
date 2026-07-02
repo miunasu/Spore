@@ -10,6 +10,7 @@ from typing import Dict, List
 from .ipc_bridge import send_ws_message
 from base.logger import get_logger
 from base.todo_manager import set_todo_update_callback
+from base.session_context import get_current_conversation_id
 
 try:
     from base.multi_agent_monitor import set_agent_log_callback
@@ -33,11 +34,11 @@ def setup_log_callbacks():
         original_send(log_type, content)
         
         # 获取当前会话 ID
-        conversation_id = None
+        conversation_id = get_current_conversation_id()
         try:
             from ..core import get_session_manager
             manager = get_session_manager()
-            if manager:
+            if manager and not conversation_id:
                 conversation_id = manager.current_session_id
         except:
             pass
@@ -99,11 +100,11 @@ def setup_agent_monitor_callbacks():
         nonlocal _registered_agents
         
         # 获取当前会话 ID
-        conversation_id = None
+        conversation_id = get_current_conversation_id()
         try:
             from ..core import get_session_manager
             manager = get_session_manager()
-            if manager:
+            if manager and not conversation_id:
                 conversation_id = manager.current_session_id
         except:
             pass

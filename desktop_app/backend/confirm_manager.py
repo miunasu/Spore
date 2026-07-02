@@ -8,6 +8,7 @@
 import threading
 import time
 from typing import Optional, Dict, Any
+from base.session_context import get_current_conversation_id
 
 
 # 待处理的确认请求
@@ -99,11 +100,11 @@ def desktop_confirm(
     global _counter
     
     # 获取当前会话 ID
-    conversation_id = None
+    conversation_id = get_current_conversation_id()
     try:
         from .core import get_session_manager
         manager = get_session_manager()
-        if manager:
+        if manager and not conversation_id:
             conversation_id = manager.current_session_id
     except:
         pass

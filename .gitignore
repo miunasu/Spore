@@ -84,6 +84,11 @@ desktop_app/frontend/src-tauri/characters/
 desktop_app/frontend/node_modules/
 desktop_app/frontend/dist/
 desktop_app/frontend/.vite/
+desktop_app/frontend/*.tsbuildinfo
+desktop_app/frontend/npm-debug.log*
+desktop_app/frontend/yarn-debug.log*
+desktop_app/frontend/yarn-error.log*
+desktop_app/frontend/pnpm-debug.log*
 desktop_app/frontend/package-lock.json
 desktop_app/frontend/yarn.lock
 desktop_app/frontend/pnpm-lock.yaml

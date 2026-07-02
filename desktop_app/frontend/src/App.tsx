@@ -39,7 +39,7 @@ const PRELOADED_THEME_VAR_KEYS = [
 function App() {
   const { addLog, setActiveConversation } = useLogStore();
   const { addAgent, updateAgentStatus, addAgentLog } = useAgentStore();
-  const { activeConversationId } = useChatStore();
+  const activeConversationId = useChatStore((state) => state.activeConversationId);
   const { setTodos } = useTodoStore();
   const { setPendingRequest, clearRequest } = useConfirmStore();
   const theme = useSettingsStore((state) => state.theme);
@@ -63,6 +63,7 @@ function App() {
 
   // 批量处理 WebSocket 事件
   const handleWSEvents = useCallback((events: WSEvent[]) => {
+    const currentActiveConversationId = useChatStore.getState().activeConversationId;
     for (const event of events) {
       // 注意：不在这里过滤 conversation_id
       // 让各个 store 自己决定如何处理消息
@@ -89,7 +90,7 @@ function App() {
         }
         case 'agent_register':
           // Agent 注册消息 - 只处理当前活跃对话的 Agent
-          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+          if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
             addAgent({
               id: event.data.agent_id,
               name: event.data.agent_name,
@@ -100,7 +101,7 @@ function App() {
           break;
         case 'agent_output':
           // 只处理当前活跃对话的 Agent 输出
-          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+          if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
             // 确保 Agent 存在
             addAgent({
               id: event.data.agent_id,
@@ -118,32 +119,33 @@ function App() {
           break;
         case 'agent_status':
           // 只处理当前活跃对话的 Agent 状态更新
-          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+          if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
             updateAgentStatus(event.data.agent_id, event.data.status as AgentStatus);
           }
           break;
         case 'todo_update':
-          // 更新指定会话的 Todo（如果没有 conversation_id，则更新当前活跃会话）
-          const todoConversationId = event.data.conversation_id || activeConversationId;
-          if (todoConversationId) {
-            setTodos(todoConversationId, event.data.todos);
+          // 更新指定会话的 Todo；缺少 conversation_id 的事件会被丢弃
+          if (event.data.conversation_id) {
+            setTodos(event.data.conversation_id, event.data.todos);
+          } else {
+            console.warn('[WebSocket] Dropped unscoped todo_update event', event);
           }
           break;
         case 'confirm_request':
           // 只处理当前活跃对话的确认请求
-          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+          if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
             setPendingRequest(event.data);
           }
           break;
         case 'confirm_cancel':
           // 只处理当前活跃对话的确认取消
-          if (!event.data.conversation_id || event.data.conversation_id === activeConversationId) {
+          if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
             clearRequest();
           }
           break;
       }
     }
-  }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, setPendingRequest, clearRequest, activeConversationId]);
+  }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, setPendingRequest, clearRequest]);
 
   useEffect(() => {
     // 连接 WebSocket

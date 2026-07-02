@@ -583,7 +583,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [currentCharacter, setCurrentCharacter] = useState<string>('');
   const [charactersLoading, setCharactersLoading] = useState(false);
   
-  const { newConversation } = useChatStore();
+  const { newConversation, activeConversationId } = useChatStore();
   const {
     autoCleanShortLogs,
     autoCleanMinLines,
@@ -877,7 +877,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       label: '保存对话',
       icon: 'M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4',
       action: async () => {
-        await commandsApi.save();
+        await commandsApi.save(activeConversationId || undefined);
         setModalContent({ title: '成功', content: '对话已保存' });
       },
     },
@@ -886,7 +886,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       label: '查看提示词',
       icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
       action: async () => {
-        const result = await commandsApi.getPrompt();
+        const result = await commandsApi.getPrompt(activeConversationId || undefined);
         setModalContent({
           title: `系统提示词 (${result.token_count} tokens)`,
           content: result.prompt || '无',
@@ -898,7 +898,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       label: '查看上下文',
       icon: 'M4 6h16M4 10h16M4 14h16M4 18h16',
       action: async () => {
-        const result = await commandsApi.getContext();
+        const result = await commandsApi.getContext(false, activeConversationId || undefined);
         setModalContent({
           title: `上下文 (${result.message_count} 条消息)`,
           content: JSON.stringify(result.messages, null, 2),
@@ -922,7 +922,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       label: '清除记忆',
       icon: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',
       action: async () => {
-        await commandsApi.clearMemory();
+        await commandsApi.clearMemory(activeConversationId || undefined);
         await newConversation();
         setModalContent({ title: '成功', content: '记忆已清除' });
       },
@@ -932,7 +932,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       label: '切换节省模式',
       icon: 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z',
       action: async () => {
-        const result = await commandsApi.toggleSaveMode();
+        const result = await commandsApi.toggleSaveMode(activeConversationId || undefined);
         setModalContent({
           title: '节省模式',
           content: result.save_mode ? '已开启' : '已关闭',

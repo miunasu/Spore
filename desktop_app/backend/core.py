@@ -3,6 +3,7 @@
 复用 main.py 的初始化逻辑，但不启动 CLI 循环
 """
 from typing import Optional, Dict, Any, Tuple
+from base.session_context import conversation_context
 
 # 全局实例（桌面模式共享）
 _ipc_manager = None
@@ -67,7 +68,8 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     _cli_handler = CLICommandHandler(_state.current)
     
     # 7. 加载系统提示并注入协议
-    base_prompt = load_system_prompt() or ""
+    with conversation_context("default"):
+        base_prompt = load_system_prompt() or ""
     initial_context_mode = _state.current.context_mode
     initial_effective_mode = "strong_context" if initial_context_mode == "auto" else initial_context_mode
     initial_tools = get_tools_for_mode(initial_effective_mode)
@@ -165,8 +167,7 @@ def apply_runtime_config() -> Dict[str, Any]:
         for name in current_tools
         if name in TOOL_DEFINITIONS
     }
-    base_prompt = load_system_prompt() or ""
-    system_prompt = ProtocolManager().inject_protocol(base_prompt, tool_definitions)
+    protocol_manager = ProtocolManager()
 
     if _state:
         for session_id in _state.list_sessions():
@@ -175,6 +176,9 @@ def apply_runtime_config() -> Dict[str, Any]:
                 session_state.context_mode = applied_mode
 
             if _conv_loop_manager and session_id in _conv_loop_manager._loops:
+                with conversation_context(session_id):
+                    base_prompt = load_system_prompt() or ""
+                system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
                 loop = _conv_loop_manager._loops[session_id]
                 loop.config = new_config
                 loop.system_prompt = system_prompt
@@ -182,7 +186,9 @@ def apply_runtime_config() -> Dict[str, Any]:
 
     if _conv_loop:
         _conv_loop.config = new_config
-        _conv_loop.system_prompt = system_prompt
+        with conversation_context("default"):
+            base_prompt = load_system_prompt() or ""
+        _conv_loop.system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
         _conv_loop.tool_names = current_tools
 
     if _cli_handler and _state:

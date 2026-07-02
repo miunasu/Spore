@@ -82,8 +82,9 @@ export const ChatPanel: React.FC = () => {
   // 获取当前模式
   useEffect(() => {
     const fetchMode = async () => {
+      if (!activeConversationId) return;
       try {
-        const result = await commandsApi.getMode();
+        const result = await commandsApi.getMode(activeConversationId);
         setContextMode(result.mode);
         setAvailableModes(result.available_modes);
       } catch (err) {
@@ -91,12 +92,12 @@ export const ChatPanel: React.FC = () => {
       }
     };
     fetchMode();
-  }, []);
+  }, [activeConversationId]);
 
   // 切换模式
   const handleModeChange = async (newMode: string) => {
     try {
-      await commandsApi.setMode(newMode);
+      await commandsApi.setMode(newMode, activeConversationId || undefined);
       setContextMode(newMode);
     } catch (err) {
       console.error('Failed to set context mode:', err);
@@ -110,7 +111,7 @@ export const ChatPanel: React.FC = () => {
       commandsApi.setActiveConversation(activeConversationId).catch(() => {});
       
       // 获取该对话的模式
-      commandsApi.getMode().then((result) => {
+      commandsApi.getMode(activeConversationId).then((result) => {
         setContextMode(result.mode);
       }).catch(() => {});
     }

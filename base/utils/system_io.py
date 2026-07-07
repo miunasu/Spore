@@ -601,7 +601,7 @@ def edit_text_exact(
     normalize_indent: bool = True,
 ) -> Dict[str, Any]:
     """
-    精确字符串替换工具，要求在调用前通过 read_text_file 读取过目标文件。
+    精确字符串替换工具。
     
     参数:
         file_path: 文件路径
@@ -629,19 +629,8 @@ def edit_text_exact(
         "verification": None,
     }
 
-    # 检查文件是否被修改过
     # 规范化路径:合并多余反斜杠并转换为正斜杠,避免转义字符问题
     resolved_path = str(Path(normalize_path_for_pathlib(file_path)).resolve())
-    if _is_file_modified(resolved_path):
-        return _set_error(
-            result,
-            error_type="FILE_MODIFIED",
-            error_code="E202",
-            error_msg="文件已被修改，需要重新读取后才能继续编辑",
-            suggestions=[
-                "先调用 Read 工具重新读取文件内容，然后再次调用该工具",
-            ],
-        )
 
     if not old_string or old_string == new_string:
         return _set_error(
@@ -807,19 +796,8 @@ def multi_edit_text(
         "verification": None,
     }
 
-    # 检查文件是否被修改过
     # 规范化路径:合并多余反斜杠并转换为正斜杠,避免转义字符问题
     resolved_path = str(Path(normalize_path_for_pathlib(file_path)).resolve())
-    if _is_file_modified(resolved_path):
-        return _set_error(
-            result,
-            error_type="FILE_MODIFIED",
-            error_code="E202",
-            error_msg="文件已被修改，需要重新读取后才能继续编辑",
-            suggestions=[
-                "先调用 Read 工具重新读取文件内容，然后再次调用该工具",
-            ],
-        )
 
     if not isinstance(edits, list) or not edits:
         return _set_error(

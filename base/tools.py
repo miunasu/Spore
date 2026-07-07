@@ -127,7 +127,7 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "edit",
-            "description": "编辑文件，支持单次替换和批量替换。编辑前必须先用 file type=read 读取文件内容。不可用于覆盖整个文件内容，覆盖请用file type=write",
+            "description": "编辑文件，支持单次替换和批量替换。不可用于覆盖整个文件内容，覆盖请用file type=write",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -35,6 +35,7 @@ env/
 .uv-cache/
 
 # IDE
+.claude/settings.local.json
 .vscode/
 .idea/
 *.swp

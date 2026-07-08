@@ -610,7 +610,8 @@ def edit_text_exact(
         replace_all: 是否替换所有匹配项
         encoding: 文件编码（None 表示使用默认 utf-8）
         validate_syntax: 是否验证语法（Python/C）
-        normalize_indent: 是否自动标准化缩进（处理tab/空格混用）
+        normalize_indent: 精确匹配失败时是否启用缩进容错匹配
+            （自动兜底 tab/空格缩进差异、行尾空白差异，只替换匹配块，不改动文件其他部分）
     """
     result: Dict[str, Any] = {
         "ok": False,
@@ -653,33 +654,33 @@ def edit_text_exact(
         if content is None:
             return result
 
-        # 缩进标准化处理
-        if normalize_indent:
-            # 标准化文件内容和搜索字符串
-            content_normalized = _normalize_indent(content, 'auto')
-            old_string_normalized = _normalize_indent(old_string, 'auto')
-            new_string_normalized = _normalize_indent(new_string, 'auto')
-        else:
-            content_normalized = content
-            old_string_normalized = old_string
-            new_string_normalized = new_string
+        # 匹配策略：先精确匹配；失败且 normalize_indent 开启时启用缩进容错匹配
+        # （兜底 tab/空格缩进差异、行尾空白差异），只替换匹配到的文本块，不改动文件其他部分
+        match_strategy = "exact"
+        flex_matches: List[str] = []
+        occurrences = content.count(old_string)
 
-        occurrences = content_normalized.count(old_string_normalized) if replace_all else (1 if old_string_normalized in content_normalized else 0)
+        if occurrences == 0 and normalize_indent:
+            flex_matches = _find_flexible_matches(content, old_string)
+            if flex_matches:
+                match_strategy = "indent_tolerant"
+                occurrences = len(flex_matches)
+
         if occurrences == 0:
             return _set_error(
                 result,
                 error_type="STRING_NOT_FOUND",
                 error_code="E203",
-                error_msg="old_string 未在文件中找到",
+                error_msg="old_string 未在文件中找到（已尝试缩进容错匹配）" if normalize_indent else "old_string 未在文件中找到",
                 suggestions=[
-                    "确认 old_string 与文件内容完全匹配",
-                    "检查是否有缩进差异（tab vs 空格）",
-                    "检查是否需要设置 replace_all",
-                    "尝试设置 normalize_indent=true 自动处理缩进",
+                    "确认 old_string 与文件内容完全匹配（可先 read 该区域核对）",
+                    "old_string 的行内容可能与文件不一致（缩进差异已自动容错，无需担心 tab/空格）",
+                    "若仍无法匹配，可改用 type=line 按行号编辑",
                 ],
                 debug_info={
                     "replace_all": replace_all,
                     "normalize_indent": normalize_indent,
+                    "first_line_found_at_lines": _locate_first_line_hint(content, old_string),
                 },
             )
 
@@ -690,17 +691,30 @@ def edit_text_exact(
                 error_code="E204",
                 error_msg="old_string 在文件中出现多次，若需全部替换请设置 replace_all=true",
                 suggestions=[
-                    "提供更具体的 old_string 或设置 replace_all",
+                    "提供更具体的 old_string（增加上下文行）或设置 replace_all",
                 ],
-                debug_info={"occurrences": occurrences},
+                debug_info={"occurrences": occurrences, "match_strategy": match_strategy},
             )
 
         # 执行替换
-        new_content = content_normalized.replace(
-            old_string_normalized, 
-            new_string_normalized, 
-            occurrences if replace_all else 1
-        )
+        if match_strategy == "exact":
+            new_content = content.replace(
+                old_string,
+                new_string,
+                occurrences if replace_all else 1,
+            )
+        else:
+            # 容错匹配：替换文件中实际存在的原文块，
+            # 并将 new_string 的缩进适配为该文本块的实际缩进风格
+            new_content = content
+            blocks = list(dict.fromkeys(flex_matches)) if replace_all else [flex_matches[0]]
+            for block in blocks:
+                adapted_new = _normalize_indent(
+                    new_string, _detect_block_indent_style(block, content)
+                )
+                new_content = new_content.replace(
+                    block, adapted_new, -1 if replace_all else 1
+                )
         
         # 语法验证
         if validate_syntax:
@@ -733,7 +747,7 @@ def edit_text_exact(
         # 写入文件
         path.write_text(new_content, encoding=used_encoding)
         result["bytes_written"] = len(new_content.encode(used_encoding))
-        sm = difflib.SequenceMatcher(None, content_normalized.splitlines(), new_content.splitlines())
+        sm = difflib.SequenceMatcher(None, content.splitlines(), new_content.splitlines())
         lines_modified = sum(
             (tag != 'equal') * (j2 - j1 if tag in ('replace', 'insert') else i2 - i1)
             for tag, i1, i2, j1, j2 in sm.get_opcodes()
@@ -744,6 +758,7 @@ def edit_text_exact(
         result["data"] = {
             "replacements": occurrences if replace_all else 1,
             "replace_all": replace_all,
+            "match_strategy": match_strategy,
         }
 
         try:
@@ -777,7 +792,8 @@ def multi_edit_text(
         edits: 编辑操作列表
         encoding: 文件编码（None 表示使用默认 utf-8）
         validate_syntax: 是否验证语法（Python/C）
-        normalize_indent: 是否自动标准化缩进（处理tab/空格混用）
+        normalize_indent: 精确匹配失败时是否启用缩进容错匹配
+            （自动兜底 tab/空格缩进差异、行尾空白差异，只替换匹配块，不改动文件其他部分）
     """
     result: Dict[str, Any] = {
         "ok": False,
@@ -819,14 +835,10 @@ def multi_edit_text(
         content = _read_file_with_encoding(path, used_encoding, result)
         if content is None:
             return result
-        
-        # 缩进标准化处理
-        if normalize_indent:
-            content = _normalize_indent(content, 'auto')
-        
-        # 保存标准化后的原始内容用于比较
+
+        # 保存原始内容用于比较（不做任何全文件缩进重写，保持文件原有风格）
         original_content = content
-        
+
         total_replacements = 0
 
         for idx, edit in enumerate(edits, start=1):
@@ -842,11 +854,6 @@ def multi_edit_text(
             old_string = edit.get("old_string")
             new_string = edit.get("new_string")
             replace_all = bool(edit.get("replace_all", False))
-            
-            # 标准化编辑的字符串
-            if normalize_indent:
-                old_string = _normalize_indent(old_string, 'auto')
-                new_string = _normalize_indent(new_string, 'auto')
 
             if not old_string or new_string is None:
                 return _set_error(
@@ -871,24 +878,35 @@ def multi_edit_text(
                     ],
                 )
 
+            # 匹配策略：先精确匹配；失败且 normalize_indent 开启时启用缩进容错匹配
+            match_strategy = "exact"
+            flex_matches: List[str] = []
             occurrences = content.count(old_string)
+
+            if occurrences == 0 and normalize_indent:
+                flex_matches = _find_flexible_matches(content, old_string)
+                if flex_matches:
+                    match_strategy = "indent_tolerant"
+                    occurrences = len(flex_matches)
+
             if occurrences == 0:
                 return _set_error(
                     result,
                     error_type="STRING_NOT_FOUND",
                     error_code="E305",
-                    error_msg=f"第 {idx} 个编辑未找到 old_string",
+                    error_msg=f"第 {idx} 个编辑未找到 old_string（已尝试缩进容错匹配）" if normalize_indent else f"第 {idx} 个编辑未找到 old_string",
                     suggestions=[
-                        "确认 old_string 与文件内容完全匹配",
-                        "注意空格和缩进需完全一致",
-                        "检查是否有缩进差异（tab vs 空格）",
-                        "尝试设置 normalize_indent=true 自动处理缩进",
+                        "确认 old_string 与文件内容完全匹配（可先 read 该区域核对）",
+                        "缩进差异（tab/空格）已自动容错，请检查行内容本身是否一致",
+                        "注意 edits 按顺序应用，前面的编辑可能已改变了本编辑要匹配的内容",
+                        "若仍无法匹配，可改用 type=line 按行号编辑",
                     ],
                     debug_info={
                         "edit_index": idx,
                         "replace_all": replace_all,
                         "normalize_indent": normalize_indent,
                         "old_string_preview": old_string[:80],
+                        "first_line_found_at_lines": _locate_first_line_hint(content, old_string),
                     },
                 )
 
@@ -899,18 +917,29 @@ def multi_edit_text(
                     error_code="E306",
                     error_msg=f"第 {idx} 个编辑的 old_string 在文件中出现多次，请设置 replace_all=true 或提供唯一内容",
                     suggestions=[
-                        "提供更具体的 old_string",
+                        "提供更具体的 old_string（增加上下文行）",
                         "如需批量替换请设置 replace_all=true",
                     ],
                     debug_info={
                         "edit_index": idx,
                         "occurrences": occurrences,
+                        "match_strategy": match_strategy,
                     },
                 )
 
-            replace_times = occurrences if replace_all else 1
-            content = content.replace(old_string, new_string, replace_times)
-            total_replacements += replace_times
+            if match_strategy == "exact":
+                replace_times = occurrences if replace_all else 1
+                content = content.replace(old_string, new_string, replace_times)
+            else:
+                # 容错匹配：替换文件中实际存在的原文块，
+                # 并将 new_string 的缩进适配为该文本块的实际缩进风格
+                blocks = list(dict.fromkeys(flex_matches)) if replace_all else [flex_matches[0]]
+                for block in blocks:
+                    adapted_new = _normalize_indent(
+                        new_string, _detect_block_indent_style(block, content)
+                    )
+                    content = content.replace(block, adapted_new, -1 if replace_all else 1)
+            total_replacements += occurrences if replace_all else 1
 
         if content == original_content:
             return _set_error(
@@ -975,6 +1004,256 @@ def multi_edit_text(
             "total_replacements": total_replacements,
         }
         
+        # 编辑成功后，将文件标记为已修改
+        _set_file_modified(resolved_path, True)
+        return result
+    except Exception as exc:
+        import traceback
+        result["error"] = f"异常: {exc}\n详细信息: {traceback.format_exc()}"
+        return result
+
+
+def edit_text_lines(
+    file_path: str,
+    *,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
+    mode: str = "replace",
+    content: Optional[str] = None,
+    encoding: Optional[str] = None,
+    validate_syntax: bool = True,
+) -> Dict[str, Any]:
+    """
+    按行号编辑文件。适用于字符串匹配困难的场景（如大量重复内容、特殊字符）。
+
+    参数:
+        file_path: 文件路径
+        start_line: 起始行号（1-based，与 read 输出的行号一致，必需）
+        end_line: 结束行号（含），默认等于 start_line
+        mode: 编辑模式
+            - replace: 用 content 替换 start_line~end_line 的行
+            - insert_before: 在 start_line 之前插入 content
+            - insert_after: 在 start_line 之后插入 content
+            - delete: 删除 start_line~end_line 的行（无需 content）
+        content: 新内容（可多行；delete 模式外必需）
+        encoding: 文件编码（None 表示使用默认 utf-8）
+        validate_syntax: 是否验证语法（Python/C）
+
+    注意: 编辑后行号会变化，后续行号编辑前建议重新 read。
+    """
+    result: Dict[str, Any] = {
+        "ok": False,
+        "action": "edit_lines",
+        "path": file_path,
+        "error": None,
+        "error_type": None,
+        "error_code": None,
+        "suggestions": None,
+        "debug_info": None,
+        "data": None,
+        "total_lines": None,
+        "bytes_written": None,
+        "encoding_used": None,
+        "lines_modified": None,
+        "verification": None,
+        "warning": None,
+    }
+
+    # 规范化路径:合并多余反斜杠并转换为正斜杠,避免转义字符问题
+    resolved_path = str(Path(normalize_path_for_pathlib(file_path)).resolve())
+
+    valid_modes = ("replace", "insert_before", "insert_after", "delete")
+    if mode not in valid_modes:
+        return _set_error(
+            result,
+            error_type="INVALID_ARGUMENT",
+            error_code="E401",
+            error_msg=f"无效的 mode: {mode}",
+            suggestions=[f"mode 需为以下之一: {', '.join(valid_modes)}"],
+        )
+
+    def _to_int(value: Any, name: str) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                pass
+        raise ValueError(f"{name} 需为整数")
+
+    try:
+        start = _to_int(start_line, "start_line")
+        end = _to_int(end_line, "end_line")
+    except ValueError as e:
+        return _set_error(
+            result,
+            error_type="INVALID_ARGUMENT",
+            error_code="E402",
+            error_msg=str(e),
+            suggestions=["start_line 和 end_line 需为正整数（1-based）"],
+        )
+
+    if start is None or start < 1:
+        return _set_error(
+            result,
+            error_type="INVALID_ARGUMENT",
+            error_code="E402",
+            error_msg=f"start_line 必须提供且 >= 1，当前值: {start}",
+            suggestions=["start_line 表示起始行号（从 1 开始，与 read 输出一致）"],
+        )
+
+    end = end if end is not None else start
+    if end < start:
+        return _set_error(
+            result,
+            error_type="INVALID_ARGUMENT",
+            error_code="E402",
+            error_msg=f"end_line ({end}) 不能小于 start_line ({start})",
+            suggestions=["end_line 表示结束行号（含），需 >= start_line"],
+        )
+
+    if mode != "delete" and content is None:
+        return _set_error(
+            result,
+            error_type="INVALID_ARGUMENT",
+            error_code="E403",
+            error_msg=f"{mode} 模式需要提供 content（新内容）",
+            suggestions=["提供 content 参数；仅 delete 模式可省略"],
+        )
+
+    try:
+        path = Path(resolved_path)
+        used_encoding = encoding or 'utf-8'
+        result["encoding_used"] = used_encoding
+
+        if not path.exists() or not path.is_file():
+            return _set_error(
+                result,
+                error_type="FILE_NOT_FOUND",
+                error_code="E404",
+                error_msg=f"文件不存在: {path}",
+                suggestions=["确认文件路径是否正确"],
+            )
+
+        file_content = _read_file_with_encoding(path, used_encoding, result)
+        if file_content is None:
+            return result
+
+        had_trailing_newline = file_content.endswith('\n')
+        lines = file_content.split('\n')
+        if had_trailing_newline:
+            lines.pop()  # 去掉 split 产生的末尾空元素
+        if file_content == '':
+            lines = []
+        total_lines = len(lines)
+
+        # 行号范围校验（insert_before 允许 total_lines+1 表示追加到末尾）
+        max_start = total_lines + 1 if mode == "insert_before" else total_lines
+        if start > max_start or (mode in ("replace", "delete") and end > total_lines):
+            return _set_error(
+                result,
+                error_type="RANGE_ERROR",
+                error_code="E405",
+                error_msg=f"行号超出范围: start_line={start}, end_line={end}, 文件共 {total_lines} 行",
+                suggestions=[
+                    "先 read 文件确认行号",
+                    "insert_before 模式的 start_line 最大可为 总行数+1（追加到末尾）",
+                ],
+                debug_info={"total_lines": total_lines, "mode": mode},
+            )
+
+        # 准备新内容行（去掉一个末尾换行符，避免意外引入空行）
+        new_lines: List[str] = []
+        if mode != "delete":
+            text = content[:-1] if content.endswith('\n') else content
+            new_lines = text.split('\n')
+
+        # 应用编辑
+        old_slice: List[str] = []
+        if mode == "replace":
+            old_slice = lines[start - 1:end]
+            lines[start - 1:end] = new_lines
+            new_region_start = start
+        elif mode == "insert_before":
+            lines[start - 1:start - 1] = new_lines
+            new_region_start = start
+        elif mode == "insert_after":
+            lines[start:start] = new_lines
+            new_region_start = start + 1
+        else:  # delete
+            old_slice = lines[start - 1:end]
+            del lines[start - 1:end]
+            new_region_start = start
+
+        new_content = '\n'.join(lines)
+        if had_trailing_newline and lines:
+            new_content += '\n'
+
+        # 语法验证
+        if validate_syntax:
+            file_ext = path.suffix.lower()
+            is_valid = True
+            error_msg = None
+
+            if file_ext == '.py':
+                is_valid, error_msg = _validate_python_syntax(new_content)
+            elif file_ext in ['.c', '.h']:
+                is_valid, error_msg = _validate_c_syntax(new_content, path)
+
+            if not is_valid:
+                return _set_error(
+                    result,
+                    error_type="SYNTAX_ERROR",
+                    error_code="E406",
+                    error_msg=f"修改后的代码存在语法错误（未写入）: {error_msg}",
+                    suggestions=[
+                        "检查新内容的缩进是否与上下文一致",
+                        "确认行号范围是否正确（是否多删/少删了行）",
+                        "如果是误报，可设置 validate_syntax=false",
+                    ],
+                    debug_info={
+                        "file_type": file_ext,
+                        "validation_error": error_msg,
+                    },
+                )
+
+        # 写入文件
+        path.write_text(new_content, encoding=used_encoding)
+        result["bytes_written"] = len(new_content.encode(used_encoding))
+        result["total_lines"] = len(lines)
+        result["lines_modified"] = max(len(old_slice), len(new_lines))
+
+        def _preview(preview_lines: List[str], first_no: int, cap: int = 20) -> str:
+            shown = preview_lines[:cap]
+            text = '\n'.join(f" {first_no + i}\t{l}" for i, l in enumerate(shown))
+            if len(preview_lines) > cap:
+                text += f"\n ...（共 {len(preview_lines)} 行，已截断）"
+            return text
+
+        result["data"] = {
+            "mode": mode,
+            "start_line": start,
+            "end_line": end,
+            "lines_removed": len(old_slice),
+            "lines_inserted": len(new_lines),
+            "old_content_preview": _preview(old_slice, start) if old_slice else "",
+            "new_content_preview": _preview(new_lines, new_region_start) if new_lines else "",
+        }
+
+        # 行号编辑依赖最新的行号信息：若文件在上次 read 后已被修改（或从未 read），给出提醒
+        if _is_file_modified(resolved_path):
+            result["warning"] = "该文件自上次 read 后已被修改或从未 read，行号可能不准确，建议 read 核对结果"
+
+        try:
+            verify_content = path.read_text(encoding=used_encoding)
+            result["verification"] = "修改已应用并已验证" if verify_content == new_content else "修改已应用但验证不一致"
+        except Exception as e:
+            result["verification"] = f"修改已应用但验证失败: {e}"
+
+        result["ok"] = True
         # 编辑成功后，将文件标记为已修改
         _set_file_modified(resolved_path, True)
         return result
@@ -1070,6 +1349,83 @@ def _validate_c_syntax(content: str, file_path: Path) -> tuple[bool, Optional[st
         return False, "语法检查超时"
     except Exception as e:
         return False, f"语法检查异常: {str(e)}"
+
+
+def _normalize_line_for_match(line: str) -> str:
+    """
+    将单行标准化用于容错匹配：
+    - 行首缩进中的 tab 展开为 4 空格（消除 tab/空格缩进差异）
+    - 去除行尾空白（消除行尾空格/tab 差异）
+    行内容本身保持不变。
+    """
+    stripped = line.lstrip(' \t')
+    leading = line[:len(line) - len(stripped)]
+    return leading.replace('\t', '    ') + stripped.rstrip()
+
+
+def _detect_block_indent_style(block: str, fallback_text: str = "") -> str:
+    """
+    检测文本块的缩进风格，返回 'tab' 或 'space'。
+    块内没有缩进行时回退到 fallback_text（通常传整个文件内容），默认 'space'。
+    """
+    for text in (block, fallback_text):
+        if not text:
+            continue
+        for line in text.split('\n'):
+            ws = line[:len(line) - len(line.lstrip(' \t'))]
+            if '\t' in ws:
+                return 'tab'
+            if ws.startswith('    '):
+                return 'space'
+    return 'space'
+
+
+def _find_flexible_matches(content: str, old_string: str) -> List[str]:
+    """
+    缩进容错匹配（精确匹配失败时的兜底）。
+
+    常见失败原因是 old_string 使用 tab 缩进而文件实际使用空格缩进（或反之），
+    以及行尾空白差异。此函数按行滑动窗口，比较标准化后的行内容
+    （行首 tab 展开为 4 空格 + 去除行尾空白），找到匹配窗口后返回
+    文件中【实际存在的原文块】列表——调用方可直接对原文块做精确替换，
+    完全不改动文件的其他部分。
+
+    返回: 匹配到的原文块列表（每个窗口一项，可能包含重复文本）
+    """
+    content_lines = content.split('\n')
+    old_lines = old_string.split('\n')
+    n = len(old_lines)
+    if n == 0 or n > len(content_lines):
+        return []
+
+    norm_old = [_normalize_line_for_match(l) for l in old_lines]
+    norm_content = [_normalize_line_for_match(l) for l in content_lines]
+
+    matches: List[str] = []
+    for i in range(len(content_lines) - n + 1):
+        if norm_content[i:i + n] == norm_old:
+            matches.append('\n'.join(content_lines[i:i + n]))
+    return matches
+
+
+def _locate_first_line_hint(content: str, old_string: str, max_hits: int = 5) -> List[int]:
+    """
+    匹配失败时的调试辅助：在文件中查找 old_string 首个非空行（strip 后比较）
+    出现的行号（1-based），帮助 agent 定位应该编辑的位置。
+    """
+    first_line = ""
+    for l in old_string.split('\n'):
+        if l.strip():
+            first_line = l.strip()
+            break
+    if not first_line:
+        return []
+    hits = [
+        i + 1
+        for i, line in enumerate(content.split('\n'))
+        if line.strip() == first_line
+    ]
+    return hits[:max_hits]
 
 
 def _normalize_indent(text: str, target_indent: str = 'auto') -> str:

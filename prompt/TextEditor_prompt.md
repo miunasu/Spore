@@ -62,6 +62,14 @@ file type=read file_path="C:\docs\readme.txt"
 
 @SPORE:FINAL@
 
+## edit 匹配失败时怎么办
+
+- `old_string` 匹配会自动容错 tab/空格缩进差异和行尾空白差异，但行内容本身必须与文件一致，务必以 read 的输出为准
+- 匹配反复失败时，改用按行号编辑（行号以 read 输出为准）:
+  `edit type=line mode=replace file_path="C:\docs\readme.txt" start_line=3 end_line=3 new_string="# My Project v2.0"`
+- line 模式支持 mode=replace/insert_before/insert_after/delete；delete 无需 new_string
+- 行号编辑后文件行号会变化，再次按行号编辑前必须重新 read
+
 ## 关键点
 
 - 调用工具时不要输出 `@SPORE:FINAL@`

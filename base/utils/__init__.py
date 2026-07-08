@@ -3,7 +3,7 @@ from .characters import list_character_documents, load_character_document
 from .shell import execute_command
 from .json_utils import json_query, parse_json_object, validate_json_response, check_tool_result_error, log_tool_result
 from .env import get_environment_snapshot
-from .system_io import write_text_file, delete_path, read_text_file, edit_text_exact, multi_edit_text, write_text
+from .system_io import write_text_file, delete_path, read_text_file, edit_text_exact, multi_edit_text, edit_text_lines, write_text
 from .web_browser import visit_url, search, web_browser
 from .grep import grep
 from .terminal import clear_todo_block, clear_printed_lines, extra_line, todo_print, get_last_todo_content, clear_last_todo_content
@@ -28,6 +28,7 @@ __all__ = [
     'read_text_file',
     'edit_text_exact',
     'multi_edit_text',
+    'edit_text_lines',
     'write_text',
     'visit_url',
     'search',

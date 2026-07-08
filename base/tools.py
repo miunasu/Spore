@@ -21,7 +21,7 @@
     - skill_query: 查询技能文档
     - execute_command: 执行系统命令
     - file: 文件操作（读取/写入/删除）
-    - edit: 编辑文件（单次/批量替换）
+    - edit: 编辑文件（单次/批量替换/按行号编辑）
     - web_browser: 访问网页或搜索
     - Grep: 文件内容搜索
     - multi_agent_dispatch: 多Agent任务派发
@@ -38,6 +38,7 @@ from .utils import (
     read_text_file,
     edit_text_exact,
     multi_edit_text,
+    edit_text_lines,
     web_browser,
     grep,
 )
@@ -127,16 +128,19 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "edit",
-            "description": "编辑文件，支持单次替换和批量替换。不可用于覆盖整个文件内容，覆盖请用file type=write",
+            "description": "编辑文件，支持精确字符串替换（single/multi）和按行号编辑（line）。字符串匹配会自动容错tab/空格缩进差异。不可用于覆盖整个文件内容，覆盖请用file type=write",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "type": {"type": "string", "enum": ["single", "multi"], "description": "编辑类型，默认single"},
+                    "type": {"type": "string", "enum": ["single", "multi", "line"], "description": "编辑类型，默认single。字符串匹配反复失败时可改用line按行号编辑"},
                     "file_path": {"type": "string", "description": "文件路径"},
-                    "old_string": {"type": "string", "description": "要替换的文本（single时必需）"},
-                    "new_string": {"type": "string", "description": "替换后的文本（single时必需）"},
+                    "old_string": {"type": "string", "description": "要替换的文本（single时必需）。tab/空格缩进差异和行尾空白差异会自动容错"},
+                    "new_string": {"type": "string", "description": "替换后的文本（single时必需）；line模式下作为新内容（delete时可省略）"},
                     "replace_all": {"type": "boolean", "default": False, "description": "是否全部替换（single时可选）"},
-                    "edits": {"type": "array", "items": {"type": "object", "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean", "default": False}}, "required": ["old_string", "new_string"]}, "description": "编辑操作列表（multi时必需）"}
+                    "edits": {"type": "array", "items": {"type": "object", "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean", "default": False}}, "required": ["old_string", "new_string"]}, "description": "编辑操作列表（multi时必需）"},
+                    "mode": {"type": "string", "enum": ["replace", "insert_before", "insert_after", "delete"], "description": "line模式的操作类型，默认replace。replace/delete作用于start_line~end_line，insert_before/insert_after相对start_line插入"},
+                    "start_line": {"type": "integer", "description": "起始行号，1-based，与read输出的行号一致（line时必需）。注意编辑后行号会变化，连续行号编辑前需重新read"},
+                    "end_line": {"type": "integer", "description": "结束行号（含），默认等于start_line（line时可选）"}
                 },
                 "required": ["file_path"],
             },
@@ -506,7 +510,20 @@ def handle_edit(args: Dict[str, Any]) -> str:
             if a.get("normalize_indent") is not None:
                 multi_args["normalize_indent"] = a["normalize_indent"]
             return multi_edit_text(**multi_args)
-        
+
+        elif edit_type == "line":
+            line_args = {
+                "file_path": a.get("file_path"),
+                "start_line": a.get("start_line"),
+                "end_line": a.get("end_line"),
+                "mode": a.get("mode", "replace"),
+                # 行内容优先取 content，兼容 new_string 传入
+                "content": a.get("content") if a.get("content") is not None else a.get("new_string"),
+            }
+            if a.get("validate_syntax") is not None:
+                line_args["validate_syntax"] = a["validate_syntax"]
+            return edit_text_lines(**line_args)
+
         else:
             raise ValueError(f"???????: {edit_type}")
     

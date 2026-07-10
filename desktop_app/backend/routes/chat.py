@@ -53,23 +53,35 @@ def extract_user_visible_content(reply: str) -> str:
     """
     if not reply:
         return ""
-    
+
     visible_lines = []
     in_protocol_block = False
     lines = reply.split('\n')
 
-    for i, line in enumerate(lines):
-        if line.strip() == "@SPORE:REPLY_START":
-            reply_lines = []
-            for candidate in lines[i + 1:]:
-                stripped = candidate.strip()
-                if stripped in {"@SPORE:REPLY_END", "@SPORE:FINAL@"}:
-                    return "\n".join(reply_lines).strip()
-                if is_hidden_protocol_line(stripped):
-                    continue
-                reply_lines.append(candidate)
-            return "\n".join(reply_lines).strip()
-    
+    # 收集所有 REPLY 块（可能有多个），按出现顺序拼接展示
+    reply_segments = []
+    current_segment: Optional[list] = None
+    has_reply_block = False
+    for line in lines:
+        stripped = line.strip()
+        if current_segment is None:
+            if stripped == "@SPORE:REPLY_START":
+                has_reply_block = True
+                current_segment = []
+            continue
+        if stripped in {"@SPORE:REPLY_END", "@SPORE:FINAL@"}:
+            reply_segments.append("\n".join(current_segment).strip())
+            current_segment = None
+            continue
+        if is_hidden_protocol_line(stripped):
+            continue
+        current_segment.append(line)
+    if current_segment is not None:
+        reply_segments.append("\n".join(current_segment).strip())
+
+    if has_reply_block:
+        return "\n\n".join(seg for seg in reply_segments if seg)
+
     for line in lines:
         stripped = line.strip()
 

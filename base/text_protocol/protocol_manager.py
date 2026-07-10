@@ -78,7 +78,7 @@ PROTOCOL_TEMPLATE = """
 
 ### 可用协议块
 
-回复用户可见内容：
+回复用户可见内容（同一轮可出现多个 REPLY 块，内容会按顺序全部展示给用户）：
 
 ```text
 @SPORE:REPLY_START
@@ -367,6 +367,12 @@ class ProtocolManager:
                     return blocks, ProtocolError("mismatched_end_marker", f"缺少开始标识符: {marker}")
                 open_block = stack.pop()
                 if open_block["name"] != block_name:
+                    expected_end = f"@SPORE:{open_block['name']}_END"
+                    if expected_end in response[open_block["content_start"]:match.start()]:
+                        return blocks, ProtocolError(
+                            "mismatched_end_marker",
+                            f"{expected_end} 未独占一行（不能与其他内容或标识符粘连在同一行），协议块标识符必须独占一行",
+                        )
                     return blocks, ProtocolError(
                         "mismatched_end_marker",
                         f"开始标识符 {open_block['start_marker']} 与结束标识符 {marker} 不匹配",
@@ -387,7 +393,13 @@ class ProtocolManager:
 
         if stack:
             open_block = stack[-1]
-            return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: @SPORE:{open_block['name']}_END")
+            end_marker = f"@SPORE:{open_block['name']}_END"
+            if end_marker in response[open_block["content_start"]:]:
+                return blocks, ProtocolError(
+                    "missing_end_marker",
+                    f"{end_marker} 未独占一行（不能与其他内容或标识符粘连在同一行），协议块标识符必须独占一行",
+                )
+            return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: {end_marker}")
 
         if len(final_spans) > 1:
             return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:FINAL@")
@@ -435,13 +447,6 @@ class ProtocolManager:
         reply_blocks = [block for block in blocks if block["name"] == "REPLY"]
         todo_blocks = [block for block in blocks if block["name"] == "TODO"]
 
-        if len(reply_blocks) > 1:
-            return ParsedResponse(
-                response_type="protocol_error",
-                raw_response=response,
-                protocol_error=ProtocolError("multiple_reply_blocks", "同一轮回复中只能包含一个 REPLY 块"),
-            )
-
         if len(todo_blocks) > 1:
             return ParsedResponse(
                 response_type="protocol_error",
@@ -463,7 +468,8 @@ class ProtocolManager:
                 protocol_error=ProtocolError("action_with_final", "ACTION 回复中禁止出现 @SPORE:FINAL@"),
             )
 
-        reply_content = reply_blocks[0]["content"] if reply_blocks else None
+        reply_contents = [block["content"] for block in reply_blocks if block["content"]]
+        reply_content = "\n\n".join(reply_contents) if reply_contents else None
 
         if action_blocks:
             action_block_info = action_blocks[0]

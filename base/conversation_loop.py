@@ -29,6 +29,7 @@ from .utils import (
 from .utils.terminal import safe_print
 from .utils.system_io import set_current_agent_id, get_current_agent_id
 from .todo_manager import todo_write
+from .memory_manager import auto_save_messages
 from .logger import log_error, log_tool_error
 from .prompt_loader import load_system_prompt
 from .session_context import get_current_conversation_id
@@ -754,7 +755,10 @@ class ConversationLoop:
             
             # 添加 assistant 消息到对话历史（使用 add_assistant_message 增加计数）
             self.state.add_assistant_message(reply)
-            
+
+            # 回合完成，自动保存上下文（FIFO 队列，最多保留最近 10 次）
+            auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
+
             # 清理状态
             self.state.restore_temp_messages()
             todo_write([], session_id=self._conversation_id_for_context())
@@ -796,6 +800,10 @@ class ConversationLoop:
                     "role": "assistant",
                     "content": reply
                 })
+
+                # 回合完成（supervisor 判定结束），自动保存上下文
+                auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
+
                 self.state.restore_temp_messages()
                 todo_write([], session_id=self._conversation_id_for_context())
                 clear_last_todo_content()

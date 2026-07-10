@@ -308,12 +308,20 @@ def delete_session(session_id: str) -> Dict[str, Any]:
         Dict: 操作结果
     """
     global _cli_handler, _conv_loop_manager
-    
+
     if not _initialized or _state is None:
         return {"success": False, "error": "后端未初始化"}
-    
+
+    # 先终止该会话名下仍在运行的子Agent（会话级，不影响其他会话）
+    from base.agent_process import terminate_conversation_agents
+    from base.logger import log_error
+    try:
+        terminate_conversation_agents(session_id)
+    except Exception as e:
+        log_error("SESSION_AGENT_CLEANUP_ERROR", f"终止会话 {session_id} 的子Agent失败: {e}", e)
+
     success = _state.delete_session(session_id)
-    
+
     # 删除对应的 ConversationLoop 实例
     if success and _conv_loop_manager:
         _conv_loop_manager.remove_loop(session_id)

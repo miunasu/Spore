@@ -36,6 +36,7 @@ class CLICommandHandler:
         print("7.paste ->从剪贴板粘贴多行文本，先用剪贴板复制你要输入的内容，以paste开头，输入你想说的话")
         print("8.save ->保存当前对话历史")
         print("9.load ->加载对话历史, 会覆盖当前对话历史，格式 load <对话历史文件名>")
+        print("  (每轮任务完成后系统会自动保存上下文到 history/autosave/，先入先出保留最近10次，可用 load autosave/<文件名> 恢复)")
         print("A.token ->计算当前记忆使用的token数")
         print("B.continue ->继续最近保存的历史对话")
         print("C.mode ->查看或切换上下文处理模式，格式: mode [strong_context|long_context|auto]")

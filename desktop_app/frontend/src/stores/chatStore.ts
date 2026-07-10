@@ -35,38 +35,43 @@ const extractDisplayContent = (content: string): string => {
   const replyStart = '@SPORE:REPLY_START';
   const replyEnd = '@SPORE:REPLY_END';
 
-  // 查找 REPLY 块（必须独占一行）
-  let replyPos = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === replyStart) {
-      replyPos = i;
-      break;
-    }
-  }
-  
-  if (replyPos >= 0) {
-    // 找到 REPLY 块，提取其内容
-    const replyLines: string[] = [];
-    
-    for (let i = replyPos + 1; i < lines.length; i++) {
-      const line = lines[i];
-      const trimmed = line.trim();
-      
-      // 遇到结束标记，停止提取
-      if (trimmed === replyEnd || trimmed === '@SPORE:FINAL@') {
-        break;
-      }
+  // 收集所有 REPLY 块（标记必须独占一行，块可出现多次），按顺序拼接展示
+  const replySegments: string[] = [];
+  let currentSegment: string[] | null = null;
+  let hasReplyBlock = false;
 
-      if (isHiddenProtocolLine(trimmed)) {
-        continue;
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (currentSegment === null) {
+      if (trimmed === replyStart) {
+        hasReplyBlock = true;
+        currentSegment = [];
       }
-      
-      replyLines.push(line);
+      continue;
     }
-    
-    return replyLines.join('\n').trim();
+
+    if (trimmed === replyEnd || trimmed === '@SPORE:FINAL@') {
+      replySegments.push(currentSegment.join('\n').trim());
+      currentSegment = null;
+      continue;
+    }
+
+    if (isHiddenProtocolLine(trimmed)) {
+      continue;
+    }
+
+    currentSegment.push(line);
   }
-  
+
+  if (currentSegment !== null) {
+    replySegments.push(currentSegment.join('\n').trim());
+  }
+
+  if (hasReplyBlock) {
+    return replySegments.filter(Boolean).join('\n\n');
+  }
+
   // 没有 REPLY 块，过滤掉所有协议标记
   const filteredLines: string[] = [];
   let inProtocolBlock = false;

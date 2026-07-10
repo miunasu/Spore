@@ -56,6 +56,42 @@ def get_current_agent_manager():
     return _current_agent_manager
 
 
+# 按会话注册的Agent管理器（用于会话级中断，避免误伤其他会话的子Agent）
+_agent_managers_by_conversation: Dict[str, "AgentProcessManager"] = {}
+_conversation_registry_lock = threading.Lock()
+
+
+def register_conversation_agent_manager(conversation_id: str, manager) -> None:
+    """将Agent管理器登记到其所属会话（同会话后启动的派发覆盖前一个）"""
+    with _conversation_registry_lock:
+        _agent_managers_by_conversation[conversation_id] = manager
+
+
+def unregister_conversation_agent_manager(conversation_id: str, manager) -> None:
+    """注销会话的Agent管理器（仅当登记的仍是该实例时）"""
+    with _conversation_registry_lock:
+        if _agent_managers_by_conversation.get(conversation_id) is manager:
+            _agent_managers_by_conversation.pop(conversation_id, None)
+
+
+def terminate_conversation_agents(conversation_id: str) -> bool:
+    """
+    终止指定会话的所有子Agent（会话级中断）。
+
+    与 terminate_all 不同：不发送全局终止信号、不中断IPC请求，
+    只对该会话名下的子Agent置位 termination_event，不影响其他会话。
+
+    Returns:
+        bool: 该会话是否存在登记的Agent管理器
+    """
+    with _conversation_registry_lock:
+        manager = _agent_managers_by_conversation.pop(conversation_id, None)
+    if manager is None:
+        return False
+    manager.terminate_own_agents()
+    return True
+
+
 class SubAgentThread(threading.Thread):
     """
     子Agent工作线程
@@ -737,15 +773,18 @@ class AgentProcessManager:
         self.sub_agents: Dict[str, SubAgentThread] = {}
         # 数据库字典: agent_id -> SubAgentDatabase
         self.agent_databases: Dict[str, SubAgentDatabase] = {}
-        
+
         # 所有Agent完成事件
         self.all_complete_event = threading.Event()
-        
+
         # 锁
         self._lock = threading.Lock()
-        
+
         # 开始时间
         self._start_time: Optional[float] = None
+
+        # 所属会话 ID（派发时从会话上下文捕获，用于会话级中断）
+        self.conversation_id: Optional[str] = None
     
     def dispatch_tasks(self, tasks: List[AgentTask]) -> str:
         """
@@ -760,9 +799,14 @@ class AgentProcessManager:
         dispatch_id = str(uuid.uuid4())
         self._start_time = time.time()
         self.all_complete_event.clear()
-        
+
         # 设置为当前活动的管理器
         set_current_agent_manager(self)
+
+        # 登记到所属会话（会话级中断用；desktop 模式下派发在 conversation_context 内执行）
+        self.conversation_id = get_current_conversation_id()
+        if self.conversation_id:
+            register_conversation_agent_manager(self.conversation_id, self)
         
         with self._lock:
             for task in tasks:
@@ -919,10 +963,34 @@ class AgentProcessManager:
         # 在后台线程中等待和清理
         cleanup_thread = threading.Thread(target=wait_and_update, daemon=True)
         cleanup_thread.start()
-        
+
         # 立即返回数据库（不等待清理完成）
         return self.agent_databases.copy()
-    
+
+    def terminate_own_agents(self) -> None:
+        """
+        仅终止本管理器名下的子Agent（会话级中断）。
+
+        与 terminate_all 的区别：不发送全局终止信号（event_manager.signal_termination）、
+        不中断IPC请求（会波及其他会话）。子Agent等待LLM响应时以1秒短超时轮询
+        termination_event，置位后最迟约1秒即退出。
+        """
+        with self._lock:
+            agents = list(self.sub_agents.values())
+
+        for agent_thread in agents:
+            agent_thread.termination_event.set()
+            agent_thread.close_terminal(delay=0)
+
+        def wait_and_update():
+            for agent_thread in agents:
+                agent_thread.join(timeout=10.0)
+            for database in self.agent_databases.values():
+                if database.status in (AgentStatus.RUNNING, AgentStatus.WAITING):
+                    database.set_status(AgentStatus.INTERRUPTED)
+
+        threading.Thread(target=wait_and_update, daemon=True).start()
+
     def get_all_databases(self) -> Dict[str, SubAgentDatabase]:
         """
         获取所有子Agent的数据库
@@ -968,10 +1036,14 @@ class AgentProcessManager:
             self.sub_agents.clear()
             self.agent_databases.clear()
         self._start_time = None
-        
+
         # 清除全局引用
         if get_current_agent_manager() == self:
             set_current_agent_manager(None)
+
+        # 清除会话登记
+        if self.conversation_id:
+            unregister_conversation_agent_manager(self.conversation_id, self)
 
 
 

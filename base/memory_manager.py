@@ -1,8 +1,9 @@
 import time
 import json
 import os
+import re
 import threading
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +19,10 @@ AUTOSAVE_MAX_COUNT = 10
 
 # 自动保存写入/清理锁（桌面端多会话并发时保护 FIFO 清理）
 _autosave_lock = threading.Lock()
+
+# 自动保存文件名格式。FIFO 清理只认该格式：把某份自动保存重命名即视为“转正”，
+# 之后不再被队列淘汰。
+_AUTOSAVE_NAME_RE = re.compile(r"^auto_\d{4}-\d{2}-\d{2}_\d{6}_\d{6}(?:_(.+))?\.mem$")
 
 
 def _ensure_history_dir():
@@ -80,12 +85,44 @@ def auto_save_messages(
         return None
 
 
+def list_autosave_files() -> List[Dict[str, Any]]:
+    """列出自动保存文件，按时间从新到旧排序。
+
+    返回的每一项包含:
+    - filename: 相对 history 目录的路径（可直接传给 load_messages）
+    - path: 完整路径
+    - mtime: 保存时间戳
+    - session_id: 保存时的会话 ID（旧文件可能没有，为 None）
+    """
+    if not os.path.isdir(AUTOSAVE_DIR):
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    for name in os.listdir(AUTOSAVE_DIR):
+        if not name.endswith('.mem'):
+            continue
+        path = os.path.join(AUTOSAVE_DIR, name)
+        match = _AUTOSAVE_NAME_RE.match(name)
+        entries.append({
+            "filename": os.path.join("autosave", name),
+            "path": path,
+            "mtime": os.path.getmtime(path),
+            "session_id": match.group(1) if match else None,
+        })
+
+    entries.sort(key=lambda e: (e["mtime"], e["path"]), reverse=True)
+    return entries
+
+
 def _prune_autosaves() -> None:
-    """按先入先出清理 autosave 队列，只保留最新的 AUTOSAVE_MAX_COUNT 份"""
+    """按先入先出清理 autosave 队列，只保留最新的 AUTOSAVE_MAX_COUNT 份。
+
+    只清理符合自动保存命名格式的文件，重命名过的文件不受影响。
+    """
     files = [
         os.path.join(AUTOSAVE_DIR, f)
         for f in os.listdir(AUTOSAVE_DIR)
-        if f.endswith('.mem')
+        if _AUTOSAVE_NAME_RE.match(f)
     ]
     if len(files) <= AUTOSAVE_MAX_COUNT:
         return

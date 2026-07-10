@@ -654,7 +654,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // 创建新对话并加载历史文件
       try {
         frontendLog(`[加载] 历史文件: ${filename}`);
-        const name = filename.replace('memsave/', '').replace('.mem', '').slice(0, 20);
+        const base = (filename.split('/').pop() ?? filename).replace('.mem', '');
+        // 短记忆文件用时间做标签名：auto_2026-07-10_150015_xxx -> 短记忆 07-10 15:00
+        const autoMatch = base.match(/^auto_\d{4}-(\d{2})-(\d{2})_(\d{2})(\d{2})\d{2}_/);
+        const name = autoMatch
+          ? `短记忆 ${autoMatch[1]}-${autoMatch[2]} ${autoMatch[3]}:${autoMatch[4]}`
+          : base.slice(0, 20);
         const newConv = createConversation(name, filename);
         newConv.backendPort = MAIN_PORT;
         newConv.backendStatus = 'running';

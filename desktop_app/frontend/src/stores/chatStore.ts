@@ -3,10 +3,11 @@
  * 每个对话对应一个独立的后端实例
  */
 import { create } from 'zustand';
-import type { Message, Conversation, HistoryFile } from '../types';
+import type { Message, Conversation, HistoryFile, WSTaskEvent } from '../types';
 import {
   createChatApi,
   createCommandsApi,
+  createTaskApi,
   commandsApi,
 } from '../services/api';
 import { useLogStore } from './logStore';
@@ -106,16 +107,94 @@ const extractDisplayContent = (content: string): string => {
   return filteredLines.join('\n').trim();
 };
 
-// 请求 token（按对话 ID）。用于丢弃中断后迟到的旧响应。
-const activeRequestTokens: Record<string, string> = {};
-const cancelledRequestTokens = new Set<string>();
-
 // 生成唯一 ID
 const generateId = () =>
   `conv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-const generateRequestToken = () =>
-  `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+const generateSubmissionId = () =>
+  `submission_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+// 从后端拉取会话历史快照并转换为前端 Message 列表
+// （切换会话 / 重连恢复 / 手动刷新共用的唯一实现）
+interface ActiveTaskIdentity {
+  submissionId: string;
+  taskId?: string;
+}
+
+interface SubmitOutcome {
+  submitted: boolean;
+  success: boolean;
+  taskId?: string;
+  error?: string;
+}
+
+const activeTasksByConversation: Record<string, ActiveTaskIdentity | undefined> = {};
+const pendingSubmits: Record<string, Promise<SubmitOutcome> | undefined> = {};
+const interruptBarriers: Record<string, Promise<boolean> | undefined> = {};
+const taskStateVersions: Record<string, number> = {};
+const discardedSubmissions: Record<string, string[] | undefined> = {};
+
+const bumpTaskStateVersion = (conversationId: string): void => {
+  taskStateVersions[conversationId] = (taskStateVersions[conversationId] || 0) + 1;
+};
+
+const discardSubmission = (conversationId: string, submissionId?: string): void => {
+  if (!submissionId) return;
+  const discarded = discardedSubmissions[conversationId] || [];
+  if (!discarded.includes(submissionId)) {
+    discarded.push(submissionId);
+  }
+  discardedSubmissions[conversationId] = discarded.slice(-20);
+};
+
+const isDiscardedSubmission = (
+  conversationId: string,
+  submissionId: string
+): boolean => discardedSubmissions[conversationId]?.includes(submissionId) === true;
+
+const fetchSessionMessages = async (
+  port: number,
+  sessionId: string
+): Promise<Message[]> => {
+  const chatApi = createChatApi(port);
+  const historyResponse = await chatApi.history(true, sessionId);
+
+  const allMessages = historyResponse.messages.filter((msg) => (
+    msg.role === 'user' || msg.role === 'assistant'
+  ));
+
+  return allMessages
+    .map((msg, index) => {
+      const baseMessage = {
+        id: index.toString(),
+        role: msg.role as 'user' | 'assistant',
+        timestamp: Date.now(),
+      };
+
+      if (msg.role === 'assistant') {
+        const prevMsg = index > 0 ? allMessages[index - 1] : null;
+        const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
+
+        return {
+          ...baseMessage,
+          content: extractDisplayContent(msg.content),
+          sent_messages,
+          raw_response: msg.content,
+        };
+      }
+
+      // 工具结果消息：不在对话中显示
+      if (msg.content?.trim().startsWith('@SPORE:RESULT')) {
+        return null;
+      }
+
+      return {
+        ...baseMessage,
+        content: msg.content,
+      };
+    })
+    .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
+};
 
 // 扩展 Conversation 类型，添加后端端口
 interface ConversationWithBackend extends Conversation {
@@ -184,6 +263,13 @@ interface ChatStore {
   // API 操作
   sendMessage: (content: string) => Promise<void>;
   interrupt: () => Promise<void>;
+
+  // 任务事件流（阶段②：前端纯浏览，渲染由 WS task_event 驱动）
+  handleTaskEvent: (event: WSTaskEvent) => void;
+  syncGeneratingState: (conversationId: string) => Promise<boolean>;
+  resumeConversationState: (conversationId: string) => Promise<void>;
+  resumeAllConversations: () => void;
+
   loadHistory: () => Promise<void>;
   loadHistoryFile: (filename: string) => Promise<void>;
   fetchHistoryFiles: () => Promise<void>;
@@ -299,47 +385,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const chatApi = createChatApi(MAIN_PORT);
         try {
           await chatApi.switchSession(id);
-          
-          // 从后端加载该会话的消息历史
-          const historyResponse = await chatApi.history(true, id);
-          
-          const allMessages = historyResponse.messages.filter((msg) => (
-            msg.role === 'user' || msg.role === 'assistant'
-          ));
 
-          const messages: Message[] = allMessages
-            .map((msg, index) => {
-              const baseMessage = {
-                id: index.toString(),
-                role: msg.role as 'user' | 'assistant',
-                timestamp: Date.now(),
-              };
+          // 从后端加载该会话的消息历史快照
+          const messages = await fetchSessionMessages(MAIN_PORT, id);
 
-              if (msg.role === 'assistant') {
-                const prevMsg = index > 0 ? allMessages[index - 1] : null;
-                const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
-
-                return {
-                  ...baseMessage,
-                  content: extractDisplayContent(msg.content),
-                  sent_messages,
-                  raw_response: msg.content,
-                };
-              }
-
-              if (msg.content?.trim().startsWith('@SPORE:RESULT')) {
-                return null;
-              }
-
-              return {
-                ...baseMessage,
-                content: msg.content,
-              };
-            })
-            .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
-          
           // 更新该对话的消息
           get().setMessages(messages, id);
+
+          // 进入会话时向后端核对是否有 running 任务，恢复 generating 状态
+          void get().syncGeneratingState(id);
         } catch (e) {
           const errorMsg = e instanceof Error ? e.message : String(e);
           frontendLog(`[错误] 切换会话失败: ${errorMsg}`);
@@ -354,13 +408,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       const conv = conversations.find((c) => c.id === id);
 
-      // 如果正在生成，先中断
+      // 如果正在生成，先中断（后端任务循环靠 epoch 感知，轮间生效）
       if (generatingConversations.has(id) && conv?.backendPort) {
-        const token = activeRequestTokens[id];
-        if (token) {
-          cancelledRequestTokens.add(token);
-          delete activeRequestTokens[id];
-        }
         try {
           const chatApi = createChatApi(conv.backendPort);
           await chatApi.interrupt(id);
@@ -389,6 +438,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       const newGenerating = new Set(generatingConversations);
       newGenerating.delete(id);
+      delete activeTasksByConversation[id];
+      delete pendingSubmits[id];
+      delete interruptBarriers[id];
+      delete taskStateVersions[id];
+      delete discardedSubmissions[id];
 
       set({
         conversations: newConversations,
@@ -471,133 +525,333 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     // API 操作
+    // 阶段②：前端纯浏览——只提交任务（POST /api/task/submit），
+    // 循环由后端自驱，逐轮渲染由 WS task_event 事件驱动（见 handleTaskEvent）
     sendMessage: async (content) => {
-      const { activeConversationId, addMessage, setGenerating, ensureBackend } =
-        get();
-
+      const { activeConversationId, addMessage, setGenerating, ensureBackend } = get();
       if (!activeConversationId) return;
 
       const conversationId = activeConversationId;
+      if (get().generatingConversations.has(conversationId)) {
+        frontendLog(`[提示] 当前会话已有运行中的任务，请先中断`);
+        return;
+      }
 
-      // 确保后端已启动
       const port = await ensureBackend(conversationId);
       if (!port) {
         frontendLog(`[错误] 后端未就绪`);
         return;
       }
 
-      const chatApi = createChatApi(port);
-      const requestToken = generateRequestToken();
-      const previousToken = activeRequestTokens[conversationId];
-      if (previousToken) {
-        cancelledRequestTokens.add(previousToken);
-      }
-      activeRequestTokens[conversationId] = requestToken;
+      const submissionId = generateSubmissionId();
+      activeTasksByConversation[conversationId] = { submissionId };
+      bumpTaskStateVersion(conversationId);
 
-      const userMessage: Message = {
-        id: Date.now().toString(),
+      const userMessageId = Date.now().toString();
+      addMessage(conversationId, {
+        id: userMessageId,
         role: 'user',
         content,
         timestamp: Date.now(),
-      };
-      // 使用 addMessage 添加到指定的对话
-      addMessage(conversationId, userMessage);
+      });
       set({ inputValue: '' });
-
       setGenerating(conversationId, true);
-      const startTime = Date.now();
-      let roundCount = 0;
 
-      try {
-        let shouldContinue = true;
-        let isFirstRequest = true;
-
-        while (
-          shouldContinue &&
-          activeRequestTokens[conversationId] === requestToken &&
-          !cancelledRequestTokens.has(requestToken)
-        ) {
-          roundCount++;
-          const response = await chatApi.send(
-            isFirstRequest ? content : '', 
-            conversationId
-          );
-          isFirstRequest = false;
-
-          if (
-            activeRequestTokens[conversationId] !== requestToken ||
-            cancelledRequestTokens.has(requestToken)
-          ) {
-            frontendLog(`[中断] 第${roundCount}轮被用户中断`);
-            break;
-          }
-          if (response.status === 'interrupted') {
-            frontendLog(`[中断] 第${roundCount}轮被系统中断`);
-            break;
-          }
-          if (response.status === 'error') {
-            frontendLog(`[错误] 第${roundCount}轮: ${response.message}`);
-            break;
-          }
-
-          if (response.status === 'success' && response.content) {
-            const assistantMessage: Message = {
-              id: (Date.now() + Math.random()).toString(),
-              role: 'assistant',
-              content: response.content,
-              timestamp: Date.now(),
-              sent_messages: response.sent_messages,
-              raw_response: response.raw_response,
+      const submitPromise = (async (): Promise<SubmitOutcome> => {
+        const barrier = interruptBarriers[conversationId];
+        if (barrier) {
+          const interrupted = await barrier;
+          if (!interrupted) {
+            return {
+              submitted: false,
+              success: false,
+              error: '上一请求中断失败，请重试',
             };
-            // 使用 addMessage 添加到指定的对话（即使用户已切换标签页）
-            addMessage(conversationId, assistantMessage);
-          }
-
-          shouldContinue = response.should_continue === true;
-          if (shouldContinue) {
-            frontendLog(`[继续] 第${roundCount}轮完成，继续执行...`);
           }
         }
 
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        frontendLog(`[完成] 共${roundCount}轮，耗时${elapsed}秒`);
-        
-        // 不需要最后的 setMessages 同步，因为 addMessage 已经实时更新了
-        // 如果需要同步（比如确保一致性），应该使用 conversationId 而不是 activeConversationId
-      } catch (error) {
-        frontendLog(`[错误] 发送失败: ${error}`);
-      } finally {
-        if (activeRequestTokens[conversationId] === requestToken) {
-          setGenerating(conversationId, false);
-          delete activeRequestTokens[conversationId];
+        // 等待期间该 submission 可能已经被 Stop 作废。
+        if (activeTasksByConversation[conversationId]?.submissionId !== submissionId) {
+          return { submitted: false, success: false };
         }
-        cancelledRequestTokens.delete(requestToken);
+
+        try {
+          const taskApi = createTaskApi(port);
+          const response = await taskApi.submit(conversationId, submissionId, content);
+          if (!response.success) {
+            return {
+              submitted: true,
+              success: false,
+              error: response.error || '未知错误',
+            };
+          }
+          return {
+            submitted: true,
+            success: true,
+            taskId: response.task_id,
+          };
+        } catch (error) {
+          return {
+            submitted: true,
+            success: false,
+            error: String(error),
+          };
+        }
+      })();
+      pendingSubmits[conversationId] = submitPromise;
+
+      const outcome = await submitPromise;
+      if (pendingSubmits[conversationId] === submitPromise) {
+        delete pendingSubmits[conversationId];
       }
+
+      const identity = activeTasksByConversation[conversationId];
+      if (identity?.submissionId !== submissionId) {
+        return;
+      }
+
+      if (!outcome.success) {
+        delete activeTasksByConversation[conversationId];
+        bumpTaskStateVersion(conversationId);
+        setGenerating(conversationId, false);
+        if (!outcome.submitted && outcome.error) {
+          set((state) => ({
+            inputValue: state.activeConversationId === conversationId ? content : state.inputValue,
+            conversations: state.conversations.map((conversation) =>
+              conversation.id === conversationId
+                ? {
+                    ...conversation,
+                    messages: conversation.messages.filter(
+                      (message) => message.id !== userMessageId
+                    ),
+                  }
+                : conversation
+            ),
+          }));
+          frontendLog(`[错误] ${outcome.error}`);
+        } else if (outcome.submitted) {
+          frontendLog(`[错误] 任务提交失败: ${outcome.error || '未知错误'}`);
+          void get().syncGeneratingState(conversationId);
+        }
+        return;
+      }
+
+      identity.taskId = outcome.taskId;
+      frontendLog(`[任务] 已提交: ${outcome.taskId}`);
     },
 
     interrupt: async () => {
-      const { activeConversationId, setGenerating, activeConversation } = get();
+      const { activeConversationId, activeConversation, setGenerating } = get();
       if (!activeConversationId) return;
 
+      const conversationId = activeConversationId;
       const conv = activeConversation();
       if (!conv?.backendPort) return;
 
-      frontendLog(`[中断] 请求中断...`);
-      const requestToken = activeRequestTokens[activeConversationId];
-      if (requestToken) {
-        cancelledRequestTokens.add(requestToken);
-        delete activeRequestTokens[activeConversationId];
-      }
-      
-      // 立即更新 UI 状态
-      setGenerating(activeConversationId, false);
-      
+      const interruptedIdentity = activeTasksByConversation[conversationId];
+      const pendingSubmit = pendingSubmits[conversationId];
+
+      // UI 立即解锁；从这一行起旧 submission 的任何事件都不再有效。
+      discardSubmission(conversationId, interruptedIdentity?.submissionId);
+      delete activeTasksByConversation[conversationId];
+      bumpTaskStateVersion(conversationId);
+      setGenerating(conversationId, false);
+      frontendLog(`[中断] 已停止等待，旧请求回复将被丢弃`);
+
+      const previousBarrier = interruptBarriers[conversationId];
+      const barrier = (async (): Promise<boolean> => {
+        try {
+          if (previousBarrier && !(await previousBarrier)) {
+            return false;
+          }
+          let taskId = interruptedIdentity?.taskId;
+          if (pendingSubmit) {
+            const outcome = await pendingSubmit;
+            if (outcome.success) {
+              taskId = outcome.taskId;
+            }
+          }
+
+          // submit 尚未入网就被取消时，后端没有 task 可退役。
+          if (!taskId) {
+            return true;
+          }
+
+          const chatApi = createChatApi(conv.backendPort!);
+          await chatApi.interrupt(conversationId);
+          return true;
+        } catch (error) {
+          frontendLog(`[错误] 中断请求失败: ${error}`);
+          void get().syncGeneratingState(conversationId);
+          return false;
+        }
+      })();
+      interruptBarriers[conversationId] = barrier;
+
       try {
-        const chatApi = createChatApi(conv.backendPort);
-        await chatApi.interrupt(activeConversationId);
-        frontendLog(`[中断] 成功`);
+        await barrier;
+      } finally {
+        if (interruptBarriers[conversationId] === barrier) {
+          delete interruptBarriers[conversationId];
+        }
+      }
+    },
+
+    // 处理 WS task_event（后端广播、无路由：必须按 session_id 过滤到对应会话）
+    handleTaskEvent: (event) => {
+      const sessionId = event.session_id;
+      if (!sessionId) return;
+
+      // 只处理本窗口已知会话的事件（含非活跃标签页，支持多标签并发生成）；
+      // 其他消费者（如流水线会话）的事件直接忽略
+      const conv = get().conversations.find((c) => c.id === sessionId);
+      if (!conv) return;
+
+      if (isDiscardedSubmission(sessionId, event.submission_id)) {
+        return;
+      }
+      const identity = activeTasksByConversation[sessionId];
+      if (!identity || identity.submissionId !== event.submission_id) {
+        return;
+      }
+      if (identity.taskId && identity.taskId !== event.task_id) {
+        return;
+      }
+      identity.taskId = event.task_id;
+
+      switch (event.event) {
+        case 'task_started':
+          get().setGenerating(sessionId, true);
+          break;
+
+        case 'round_reply': {
+          const content = (event.data.content || '').trim();
+          if (content) {
+            get().addMessage(sessionId, {
+              id: `${event.task_id}_r${event.round}`,
+              role: 'assistant',
+              content,
+              timestamp: Date.now(),
+              raw_response: event.data.raw_response,
+              sent_messages: event.data.sent_messages,
+            });
+          }
+          break;
+        }
+
+        case 'todo_update':
+          // TODO 面板仍由既有带 conversation_id 的 todo_update 通道驱动。
+          break;
+
+        case 'tool_call':
+        case 'tool_result':
+          break;
+
+        case 'task_finished': {
+          delete activeTasksByConversation[sessionId];
+          bumpTaskStateVersion(sessionId);
+          get().setGenerating(sessionId, false);
+          const { status, rounds, error } = event.data;
+          const roundText = `共${rounds ?? event.round}轮`;
+          if (status === 'interrupted') {
+            frontendLog(`[中断] 任务已中断（${roundText}）`);
+          } else if (status === 'timeout') {
+            frontendLog(`[错误] 任务超时: ${error || '未知错误'}（${roundText}）`);
+          } else if (status === 'failed') {
+            frontendLog(`[错误] 任务失败: ${error || '未知错误'}（${roundText}）`);
+          } else {
+            frontendLog(`[完成] ${roundText}`);
+          }
+          break;
+        }
+      }
+    },
+
+    // 向后端核对该会话是否有 running 任务，恢复 generating 状态；返回是否 running
+    syncGeneratingState: async (conversationId) => {
+      try {
+        const port = await get().ensureBackend(conversationId);
+        if (!port) return false;
+
+        const requestVersion = taskStateVersions[conversationId] || 0;
+        const taskApi = createTaskApi(port);
+        const response = await taskApi.statusBySession(conversationId);
+        if (!response.success) return false;
+
+        // Stop/send 在 status 请求期间发生时，旧快照不得重新锁住 UI。
+        if ((taskStateVersions[conversationId] || 0) !== requestVersion) {
+          return get().generatingConversations.has(conversationId);
+        }
+
+        const activeTask = response.active_task;
+        const localIdentity = activeTasksByConversation[conversationId];
+        if (localIdentity) {
+          if (
+            activeTask?.status === 'running'
+            && activeTask.submission_id === localIdentity.submissionId
+          ) {
+            localIdentity.taskId = activeTask.task_id;
+          }
+          return get().generatingConversations.has(conversationId);
+        }
+
+        if (
+          activeTask?.status === 'running'
+          && !isDiscardedSubmission(conversationId, activeTask.submission_id)
+        ) {
+          activeTasksByConversation[conversationId] = {
+            submissionId: activeTask.submission_id,
+            taskId: activeTask.task_id,
+          };
+          get().setGenerating(conversationId, true);
+          return true;
+        }
+
+        delete activeTasksByConversation[conversationId];
+        get().setGenerating(conversationId, false);
+        return false;
       } catch (error) {
-        frontendLog(`[错误] 中断失败: ${error}`);
+        frontendLog(`[错误] 恢复任务状态失败: ${error}`);
+        return false;
+      }
+    },
+
+    // WS 连接（含重连）后恢复单个会话：核对 generating；
+    // 有 running 任务（页面刷新场景）或本地此前认为在生成（断线期间可能漏事件）
+    // 时，拉 history 快照补齐丢失的消息，之后靠增量事件
+    resumeConversationState: async (conversationId) => {
+      const recoveryVersion = taskStateVersions[conversationId] || 0;
+      const wasGenerating = get().generatingConversations.has(conversationId);
+      const hasRunning = await get().syncGeneratingState(conversationId);
+
+      // 恢复期间发生过 Send/Stop 时，调用开始时的 status/history 语义已经过期。
+      if ((taskStateVersions[conversationId] || 0) !== recoveryVersion) {
+        return;
+      }
+
+      const currentIdentity = activeTasksByConversation[conversationId];
+      if (currentIdentity && !currentIdentity.taskId) {
+        return;
+      }
+
+      if (hasRunning || wasGenerating) {
+        try {
+          const messages = await fetchSessionMessages(MAIN_PORT, conversationId);
+          if ((taskStateVersions[conversationId] || 0) !== recoveryVersion) {
+            return;
+          }
+          get().setMessages(messages, conversationId);
+          frontendLog(`[恢复] 会话 ${conversationId.slice(0, 16)} 快照: ${messages.length}条消息`);
+        } catch (error) {
+          frontendLog(`[错误] 恢复会话快照失败: ${error}`);
+        }
+      }
+    },
+
+    resumeAllConversations: () => {
+      const { conversations } = get();
+      for (const conv of conversations) {
+        void get().resumeConversationState(conv.id);
       }
     },
 
@@ -608,42 +862,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         return;
       }
       try {
-        const chatApi = createChatApi(conv.backendPort);
-        const response = await chatApi.history(true, conv.id);
-        const allMessages = response.messages.filter((msg) => (
-          msg.role === 'user' || msg.role === 'assistant'
-        ));
-
-        const messages: Message[] = allMessages
-          .map((msg, index) => {
-            const baseMessage = {
-              id: index.toString(),
-              role: msg.role as 'user' | 'assistant',
-              timestamp: Date.now(),
-            };
-
-            if (msg.role === 'assistant') {
-              const prevMsg = index > 0 ? allMessages[index - 1] : null;
-              const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
-
-              return {
-                ...baseMessage,
-                content: extractDisplayContent(msg.content),
-                sent_messages,
-                raw_response: msg.content,
-              };
-            }
-
-            if (msg.content?.trim().startsWith('@SPORE:RESULT')) {
-              return null;
-            }
-
-            return {
-              ...baseMessage,
-              content: msg.content,
-            };
-          })
-          .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
+        const messages = await fetchSessionMessages(conv.backendPort, conv.id);
         get().setMessages(messages);
       } catch (error) {
         frontendLog(`[错误] 加载历史失败: ${error}`);

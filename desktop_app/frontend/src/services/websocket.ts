@@ -11,6 +11,7 @@ class WebSocketService {
   private ws: WebSocket | null = null;
   private url: string;
   private handlers: Set<EventHandler> = new Set();
+  private openHandlers: Set<() => void> = new Set();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
@@ -39,6 +40,14 @@ class WebSocketService {
         console.log('[WebSocket] 连接成功');
         this.reconnectAttempts = 0;
         this.startPing();
+        // 通知订阅者连接（含重连）已建立，用于拉快照恢复状态
+        this.openHandlers.forEach((handler) => {
+          try {
+            handler();
+          } catch (e) {
+            console.error('[WebSocket] open handler 异常:', e);
+          }
+        });
       };
 
       this.ws.onmessage = (event) => {
@@ -111,6 +120,12 @@ class WebSocketService {
   subscribe(handler: EventHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);
+  }
+
+  // 订阅连接建立事件（首连与重连都会触发；断线期间事件会丢，需要拉快照补状态）
+  subscribeOpen(handler: () => void): () => void {
+    this.openHandlers.add(handler);
+    return () => this.openHandlers.delete(handler);
   }
 
   // 兼容旧的单事件处理方式

@@ -37,6 +37,11 @@ export const InputArea: React.FC<InputAreaProps> = () => {
     sendMessage(inputValue.trim());
   };
 
+  const handleInterrupt = () => {
+    void interrupt();
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey && !isComposing) {
       e.preventDefault();
@@ -79,11 +84,7 @@ export const InputArea: React.FC<InputAreaProps> = () => {
           {/* 发送/停止按钮 */}
           {isGenerating ? (
             <button
-              onMouseDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                interrupt();
-              }}
+              onClick={handleInterrupt}
               className="flex items-center justify-center w-9 h-9 bg-spore-error hover:bg-spore-error/80 text-white rounded-lg transition-all cursor-pointer z-50"
               title="Stop"
             >

@@ -28,6 +28,7 @@ class IPCManager:
         self._response_cache: Dict[str, tuple] = {}
         self._cache_lock = threading.Lock()
         self._cancelled_request_ids: set[str] = set()
+        self._cancelled_request_times: Dict[str, float] = {}
         
         # 响应分发线程
         self._dispatcher_thread: Optional[threading.Thread] = None
@@ -94,7 +95,8 @@ class IPCManager:
         self._clear_queue(self.response_queue)
         self._response_cache.clear()
         self._cancelled_request_ids.clear()
-        
+        self._cancelled_request_times.clear()
+
         self.process_started = False
     
     def _clear_queue(self, queue):
@@ -128,14 +130,14 @@ class IPCManager:
                         response["request_id"] = request_id
 
                     with self._cache_lock:
-                        if request_id in self._cancelled_request_ids and response.get("status") != "cancelled":
-                            self._cancelled_request_ids.discard(request_id)
+                        if request_id in self._cancelled_request_ids:
+                            # 精确取消后的真实 provider 响应无论成功失败都只能被丢弃。
+                            if response.get("status") != "cancelled":
+                                self._cancelled_request_ids.discard(request_id)
+                                self._cancelled_request_times.pop(request_id, None)
                             continue
-                    
-                    # 存入缓存
-                    with self._cache_lock:
-                        if response.get("status") == "cancelled":
-                            self._cancelled_request_ids.discard(request_id)
+
+                        # 存入缓存
                         self._response_cache[request_id] = (response, time.time())
                     
                     # 通知等待者
@@ -152,18 +154,11 @@ class IPCManager:
                 time.sleep(0.1)
     
     def _handle_interrupt_response(self, response):
-        """处理中断响应 - 通知所有等待者"""
+        """兼容旧的无 request_id 中断确认，将当前 waiter 逐个逻辑取消。"""
         with self._conditions_lock:
-            for request_id, condition in self._response_conditions.items():
-                # 为每个等待者设置取消响应
-                with self._cache_lock:
-                    self._cancelled_request_ids.add(request_id)
-                    self._response_cache[request_id] = (
-                        {"request_id": request_id, "status": "cancelled", "data": None},
-                        time.time()
-                    )
-                with condition:
-                    condition.notify_all()
+            request_ids = list(self._response_conditions)
+        for request_id in request_ids:
+            self.cancel_request(request_id)
     
     def _notify_waiter(self, request_id: str):
         """通知等待特定 request_id 的线程"""
@@ -185,6 +180,14 @@ class IPCManager:
             ]
             for k in expired_keys:
                 del self._response_cache[k]
+
+            expired_cancelled = [
+                request_id for request_id, cancelled_at in self._cancelled_request_times.items()
+                if now - cancelled_at > expire_time
+            ]
+            for request_id in expired_cancelled:
+                self._cancelled_request_ids.discard(request_id)
+                self._cancelled_request_times.pop(request_id, None)
     
     def send_chat_request(
         self,
@@ -222,11 +225,15 @@ class IPCManager:
             "use_sub_agent_config": use_sub_agent_config
         }
         
-        # 预先创建条件变量
+        # 预先创建条件变量。若 interrupt 已先一步为该 ID 写入 tombstone，
+        # 不再把请求送入 provider；等待方会立即读到合成的 cancelled。
         with self._conditions_lock:
             self._response_conditions[request_id] = threading.Condition()
-        
-        self.request_queue.put(request_data)
+        with self._cache_lock:
+            cancelled = request_id in self._cancelled_request_ids
+
+        if not cancelled:
+            self.request_queue.put(request_data)
         return request_id
         
     def get_chat_response(
@@ -290,26 +297,34 @@ class IPCManager:
             with self._conditions_lock:
                 self._response_conditions.pop(request_id, None)
     
+    def cancel_request(self, request_id: Optional[str]) -> bool:
+        """逻辑取消一个精确请求：立即唤醒 waiter，并丢弃迟到的 provider 响应。"""
+        if not request_id:
+            return False
+
+        cancelled_response = {
+            "request_id": request_id,
+            "status": "cancelled",
+            "data": None,
+        }
+        now = time.time()
+        with self._cache_lock:
+            self._cancelled_request_ids.add(request_id)
+            self._cancelled_request_times[request_id] = now
+            self._response_cache[request_id] = (cancelled_response, now)
+        self._notify_waiter(request_id)
+        return True
+
     def interrupt_current_request(self):
-        """中断所有正在处理的请求"""
+        """兼容 CLI 的全局逻辑中断；不再设置 stop_event 或等待 Chat 进程。"""
         if not self.process_started:
             return
-        
-        # 1. 设置停止事件
-        self.stop_event.set()
-        
-        # 2. 发送中断命令到 Chat 进程
-        try:
-            self.request_queue.put({"command": "interrupt"}, timeout=1)
-        except Exception as e:
-            log_error("IPC_INTERRUPT_ERROR", "Failed to send interrupt command", e)
-        
-        # 3. 立即唤醒所有等待者（不等待 Chat 进程响应）
-        self._handle_interrupt_response({"status": "interrupted"})
-        
-        # 4. 短暂延迟，让 Chat 进程有时间处理
-        time.sleep(0.1)
-        
+
+        with self._conditions_lock:
+            request_ids = list(self._response_conditions)
+        for request_id in request_ids:
+            self.cancel_request(request_id)
+
     def is_chat_process_alive(self) -> bool:
         """检查 Chat 进程是否存活"""
         if not self.process_started or not self.chat_process:

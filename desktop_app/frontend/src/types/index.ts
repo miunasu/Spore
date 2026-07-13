@@ -166,7 +166,63 @@ export interface WSConfirmResultEvent {
   };
 }
 
-export type WSEvent = WSLogEvent | WSAgentOutputEvent | WSAgentStatusEvent | WSAgentRegisterEvent | WSChatChunkEvent | WSTodoUpdateEvent | WSConfirmRequestEvent | WSConfirmCancelEvent | WSConfirmResultEvent;
+// 任务事件（阶段②：后端任务自驱 + 事件流，见 PLAN_spore_task_api.md 3.9/4）
+// 后端 WS 通道为广播、无路由，事件必须按顶层 session_id 过滤到对应会话
+export type TaskStatus = 'running' | 'succeeded' | 'failed' | 'interrupted' | 'timeout';
+
+export type TaskEventName =
+  | 'task_started'
+  | 'round_reply'
+  | 'tool_call'
+  | 'tool_result'
+  | 'todo_update'
+  | 'task_finished';
+
+export interface WSTaskEvent {
+  type: 'task_event';
+  event: TaskEventName;
+  session_id: string;
+  task_id: string;
+  submission_id: string;
+  round: number;
+  ts: string;
+  data: {
+    // task_started
+    message?: string;
+    // round_reply（字符串字段最多 8KB）
+    content?: string;
+    raw_response?: string;
+    sent_messages?: Array<{ role: string; content: string }>;
+    // tool_call / tool_result
+    tool_name?: string;
+    tool_names?: string[];
+    mode?: string;
+    status?: TaskStatus | string; // task_finished 时为 TaskStatus；tool_result 时为工具状态
+    // todo_update
+    tasks?: Array<{ content: string; status: string }>;
+    // task_finished
+    rounds?: number;
+    error?: string;
+  };
+}
+
+// GET /api/task/status 返回的任务注册表条目
+export interface TaskInfo {
+  task_id: string;
+  submission_id: string;
+  session_id: string;
+  status: TaskStatus;
+  rounds: number;
+  started_at: string;
+  finished_at: string | null;
+  last_content: string;
+  error: string | null;
+  interrupt_epoch: number;
+  cancel_requested: boolean;
+  worker_done: boolean;
+}
+
+export type WSEvent = WSLogEvent | WSAgentOutputEvent | WSAgentStatusEvent | WSAgentRegisterEvent | WSChatChunkEvent | WSTodoUpdateEvent | WSConfirmRequestEvent | WSConfirmCancelEvent | WSConfirmResultEvent | WSTaskEvent;
 
 // Tab 类型
 export type TabType = 'output' | 'skills' | 'prompt' | 'history' | 'agents' | 'note' | 'characters';

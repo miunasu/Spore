@@ -1,0 +1,397 @@
+"""
+任务级自驱 API —— 循环所有权收归后端
+
+POST /api/task/submit   提交任务，后端在后台线程自驱循环直至终态（内置 total_timeout watchdog）
+GET  /api/task/status   查询任务状态（按 task_id，或按 session_id 查询该会话的任务）
+
+中断复用 POST /api/chat/interrupt（带 conversation_id）：
+接口立即退役当前 task 并精确唤醒 IPC waiter；同步 provider 若迟到，其回复会被丢弃。
+
+事件流：在循环关键节点通过既有 WS 通道（websocket/ipc_bridge.send_ws_message）
+发结构化事件，统一信封：
+    {"type": "task_event", "event": <名>, "session_id", "task_id",
+     "submission_id", "round": int, "ts": iso8601, "data": {...}}
+事件名：task_started / round_reply / tool_call / tool_result / todo_update / task_finished。
+tool_call/tool_result/todo_update 由 conv_loop.event_emitter 回调注入产生
+（base/ 不直接依赖 websocket 模块）。事件中的字符串字段截断为 8KB。
+
+任务注册表为进程内内存（Spore 重启任务作废是可接受语义）。
+"""
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from base.logger import log_error
+
+router = APIRouter()
+
+# 任务注册表（进程内）。worker 是否退出与 task 是否仍有权产生结果分开管理：
+# active 索引一旦移除，旧 worker 即使仍在等待同步 provider，也不能再发可见事件。
+_tasks: Dict[str, Dict[str, Any]] = {}
+_active_tasks_by_session: Dict[str, str] = {}
+_tasks_lock = threading.Lock()
+
+# 专用线程池跑任务循环（不与 /send 的 _executor 抢线程）
+_task_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="spore-task")
+
+# 事件 content 截断上限（8KB）
+_MAX_EVENT_CONTENT = 8 * 1024
+
+
+def _now_iso() -> str:
+    """本地时区的 ISO8601 时间戳"""
+    return datetime.now(timezone.utc).astimezone().isoformat()
+
+
+def _truncate(value: Any, limit: int = _MAX_EVENT_CONTENT) -> Any:
+    """事件体积控制：字符串截断到 limit（其他类型原样返回）"""
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + f"...[已截断 {len(value) - limit} 字符]"
+    return value
+
+
+def _send_envelope(envelope: Dict[str, Any]) -> None:
+    """
+    发送事件信封到 WS 推送进程。
+
+    单独抽出来便于测试替换（monkeypatch 此函数即可捕获全部事件）。
+    """
+    try:
+        from ..websocket.ipc_bridge import send_ws_message
+        send_ws_message(envelope)
+    except Exception as e:
+        log_error("TASK_EVENT_SEND_ERROR", f"发送任务事件失败: {e}", e)
+
+
+def _emit_task_event(event: str, session_id: str, task_id: str,
+                     submission_id: str, round_num: int,
+                     data: Optional[Dict[str, Any]] = None) -> None:
+    """按统一信封发出 task_event（顶层字符串字段做 8KB 截断）"""
+    safe_data = {k: _truncate(v) for k, v in (data or {}).items()}
+    _send_envelope({
+        "type": "task_event",
+        "event": event,
+        "session_id": session_id,
+        "task_id": task_id,
+        "submission_id": submission_id,
+        "round": round_num,
+        "ts": _now_iso(),
+        "data": safe_data,
+    })
+
+
+def _is_active_task(session_id: str, task_id: str) -> bool:
+    """检查 task 是否仍是该会话唯一有权产生结果的任务。"""
+    with _tasks_lock:
+        entry = _tasks.get(task_id)
+        return bool(
+            entry
+            and entry["status"] == "running"
+            and _active_tasks_by_session.get(session_id) == task_id
+        )
+
+
+def _emit_active_task_event(event: str, session_id: str, task_id: str,
+                            submission_id: str, round_num: int,
+                            data: Optional[Dict[str, Any]] = None) -> bool:
+    """仅为仍 active 的 task 发送事件；检查与入队在同一临界区。"""
+    with _tasks_lock:
+        entry = _tasks.get(task_id)
+        if not (
+            entry
+            and entry["status"] == "running"
+            and _active_tasks_by_session.get(session_id) == task_id
+        ):
+            return False
+        _emit_task_event(
+            event, session_id, task_id, submission_id, round_num, data
+        )
+        return True
+
+
+def interrupt_session_task(session_id: str) -> Optional[Dict[str, Any]]:
+    """立即退役会话当前任务并发出唯一的 interrupted 终态事件。"""
+    with _tasks_lock:
+        task_id = _active_tasks_by_session.pop(session_id, None)
+        if task_id is None:
+            return None
+
+        entry = _tasks.get(task_id)
+        if entry is None or entry["status"] != "running":
+            return None
+
+        entry["status"] = "interrupted"
+        entry["cancel_requested"] = True
+        entry["finished_at"] = _now_iso()
+        entry["finished_event_sent"] = True
+        snapshot = dict(entry)
+
+    _emit_task_event(
+        "task_finished",
+        session_id,
+        task_id,
+        snapshot["submission_id"],
+        snapshot["rounds"],
+        {"status": "interrupted", "rounds": snapshot["rounds"]},
+    )
+    return snapshot
+
+
+class TaskSubmitRequest(BaseModel):
+    """任务提交请求"""
+    session_id: str
+    submission_id: str
+    message: str
+    total_timeout: float = 1800.0
+
+
+@router.post("/submit")
+def submit_task(req: TaskSubmitRequest) -> Dict[str, Any]:
+    """
+    提交任务：会话不存在则创建；同 session 已有 running 任务则拒绝；
+    提交时清掉该 session 的旧终态条目。任务在专用线程池中自驱直至终态。
+    """
+    from ..core import get_session_manager, get_conv_loop_manager
+
+    session_manager = get_session_manager()
+    conv_loop_manager = get_conv_loop_manager()
+    if not session_manager or not conv_loop_manager:
+        return {"success": False, "error": "后端未初始化"}
+
+    if not req.message or not req.message.strip():
+        return {"success": False, "error": "message 不能为空"}
+
+    session_id = req.session_id
+
+    # 会话不存在则创建
+    if session_id not in session_manager.list_sessions():
+        session_manager.create_session(session_id)
+
+    target_state = session_manager.get_session(session_id)
+    if target_state is None:
+        return {"success": False, "error": f"会话不存在: {session_id}"}
+
+    task_id = uuid.uuid4().hex
+    conv_loop = conv_loop_manager.get_loop(session_id=session_id)
+    # 等待旧 waiter 从合成 cancelled 中退出后再写新 user 消息；不会等待 provider HTTP。
+    with conv_loop.execution_lock:
+        with _tasks_lock:
+            entry = {
+                "task_id": task_id,
+                "submission_id": req.submission_id,
+                "session_id": session_id,
+                "status": "running",
+                "rounds": 0,
+                "started_at": _now_iso(),
+                "finished_at": None,
+                "last_content": "",
+                "error": None,
+                "interrupt_epoch": target_state.interrupt_epoch,
+                "cancel_requested": False,
+                "worker_done": False,
+                "finished_event_sent": False,
+            }
+            active_task_id = _active_tasks_by_session.get(session_id)
+            if active_task_id is not None:
+                return {
+                    "success": False,
+                    "error": f"会话 {session_id} 已有运行中的任务: {active_task_id}",
+                }
+
+            # 只清理 worker 已退出的旧终态，不能删除仍被旧 worker 引用的 entry。
+            stale_ids = [
+                tid for tid, task in _tasks.items()
+                if task["session_id"] == session_id and task.get("worker_done")
+            ]
+            for stale_id in stale_ids:
+                del _tasks[stale_id]
+
+            # task 被接受即记录用户输入；即使 worker 尚未开始就中断，也保留该消息。
+            target_state.add_user_message(req.message)
+            entry["user_message_added"] = True
+            _tasks[task_id] = entry
+            _active_tasks_by_session[session_id] = task_id
+
+    _task_executor.submit(
+        _run_task_loop, task_id, session_id, req.message, float(req.total_timeout)
+    )
+    return {
+        "success": True,
+        "task_id": task_id,
+        "submission_id": req.submission_id,
+    }
+
+
+@router.get("/status")
+def task_status(task_id: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    查询任务状态。
+
+    - ?task_id=  → 返回该任务的注册表条目；未知 task_id 返回明确错误
+    - ?session_id= → 返回该会话名下的任务列表（供前端恢复状态用）
+    """
+    with _tasks_lock:
+        if task_id:
+            entry = _tasks.get(task_id)
+            if entry is None:
+                return {"success": False, "error": f"未知任务: {task_id}"}
+            return {"success": True, "task": dict(entry)}
+        if session_id:
+            tasks = [dict(t) for t in _tasks.values() if t["session_id"] == session_id]
+            active_task_id = _active_tasks_by_session.get(session_id)
+            active_task = _tasks.get(active_task_id) if active_task_id else None
+            return {
+                "success": True,
+                "tasks": tasks,
+                "active_task": dict(active_task) if active_task else None,
+            }
+    return {"success": False, "error": "需要提供 task_id 或 session_id 查询参数"}
+
+
+def _run_task_loop(task_id: str, session_id: str, message: str, total_timeout: float) -> None:
+    """运行后端自驱任务；失去 active 身份后旧 worker 仅负责退出。"""
+    from ..core import get_session_manager
+    from .chat import run_single_round
+
+    entry = _tasks[task_id]
+    submission_id = entry["submission_id"]
+    request_epoch = entry["interrupt_epoch"]
+    status = "failed"
+    error: Optional[str] = None
+    rounds = 0
+    started = time.monotonic()
+
+    def _emitter(event: str, data: Dict[str, Any]) -> None:
+        _emit_active_task_event(
+            event,
+            session_id,
+            task_id,
+            submission_id,
+            entry["rounds"] + 1,
+            data,
+        )
+
+    try:
+        session_manager = get_session_manager()
+        target_state = session_manager.get_session(session_id)
+        if target_state is None:
+            raise RuntimeError(f"会话不存在: {session_id}")
+
+        _emit_active_task_event(
+            "task_started",
+            session_id,
+            task_id,
+            submission_id,
+            0,
+            {"message": message},
+        )
+
+        pending_message: Optional[str] = message
+        while _is_active_task(session_id, task_id):
+            if target_state.interrupt_epoch != request_epoch:
+                status = "interrupted"
+                break
+
+            if time.monotonic() - started >= total_timeout:
+                status = "timeout"
+                error = f"任务超时（total_timeout={total_timeout}s）"
+                try:
+                    from base.agent_process import terminate_conversation_agents
+                    terminate_conversation_agents(session_id)
+                except Exception as e:
+                    log_error(
+                        "TASK_TIMEOUT_CLEANUP_ERROR",
+                        f"任务超时后终止会话 {session_id} 子Agent失败: {e}",
+                        e,
+                    )
+                break
+
+            result = run_single_round(
+                session_id,
+                pending_message,
+                expected_epoch=request_epoch,
+                event_emitter=_emitter,
+                message_already_added=bool(entry.get("user_message_added")),
+            )
+            pending_message = None
+
+            if (
+                not _is_active_task(session_id, task_id)
+                or result["status"] == "interrupted"
+                or target_state.interrupt_epoch != request_epoch
+            ):
+                status = "interrupted"
+                break
+
+            if result["status"] == "error":
+                status = "failed"
+                error = result.get("error") or "未知错误"
+                break
+
+            rounds += 1
+            clean_reply = result.get("clean_reply") or ""
+            with _tasks_lock:
+                if _active_tasks_by_session.get(session_id) != task_id:
+                    status = "interrupted"
+                    break
+                entry["rounds"] = rounds
+                if clean_reply:
+                    entry["last_content"] = clean_reply
+
+            _emit_active_task_event(
+                "round_reply",
+                session_id,
+                task_id,
+                submission_id,
+                rounds,
+                {
+                    "content": clean_reply,
+                    "raw_response": result.get("raw_reply") or "",
+                    "sent_messages": result.get("sent_messages") or [],
+                },
+            )
+
+            if not result["should_continue"]:
+                status = "succeeded"
+                break
+
+    except Exception as e:
+        status = "failed"
+        error = str(e)
+        log_error("TASK_LOOP_ERROR", f"任务 {task_id} 执行异常: {e}", e)
+    finally:
+        emit_finished = False
+        with _tasks_lock:
+            entry["worker_done"] = True
+            is_authoritative = (
+                entry["status"] == "running"
+                and _active_tasks_by_session.get(session_id) == task_id
+            )
+            if is_authoritative:
+                _active_tasks_by_session.pop(session_id, None)
+                entry["status"] = status
+                entry["rounds"] = rounds
+                entry["finished_at"] = _now_iso()
+                entry["error"] = error
+                if not entry["finished_event_sent"]:
+                    entry["finished_event_sent"] = True
+                    emit_finished = True
+
+        if emit_finished:
+            finish_data: Dict[str, Any] = {"status": status, "rounds": rounds}
+            if error:
+                finish_data["error"] = error
+            _emit_task_event(
+                "task_finished",
+                session_id,
+                task_id,
+                submission_id,
+                rounds,
+                finish_data,
+            )

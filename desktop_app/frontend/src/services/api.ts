@@ -3,6 +3,8 @@
  * 封装所有后端 API 调用，支持多后端实例
  */
 
+import type { TaskInfo } from '../types';
+
 const MAIN_API_BASE = 'http://127.0.0.1:8765';
 
 class ApiError extends Error {
@@ -78,7 +80,12 @@ export const createChatApi = (port: number) => ({
     }),
 
   interrupt: (conversationId?: string) =>
-    requestToPort<{ success: boolean }>(port, '/api/chat/interrupt', {
+    requestToPort<{
+      success: boolean;
+      task_id?: string | null;
+      submission_id?: string | null;
+      interrupt_epoch?: number;
+    }>(port, '/api/chat/interrupt', {
       method: 'POST',
       body: JSON.stringify({ conversation_id: conversationId }),
     }),
@@ -261,8 +268,56 @@ export const createCommandsApi = (port: number) => ({
     }),
 });
 
+// 创建针对特定端口的 Task API（后端任务自驱，见 routes/task.py）
+export const createTaskApi = (port: number) => ({
+  // 提交任务：后端在后台线程自驱循环直至终态，渲染靠 WS task_event 事件
+  submit: (
+    sessionId: string,
+    submissionId: string,
+    message: string,
+    totalTimeout?: number
+  ) =>
+    requestToPort<{
+      success: boolean;
+      task_id?: string;
+      submission_id?: string;
+      error?: string;
+    }>(port, '/api/task/submit', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: sessionId,
+          submission_id: submissionId,
+          message,
+          ...(totalTimeout !== undefined ? { total_timeout: totalTimeout } : {}),
+        }),
+      }
+    ),
+
+  // 按 task_id 查询单个任务
+  statusByTask: (taskId: string) =>
+    requestToPort<{ success: boolean; task?: TaskInfo; error?: string }>(
+      port,
+      `/api/task/status?task_id=${encodeURIComponent(taskId)}`
+    ),
+
+  // 按 session_id 查询该会话名下的任务（用于恢复 generating 状态）
+  statusBySession: (sessionId: string) =>
+    requestToPort<{
+      success: boolean;
+      tasks?: TaskInfo[];
+      active_task?: TaskInfo | null;
+      error?: string;
+    }>(
+      port,
+      `/api/task/status?session_id=${encodeURIComponent(sessionId)}`
+    ),
+});
+
 // 主后端 Chat API（默认端口）
 export const chatApi = createChatApi(8765);
+
+// 主后端 Task API（默认端口）
+export const taskApi = createTaskApi(8765);
 
 // 主后端 Commands API（默认端口）
 export const commandsApi = createCommandsApi(8765);

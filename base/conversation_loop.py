@@ -9,6 +9,7 @@ import time
 import os
 import uuid
 import contextvars
+import threading
 from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -40,7 +41,12 @@ from . import config as _config
 
 class ConversationLoop:
     """对话循环处理器"""
-    
+
+    # 可选的事件回调（由上层注入，例如桌面后端的任务循环）。
+    # 签名: event_emitter(event_name: str, data: dict) -> None
+    # None 时零行为，CLI 模式不受影响。base/ 不直接依赖 websocket 模块（分层约束）。
+    event_emitter = None
+
     def __init__(
         self, 
         session_manager,  # 改为接收 session_manager 而不是单个 state
@@ -58,6 +64,8 @@ class ConversationLoop:
         
         # 初始化文本协议管理器
         self.protocol_manager = ProtocolManager()
+        self._request_id_lock = threading.Lock()
+        self._current_request_id: Optional[str] = None
     
     @property
     def state(self):
@@ -77,6 +85,16 @@ class ConversationLoop:
 
     def _conversation_id_for_context(self) -> Optional[str]:
         return getattr(self, "session_id", None) or get_current_conversation_id()
+
+    def _emit_event(self, event: str, data: Dict[str, Any]) -> None:
+        """通过注入的回调发出结构化事件；未注入时零行为，异常不影响主流程。"""
+        emitter = getattr(self, "event_emitter", None)
+        if emitter is None:
+            return
+        try:
+            emitter(event, data)
+        except Exception as e:
+            log_error("EVENT_EMITTER_ERROR", f"Event emitter failed for event '{event}': {e}", e)
 
     def manage_context_length(self) -> None:
         """
@@ -392,7 +410,11 @@ class ConversationLoop:
                         })
                         break
     
-    def send_chat_request(self, conversation_id: Optional[str] = None) -> Optional[Dict]:
+    def send_chat_request(
+        self,
+        conversation_id: Optional[str] = None,
+        expected_epoch: Optional[int] = None,
+    ) -> Optional[Dict]:
         """
         发送聊天请求并获取响应
         
@@ -402,11 +424,6 @@ class ConversationLoop:
         返回:
             响应字典，如果失败或中断返回None
         """
-        # 只在中断后的第一次请求前清空队列，避免干扰 supervisor 等其他模块
-        if getattr(self, '_interrupted_flag', False):
-            self.ipc_manager.clear_queues()
-            self._interrupted_flag = False
-        
         # 每次请求前重新加载 system_prompt，确保动态内容（TODO、角色、目录等）是最新的
         from .prompt_loader import load_system_prompt
         from .tools import TOOL_DEFINITIONS
@@ -441,21 +458,30 @@ class ConversationLoop:
         if conversation_id:
             request_id = f"{conversation_id}_{uuid.uuid4()}"
         else:
-            request_id = None
+            request_id = str(uuid.uuid4())
         
-        # 发送请求并获取 request_id - 纯文本模式，不使用 function calling
-        request_id = self.ipc_manager.send_chat_request(
-            messages=self.state.messages,
-            model=self.config.get_model(),
-            system=current_system_prompt,
-            tool_calls=False,  # 文本协议不使用 function calling
-            tools=None,
-            request_id=request_id  # 传入带会话 ID 的 request_id
-        )
-        
-        # 使用 request_id 等待响应
-        response = self.ipc_manager.get_chat_response(request_id=request_id)
-        
+        # 在请求入队前公布精确 ID，确保 interrupt 与 enqueue 并发时也能先写 tombstone。
+        with self._request_id_lock:
+            self._current_request_id = request_id
+
+        if expected_epoch is not None and self.state.interrupt_epoch != expected_epoch:
+            self.ipc_manager.cancel_request(request_id)
+
+        try:
+            request_id = self.ipc_manager.send_chat_request(
+                messages=self.state.messages,
+                model=self.config.get_model(),
+                system=current_system_prompt,
+                tool_calls=False,
+                tools=None,
+                request_id=request_id,
+            )
+            response = self.ipc_manager.get_chat_response(request_id=request_id)
+        finally:
+            with self._request_id_lock:
+                if self._current_request_id == request_id:
+                    self._current_request_id = None
+
         if response is None or response.get("status") == "cancelled":
             print("Spore> 对话中断，请继续")
             return None
@@ -479,6 +505,15 @@ class ConversationLoop:
         return response
     
     def _execute_single_action(self, action: ParsedAction) -> Dict[str, Any]:
+        """Execute one parsed tool call, emit a tool_result event, and return a structured status."""
+        execution = self._execute_single_action_impl(action)
+        self._emit_event("tool_result", {
+            "tool_name": execution.get("tool_name"),
+            "status": execution.get("status"),
+        })
+        return execution
+
+    def _execute_single_action_impl(self, action: ParsedAction) -> Dict[str, Any]:
         """Execute one parsed tool call and return a structured status."""
         tool_name = action.tool_name
         args = action.parameters
@@ -546,6 +581,12 @@ class ConversationLoop:
         full_reply: Optional[str] = None,
     ) -> Optional[str]:
         """Execute ACTION_SINGLE, ACTION_SEQUENCE, or ACTION_PARALLEL."""
+        self._emit_event("tool_call", {
+            "tool_name": action_block.first_action.tool_name if action_block.first_action else "",
+            "mode": action_block.mode,
+            "tool_names": [a.tool_name for a in action_block.actions],
+        })
+
         last_todo_content = get_last_todo_content()
         if last_todo_content != "":
             clear_todo_block(last_todo_content)
@@ -693,6 +734,7 @@ class ConversationLoop:
         if tasks:
             # 更新 TODO
             todo_write(tasks, session_id=self._conversation_id_for_context())
+            self._emit_event("todo_update", {"tasks": tasks})
     
     def validate_and_check_response(self, reply: str) -> Optional[str]:
         """
@@ -833,14 +875,19 @@ class ConversationLoop:
             
             return "continue"
     
+    def cancel_current_request(self) -> bool:
+        """精确逻辑取消当前主请求，不影响其他会话或随后提交的请求。"""
+        with self._request_id_lock:
+            request_id = self._current_request_id
+        return self.ipc_manager.cancel_request(request_id)
+
     def handle_keyboard_interrupt(self) -> None:
         """处理键盘中断"""
         print("\nInterrupt LLM...")
         clear_last_todo_content()
         todo_write([], session_id=self._conversation_id_for_context())
-        
-        # 发送中断命令
-        self.ipc_manager.interrupt_current_request()
+
+        self.cancel_current_request()
 
         # 清理打断时产生的残留消息
         self._cleanup_interrupted_messages()
@@ -848,9 +895,6 @@ class ConversationLoop:
         # 重置状态变量
         self.state.last_answer = ""
         self.state.current_answer = ""
-        
-        # 设置中断标志，下次发送请求前会再次清空队列
-        self._interrupted_flag = True
         
         print("Spore> 对话已中断，请继续")
     

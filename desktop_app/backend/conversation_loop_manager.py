@@ -4,6 +4,7 @@ ConversationLoop 管理器
 为每个会话维护独立的 ConversationLoop 实例，实现真正的并发处理。
 类似于子Agent的架构，每个会话有自己的独立实例。
 """
+import threading
 from typing import Dict, Optional
 from base.conversation_loop import ConversationLoop
 from base.state_manager import MultiSessionManager, ConversationState
@@ -35,7 +36,10 @@ class SessionConversationLoop(ConversationLoop):
         self.config = config
         self.system_prompt = system_prompt
         self.tool_names = tool_names
-        
+        self.execution_lock = threading.RLock()
+        self._request_id_lock = threading.Lock()
+        self._current_request_id = None
+
         # 初始化文本协议管理器
         from base.text_protocol import ProtocolManager
         self.protocol_manager = ProtocolManager()

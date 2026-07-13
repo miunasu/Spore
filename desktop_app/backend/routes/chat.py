@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import asyncio
+import copy
 from concurrent.futures import ThreadPoolExecutor
 import re
 
@@ -16,8 +17,7 @@ from base.text_protocol import ProtocolManager
 from base.prompt_loader import load_system_prompt
 from base.utils import clear_last_todo_content
 from base.todo_manager import todo_write
-from base.agent_process import get_current_agent_manager
-from base.interrupt_handler import get_interrupt_handler
+from base.agent_process import terminate_conversation_agents
 from AutoAgent import select_context_mode
 from base.session_context import conversation_context
 
@@ -131,47 +131,86 @@ class ChatResponse(BaseModel):
     raw_response: Optional[str] = None  # LLM返回的原始响应（包含协议标记）
 
 
-@router.post("/send", response_model=ChatResponse)
-async def send_message(req: ChatRequest):
+class SessionNotFoundError(Exception):
+    """目标会话不存在（且无法创建）"""
+    pass
+
+
+def run_single_round(
+    conversation_id: str,
+    message: Optional[str] = None,
+    expected_epoch: Optional[int] = None,
+    event_emitter=None,
+    message_already_added: bool = False,
+) -> Dict[str, Any]:
     """
-    发送消息 - 使用独立的 ConversationLoop 实例
-    每个会话有自己的 ConversationLoop，实现真正的并发处理
-    
-    如果 message 为空，则不添加用户消息，直接继续对话（用于连续输出）
+    执行一轮对话（阻塞调用，应在线程池中运行）。
+
+    这是 /api/chat/send 与 /api/task/submit 任务循环共用的唯一循环体实现：
+    准备会话/系统提示 → （可选）添加用户消息 → LLM 请求 →
+    validate_and_check_response（内部同步执行 ACTION 工具）。
+    不允许在别处出现第三份循环实现。
+
+    Args:
+        conversation_id: 目标会话 ID（不存在则创建）
+        message: 用户消息；None 或空串表示不添加用户消息，直接继续对话（心跳轮）
+
+    Returns:
+        {
+            "status": "success" | "error" | "interrupted",
+            "should_continue": bool,        # 仅 status=="success" 时有意义
+            "clean_reply": str,             # 剥去协议标记后的用户可见内容
+            "raw_reply": str,               # LLM 原始响应（含协议标记）
+            "sent_messages": list,          # 实际发送给 LLM 的消息
+            "error": Optional[str],         # 仅 status=="error" 时有值
+        }
     """
     from ..core import get_conv_loop_manager
-    
+
     ipc_manager, session_manager, _, _, config = get_instances()[:5]
     conv_loop_manager = get_conv_loop_manager()
-    
-    if not conv_loop_manager:
-        raise HTTPException(status_code=503, detail="后端未初始化")
-    
-    # 确定目标会话 ID
-    conversation_id = req.conversation_id or session_manager.current_session_id
-    
+
+    if not conv_loop_manager or not session_manager:
+        raise RuntimeError("后端未初始化")
+
+    def _result(status: str, should_continue: bool = False, clean_reply: str = "",
+                raw_reply: str = "", sent_messages: Optional[list] = None,
+                error: Optional[str] = None) -> Dict[str, Any]:
+        return {
+            "status": status,
+            "should_continue": should_continue,
+            "clean_reply": clean_reply,
+            "raw_reply": raw_reply,
+            "sent_messages": sent_messages or [],
+            "error": error,
+        }
+
     # 确保会话存在
     if conversation_id not in session_manager.list_sessions():
         session_manager.create_session(conversation_id)
-    
+
     # 切换到目标会话（确保 session_manager.current 指向正确的会话）
     # 这样 load_system_prompt() 中的 get_current_todos_for_prompt() 才能获取正确的TODO
     session_manager.switch_session(conversation_id)
-    
+
     # 获取该会话的状态
     target_state = session_manager.get_session(conversation_id)
     if not target_state:
-        raise HTTPException(status_code=404, detail=f"会话不存在: {conversation_id}")
+        raise SessionNotFoundError(f"会话不存在: {conversation_id}")
 
-    request_epoch = target_state.interrupt_epoch
-        
+    request_epoch = (
+        target_state.interrupt_epoch if expected_epoch is None else expected_epoch
+    )
+
+    message_text = message or ""
+
     # 根据会话的模式确定工具集
-    if target_state.context_mode == "auto" and req.message.strip():
-        selected_mode = select_context_mode(req.message)
+    if target_state.context_mode == "auto" and message_text.strip():
+        selected_mode = select_context_mode(message_text)
         current_tools = get_tools_for_mode(selected_mode)
     else:
         current_tools = get_tools_for_mode(target_state.context_mode)
-    
+
     # 准备系统提示和工具定义
     tool_definitions = {
         name: TOOL_DEFINITIONS[name]
@@ -185,80 +224,150 @@ async def send_message(req: ChatRequest):
         base_prompt,
         tool_definitions,
     )
-    
+
     # 获取或创建该会话的 ConversationLoop 实例
     conv_loop = conv_loop_manager.get_loop(
         session_id=conversation_id,
         system_prompt=system_prompt,
         tool_names=current_tools
     )
-    
-    # 更新 ConversationLoop 的配置（可能会话模式改变了）
-    conv_loop.system_prompt = system_prompt
-    conv_loop.tool_names = current_tools
-    
-    # 只有非空消息才添加用户消息
-    if req.message.strip():
-        target_state.add_user_message(req.message)
-    
-    def _do_chat():
-        """在线程池中执行的阻塞操作"""
-        # 现在每个会话有独立的 conv_loop，不需要担心并发问题
-        # conv_loop.state 绑定到特定的会话状态，不会被其他请求影响
-        
-        # 管理上下文长度
-        with conversation_context(conversation_id):
-            conv_loop.manage_context_length()
-        
-        # 修复不完整的消息
-            conv_loop.fix_incomplete_messages()
-        
-        # 发送请求并获取响应
-            return conv_loop.send_chat_request(conversation_id=conversation_id)
-    
-    try:
-        # 在线程池中执行阻塞操作
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(_executor, _do_chat)
 
+    with conv_loop.execution_lock:
         if target_state.interrupt_epoch != request_epoch:
-            return ChatResponse(status="interrupted")
-        
-        if response is None:
-            return ChatResponse(status="interrupted")
-        
-        if response.get("status") == "error":
-            return ChatResponse(
-                status="error",
-                message=response.get("data", "未知错误")
+            return _result("interrupted")
+
+        # 更新 ConversationLoop 的配置（可能会话模式改变了）
+        conv_loop.system_prompt = system_prompt
+        conv_loop.tool_names = current_tools
+
+        # 首轮 user 消息只在这里添加；它属于用户已确认的输入，中断不回滚。
+        if message_text.strip() and not message_already_added:
+            target_state.add_user_message(message_text)
+
+        checkpoint = {
+            "messages": copy.deepcopy(target_state.messages),
+            "llm_reply_count": target_state.llm_reply_count,
+            "last_answer": target_state.last_answer,
+            "current_answer": target_state.current_answer,
+            "todos": copy.deepcopy(target_state.todos),
+            "last_input_tokens": target_state.last_input_tokens,
+            "last_output_tokens": target_state.last_output_tokens,
+            "cumulative_input_tokens": target_state.cumulative_input_tokens,
+            "cumulative_output_tokens": target_state.cumulative_output_tokens,
+        }
+
+        previous_emitter = getattr(conv_loop, "event_emitter", None)
+        conv_loop.event_emitter = event_emitter
+
+        def _rollback_interrupted_round() -> None:
+            target_state.messages = checkpoint["messages"]
+            target_state.llm_reply_count = checkpoint["llm_reply_count"]
+            target_state.last_answer = checkpoint["last_answer"]
+            target_state.current_answer = checkpoint["current_answer"]
+            if target_state.todos != checkpoint["todos"]:
+                todo_write(checkpoint["todos"], session_id=conversation_id)
+            else:
+                target_state.todos = checkpoint["todos"]
+            target_state.last_input_tokens = checkpoint["last_input_tokens"]
+            target_state.last_output_tokens = checkpoint["last_output_tokens"]
+            target_state.cumulative_input_tokens = checkpoint["cumulative_input_tokens"]
+            target_state.cumulative_output_tokens = checkpoint["cumulative_output_tokens"]
+
+        try:
+            with conversation_context(conversation_id):
+                conv_loop.manage_context_length()
+                conv_loop.fix_incomplete_messages()
+                response = conv_loop.send_chat_request(
+                    conversation_id=conversation_id,
+                    expected_epoch=request_epoch,
+                )
+
+            if target_state.interrupt_epoch != request_epoch or response is None:
+                _rollback_interrupted_round()
+                return _result("interrupted")
+
+            if response.get("status") == "error":
+                return _result("error", error=response.get("data", "未知错误"))
+
+            reply_data = response.get("data", {})
+            reply = reply_data.get("content", "")
+            sent_messages = reply_data.get("sent_messages", [])
+
+            if target_state.interrupt_epoch != request_epoch:
+                _rollback_interrupted_round()
+                return _result("interrupted")
+
+            with conversation_context(conversation_id):
+                result = conv_loop.validate_and_check_response(reply)
+
+            # 覆盖 response 刚通过检查、用户随即点 Stop 的临界窗口。
+            if target_state.interrupt_epoch != request_epoch:
+                _rollback_interrupted_round()
+                return _result("interrupted")
+
+            clean_reply = extract_user_visible_content(reply)
+            return _result(
+                "success",
+                should_continue=(result == "continue"),
+                clean_reply=clean_reply,
+                raw_reply=reply,
+                sent_messages=sent_messages,
             )
-        
-        # 处理响应
-        reply_data = response.get("data", {})
-        reply = reply_data.get("content", "")
-        sent_messages = reply_data.get("sent_messages", [])
+        finally:
+            if getattr(conv_loop, "event_emitter", None) is event_emitter:
+                conv_loop.event_emitter = previous_emitter
 
-        if target_state.interrupt_epoch != request_epoch:
-            return ChatResponse(status="interrupted")
-        
-        # 使用文本协议验证和处理响应
-        with conversation_context(conversation_id):
-            result = conv_loop.validate_and_check_response(reply)
-        
-        # 提取用户可见内容（去除协议标记）
-        clean_reply = extract_user_visible_content(reply)
-                
-        return ChatResponse(
-            status="success",
-            content=clean_reply,
-            should_continue=(result == "continue"),
-            sent_messages=sent_messages,  # 实际发送给LLM的消息
-            raw_response=reply  # LLM返回的原始响应（包含协议标记）
+
+@router.post("/send", response_model=ChatResponse)
+async def send_message(req: ChatRequest):
+    """
+    发送消息 - 使用独立的 ConversationLoop 实例
+    每个会话有自己的 ConversationLoop，实现真正的并发处理
+
+    如果 message 为空，则不添加用户消息，直接继续对话（用于连续输出）
+    单步语义不变：内部与任务循环共用 run_single_round。
+    """
+    from ..core import get_conv_loop_manager
+
+    _, session_manager, _, _, _ = get_instances()[:5]
+    conv_loop_manager = get_conv_loop_manager()
+
+    if not conv_loop_manager:
+        raise HTTPException(status_code=503, detail="后端未初始化")
+
+    # 确定目标会话 ID
+    conversation_id = req.conversation_id or session_manager.current_session_id
+
+    try:
+        # 在线程池中执行阻塞的单轮循环体
+        loop = asyncio.get_event_loop()
+        round_result = await loop.run_in_executor(
+            _executor, run_single_round, conversation_id, req.message
         )
-    
+    except SessionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         log_error("CHAT_SEND_ERROR", f"Error in send_message: {str(e)}", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+    if round_result["status"] == "interrupted":
+        return ChatResponse(status="interrupted")
+
+    if round_result["status"] == "error":
+        return ChatResponse(
+            status="error",
+            message=round_result.get("error") or "未知错误"
+        )
+
+    return ChatResponse(
+        status="success",
+        content=round_result["clean_reply"],
+        should_continue=round_result["should_continue"],
+        sent_messages=round_result["sent_messages"],  # 实际发送给LLM的消息
+        raw_response=round_result["raw_reply"]  # LLM返回的原始响应（包含协议标记）
+    )
 
 
 @router.post("/interrupt")
@@ -278,29 +387,28 @@ def interrupt(req: InterruptRequest = InterruptRequest()):
     if not target_state:
         raise HTTPException(status_code=404, detail=f"会话不存在: {conversation_id}")
 
-    target_state.interrupt_epoch += 1
-
-    target_loop = None
-    if conv_loop_manager:
-        target_loop = conv_loop_manager._loops.get(conversation_id)
-    if target_loop is None:
-        target_loop = get_instances()[3]
-    
     try:
-        # 1. 调用 conv_loop 的中断处理方法（处理主 Agent）
-        if target_loop:
-            target_loop.handle_keyboard_interrupt()
-        
-        # 2. 直接终止当前活动的Agent管理器（处理子 Agent）
-        agent_manager = get_current_agent_manager()
-        if agent_manager:
-            agent_manager.terminate_all()
-        
-        # 3. 同时调用 InterruptHandler 广播终止信号（兼容性）
-        interrupt_handler = get_interrupt_handler()
-        interrupt_handler.broadcast_termination()
-        
-        return {"success": True, "message": "中断请求已发送（包括所有子 Agent）"}
+        from .task import interrupt_session_task
+
+        target_state.interrupt_epoch += 1
+        retired_task = interrupt_session_task(conversation_id)
+
+        target_loop = (
+            conv_loop_manager._loops.get(conversation_id)
+            if conv_loop_manager else None
+        )
+        request_cancelled = target_loop.cancel_current_request() if target_loop else False
+        agents_terminated = terminate_conversation_agents(conversation_id)
+
+        return {
+            "success": True,
+            "message": "对话已立即中断，旧请求回复将被丢弃",
+            "task_id": retired_task.get("task_id") if retired_task else None,
+            "submission_id": retired_task.get("submission_id") if retired_task else None,
+            "interrupt_epoch": target_state.interrupt_epoch,
+            "request_cancelled": request_cancelled,
+            "agents_terminated": agents_terminated,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

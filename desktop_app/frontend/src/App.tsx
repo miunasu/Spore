@@ -143,19 +143,30 @@ function App() {
             clearRequest();
           }
           break;
+        case 'task_event':
+          // 任务事件流（后端任务自驱）：chatStore 内部按顶层 session_id 路由到对应会话
+          useChatStore.getState().handleTaskEvent(event);
+          break;
       }
     }
   }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, setPendingRequest, clearRequest]);
 
   useEffect(() => {
-    // 连接 WebSocket
-    wsService.connect();
-
     // 订阅 WebSocket 事件
     const unsubscribe = wsService.subscribe(handleWSEvents);
 
+    // 连接建立（含重连、页面刷新后的首连）时拉快照恢复各会话的任务状态
+    // （后端 WS 为广播推送，断线期间的 task_event 会丢失，需要补状态）
+    const unsubscribeOpen = wsService.subscribeOpen(() => {
+      useChatStore.getState().resumeAllConversations();
+    });
+
+    // 连接 WebSocket（在订阅之后，确保首连的 open 事件不被漏掉）
+    wsService.connect();
+
     return () => {
       unsubscribe();
+      unsubscribeOpen();
       wsService.disconnect();
     };
   }, [handleWSEvents]);

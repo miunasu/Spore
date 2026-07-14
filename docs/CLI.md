@@ -1,129 +1,160 @@
-# CLI 模式使用指南
+# CLI 模式使用指南（v3.0）
 
-> 注意：由于后期开发重心转移到 GUI 上，CLI 模式长期未测试，可能存在兼容性问题。推荐使用桌面 GUI 模式。
+> 注意：当前产品重心在桌面 GUI。CLI 仍可运行，但部分交互体验（确认 UI、多会话等）弱于桌面模式。推荐：`LAUNCH_MODE=desktop`。
 
-## 启动 CLI 模式
+## 启动
 
 ```bash
-# 方式 1：通过统一入口
+# 确保 .env 中 LAUNCH_MODE=cli（默认即为 cli）
+
+# 方式 1：统一入口
 uv run python main_entry.py
 
-# 方式 2：直接启动
+# 方式 2：直接 CLI
 uv run python main.py
 ```
 
-## CLI 命令列表
+依赖安装：
 
-### 系统命令
+```bash
+uv sync
+```
+
+---
+
+## 命令列表
+
+### 系统
 
 ```
-prompt             - 查看当前系统提示词
-q/quit/exit        - 退出程序
+prompt             - 查看当前系统提示词（含协议注入后的有效提示）
+q / quit / exit    - 退出
 cls                - 清屏
 ```
 
-### 对话管理
+### 对话与记忆
 
 ```
-context/mem/memory - 查看对话历史（简略）
-fullmem            - 查看完整对话历史
-memclean           - 清除记忆（需确认）
-save               - 保存当前对话历史
-load <文件名>      - 加载对话历史（覆盖当前）
-continue           - 继续最近保存的历史对话
+context / mem / memory - 查看对话历史（简略）
+fullmem                - 查看完整对话历史
+memclean / cleanmem    - 清除当前记忆
+save                   - 手动保存到 history/时间戳.mem
+load <文件名>          - 从 history/ 加载（可写 autosave/xxx.mem）
+continue               - 加载最近一份历史并继续
 ```
+
+自动短记忆：
+
+- 路径：`history/autosave/session_<会话ID>.mem`
+- 按会话覆盖更新，默认最多保留约 10 个会话
+- 可用 `load autosave/session_xxx.mem` 恢复
 
 ### 工具与技能
 
 ```
-skills             - 查看所有可用技能
-token              - 计算当前记忆使用的 Token 数
+skills             - 汇总 skills/ 下各技能的功能摘要
 ```
+
+> `token` 命令已废弃：上下文 token 以 LLM API 返回的精确用量为准（桌面 UI 会展示）。
 
 ### 模式与角色
 
 ```
-mode               - 查看当前上下文处理模式
-mode <模式名>      - 切换模式（strong_context/long_context/auto）
-char               - 角色管理
-char list          - 列出所有可用角色
-char select <角色名> - 选择指定角色
-char remove        - 移除当前角色
+mode                           - 查看当前会话上下文模式
+mode strong_context|long_context|auto
+char                           - 角色帮助
+char list                      - 列出 characters/
+char select <角色名>           - 选择角色（同时只能一个）
+char remove                    - 移除当前角色
 ```
 
-**角色系统说明：**
-- 选择角色后，该角色的专业属性会应用到所有后续对话
-- 角色内容会自动注入到系统提示词中
-- 可在 `.env` 中配置 `DEFAULT_CHARACTER` 设置默认角色
+`.env` 中 `DEFAULT_CHARACTER` 可在启动时自动选择角色。
 
-### 高级功能
+### 其他
 
 ```
-savemode           - 切换节省上下文模式（压缩历史）
-paste <文本>       - 从剪贴板粘贴多行文本
+savemode           - 切换节省上下文模式（压缩多步中间过程）
+paste [附加说明]   - 读取剪贴板多行文本作为用户输入
 ```
+
+---
 
 ## 使用示例
 
-### 保存和加载对话
+### 保存 / 加载
 
-```bash
-# 保存当前对话
+```text
 User> save
-[系统] 对话已保存到 memory/conversation_20240213_143022.mem
+[对话已保存] 文件: history/2026-07-14_153012.mem
 
-# 加载历史对话
-User> load conversation_20240213_143022.mem
-[系统] 对话已加载
+User> load 2026-07-14_153012.mem
+[对话已加载]
 
-# 继续最近的对话
 User> continue
-[对话已加载] 继续最近的对话: conversation_20240213_143022.mem
+[对话已加载] 继续最近的对话: ...
 ```
 
 ### 切换模式
 
-```bash
-# 查看当前模式
+```text
 User> mode
 [当前模式] strong_context
-[说明] 强上下文关联模式 - 适合需要上下文强关联的任务和精确推理
 
-# 切换模式
 User> mode long_context
 [模式已切换] long_context
-[说明] 长上下文处理模式 - 适合大文本处理、大项目编程和信息检索汇总报告
 [提示] 新模式将在下一次对话时生效
 ```
 
-### 粘贴多行文本
+模式与工具集关系：
 
-```bash
-# 先复制要输入的内容到剪贴板，然后：
-User> paste 请分析这段代码
-[已从剪贴板读取 1234 个字符]
-[预览前100个字符:
- 请分析这段代码
-def hello():
-    print("Hello, World!")
-...]
+- `strong_context`：单 Agent 完整文件/命令/网络工具，**无**多 Agent 派发
+- `long_context`：额外开放 `multi_agent_dispatch`
+- `auto`：由 ModeSelector 判定
+
+### 粘贴多行
+
+```text
+# 先把内容复制到剪贴板
+User> paste 请分析以下代码
+[已从剪贴板读取 ...]
 ```
 
-## 中断执行
+---
 
-在 CLI 模式下，按 `Ctrl+C` 可以随时中断 Agent 执行：
+## 中断
 
-```bash
-User> 帮我分析这个大文件
-Agent> 正在读取文件...
-^C
-[提示] 用户中断，已停止执行
-```
+- 在 LLM 回复或工具执行过程中按 **Ctrl+C**
+- 会中断当前 Chat 请求，并尝试终止本会话子 Agent
+- 主进程通常继续，可输入下一条指令
 
-## 多进程模式
+---
 
-CLI 模式使用 IPC 架构，Chat 进程独立运行：
+## 多进程结构
 
-- 主进程负责用户交互和工具执行
-- Chat 进程负责 LLM API 调用
-- 按 Ctrl+C 只中断 Chat 进程，主进程继续运行
+CLI 与桌面共用同一套 IPC 架构：
+
+| 进程 | 职责 |
+|------|------|
+| 主进程 | 用户输入、协议解析、工具执行、子 Agent 协调 |
+| Chat 进程 | OpenAI / Anthropic API 调用、流式输出 |
+
+初始化由 `base.ipc_manager.initialize_ipc_system()` 完成。
+
+日志：默认会打开日志监控终端（见 `logs/` 与 `LOG_MONITOR_*` 配置）。
+
+---
+
+## 与桌面模式差异（摘要）
+
+| 能力 | CLI | Desktop |
+|------|-----|---------|
+| 多会话标签 | 弱 / 单会话为主 | 多会话 + 每会话独立 ConversationLoop |
+| 危险操作确认 | 有限（命令拦截） | WebSocket 确认栏 |
+| 实时面板 | 日志终端 | 日志 / TODO / Agent 监控 / 文件树 |
+| 配置档案 | 手改 `.env` | GUI + profiles |
+
+更多：
+
+- [配置说明](CONFIGURATION.md)
+- [架构设计](ARCHITECTURE.md)
+- [前端使用](FRONTEND.md)

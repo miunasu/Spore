@@ -47,6 +47,27 @@ class Config:
         self.anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
         self.anthropic_api_url: Optional[str] = os.getenv("ANTHROPIC_API_URL", "").strip() or None
         self.anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514").strip() or "claude-sonnet-4-20250514"
+
+        # Anthropic effort / thinking 配置（对应 Claude API 的 output_config.effort 与 thinking）
+        # effort 可选值：low, medium, high, xhigh, max；留空表示不传
+        # 现代模型推荐：thinking=adaptive + output_config.effort
+        # 旧模型/手动扩展思考：thinking=enabled + budget_tokens
+        _anthropic_effort = os.getenv("ANTHROPIC_EFFORT", "").strip().lower()
+        self.anthropic_effort: Optional[str] = _anthropic_effort or None
+        if self.anthropic_effort and self.anthropic_effort not in {"low", "medium", "high", "xhigh", "max"}:
+            self.anthropic_effort = None
+
+        _thinking_mode = os.getenv("ANTHROPIC_THINKING_MODE", "").strip().lower()
+        # adaptive | enabled | disabled；留空表示自动（有 effort 时默认 adaptive，有 budget 时默认 enabled）
+        self.anthropic_thinking_mode: Optional[str] = _thinking_mode or None
+        if self.anthropic_thinking_mode and self.anthropic_thinking_mode not in {"adaptive", "enabled", "disabled"}:
+            self.anthropic_thinking_mode = None
+
+        try:
+            _budget = os.getenv("ANTHROPIC_THINKING_BUDGET_TOKENS", "").strip()
+            self.anthropic_thinking_budget_tokens: Optional[int] = int(_budget) if _budget else None
+        except ValueError:
+            self.anthropic_thinking_budget_tokens = None
         
         # ========== 子 Agent LLM 配置 ==========
         # 子 Agent 使用的 SDK（留空则继承主 Agent 配置）
@@ -259,6 +280,22 @@ class Config:
             self.shell_command_timeout: int = int(os.getenv("SHELL_COMMAND_TIMEOUT", "60"))
         except ValueError:
             self.shell_command_timeout = 60
+
+        # ========== Command intercept (master switch) ==========
+        # COMMAND_INTERCEPT: master switch for shell/command safety intercept strategies.
+        # true: enable intercept strategies; false: disable all of them.
+        # Legacy alias: BLOCK_SHELL_DELETE (used only if COMMAND_INTERCEPT unset).
+        _cmd_intercept_raw = os.getenv("COMMAND_INTERCEPT", "").strip()
+        if not _cmd_intercept_raw:
+            _cmd_intercept_raw = os.getenv("BLOCK_SHELL_DELETE", "true").strip() or "true"
+        self.command_intercept: bool = _cmd_intercept_raw.lower() == "true"
+
+        # Fine-grained strategies (only applied when command_intercept=true).
+        # Unset => enabled; set INTERCEPT_SHELL_DELETE/WRITE=true|false to override.
+        _del = os.getenv("INTERCEPT_SHELL_DELETE", "").strip().lower()
+        self.intercept_shell_delete: bool = True if _del == "" else _del == "true"
+        _write = os.getenv("INTERCEPT_SHELL_WRITE", "").strip().lower()
+        self.intercept_shell_write: bool = True if _write == "" else _write == "true"
         
         # 是否限制写工具的返回值（不在messages中添加arguments字段）
         self.limit_write_tool_return: bool = os.getenv("LIMIT_WRITE_TOOL_RETURN", "true").lower() == "true"
@@ -323,6 +360,25 @@ class Config:
                 raise RuntimeError("OPENAI_API_KEY 未设置。请在环境变量中配置 OpenAI API 密钥。")
         return True
     
+
+    def is_intercept_enabled(self, strategy: Optional[str] = None) -> bool:
+        """Return whether command intercept is active.
+
+        Args:
+            strategy: Optional strategy name, e.g. "shell_delete", "shell_write".
+                      When provided, requires master switch AND that strategy flag.
+        """
+        if not getattr(self, "command_intercept", True):
+            return False
+        if not strategy:
+            return True
+        strategy_map = {
+            "shell_delete": getattr(self, "intercept_shell_delete", True),
+            "shell_write": getattr(self, "intercept_shell_write", True),
+            # Add new strategies here later.
+        }
+        return bool(strategy_map.get(strategy, True))
+
     def get_model(self) -> str:
         """根据当前 SDK 获取模型名称"""
         if self.llm_sdk == "anthropic":

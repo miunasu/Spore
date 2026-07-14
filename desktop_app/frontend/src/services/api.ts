@@ -504,6 +504,7 @@ export const settingsApi = {
         character_recommend_interval: number;
         context_mode: string;
         max_output_tokens: number;
+        command_intercept: boolean;
       };
       error?: string;
     }>('/api/settings/settings'),
@@ -512,14 +513,41 @@ export const settingsApi = {
   updateSettings: (settings: {
     enable_characters?: boolean;
     default_character?: string;
+    command_intercept?: boolean;
   }) =>
-    request<{ success: boolean; message?: string; error?: string }>(
-      '/api/settings/settings/update',
-      {
-        method: 'POST',
-        body: JSON.stringify(settings),
-      }
+    request<{
+      success: boolean;
+      message?: string;
+      error?: string;
+      command_intercept?: boolean | null;
+    }>('/api/settings/settings/update', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }),
+
+  getCommandIntercept: () =>
+    request<{ success: boolean; command_intercept?: boolean; error?: string }>(
+      '/api/settings/settings/command_intercept'
     ),
+
+  toggleCommandIntercept: () =>
+    request<{
+      success: boolean;
+      command_intercept?: boolean;
+      message?: string;
+      error?: string;
+    }>('/api/settings/settings/command_intercept/toggle', { method: 'POST' }),
+
+  setCommandIntercept: (commandIntercept: boolean) =>
+    request<{
+      success: boolean;
+      command_intercept?: boolean;
+      error?: string;
+    }>('/api/settings/settings/command_intercept', {
+      method: 'POST',
+      body: JSON.stringify({ command_intercept: commandIntercept }),
+    }),
+
 
   openEnvFile: () =>
     request<{ success: boolean; path?: string; error?: string }>(

@@ -54,19 +54,23 @@ file type=read file_path="C:\project\main.py"
 
 第4轮:
 
-@SPORE:REPLY_START
-已成功添加 hello 函数，验证通过。
-@SPORE:REPLY_END
+@SPORE:STOP_REASON=<自然语言终止原因>
 
-@SPORE:FINAL@
+或（多行）：
+
+@SPORE:STOP_REASON=@SPORE:CONTENT_START
+<自然语言终止原因>
+@SPORE:CONTENT_END
 
 ## 简单任务示例
 
-@SPORE:REPLY_START
-测试成功
-@SPORE:REPLY_END
+@SPORE:STOP_REASON=<自然语言终止原因>
 
-@SPORE:FINAL@
+或（多行）：
+
+@SPORE:STOP_REASON=@SPORE:CONTENT_START
+<自然语言终止原因>
+@SPORE:CONTENT_END
 
 ## edit 匹配失败时怎么办
 
@@ -85,6 +89,6 @@ def hello():
 
 ## 关键点
 
-- 调用工具时不要输出 `@SPORE:FINAL@`
+- 调用工具时不要输出 `@SPORE:STOP_REASON=`
 - 工具调用只使用 `ACTION_SINGLE`、`ACTION_SEQUENCE` 或 `ACTION_PARALLEL`
-- 任务完成时必须输出 REPLY 块和 `@SPORE:FINAL@`
+- 任务完成时必须输出 `@SPORE:STOP_REASON=<自然语言终止原因>`（不要 REPLY 块；多行用 CONTENT）

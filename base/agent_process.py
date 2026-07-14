@@ -181,23 +181,36 @@ class SubAgentThread(threading.Thread):
         self._setup_agent_logger()
     
     def _setup_agent_logger(self):
-        """为子Agent创建独立的日志文件"""
+        """为子Agent创建独立的日志文件（优先写到所属对话的日志目录）"""
         import logging
         from logging.handlers import RotatingFileHandler
         from pathlib import Path
         import os
-        
-        # 获取会话日志目录
-        session_dir_env = os.environ.get('SPORE_SESSION_LOG_DIR')
-        if not session_dir_env:
-            # 如果没有会话目录，使用全局日志
-            self.agent_logger = None
-            return
-        
-        session_dir = Path(session_dir_env)
-        agents_dir = session_dir / "agents"
-        agents_dir.mkdir(exist_ok=True)
-        
+
+        agents_dir = None
+        try:
+            from .logger import get_logger
+            from .session_context import conversation_context
+            if getattr(self, 'parent_conversation_id', None):
+                with conversation_context(self.parent_conversation_id):
+                    agents_dir = get_logger().get_active_log_dir() / "agents"
+            else:
+                agents_dir = get_logger().get_active_log_dir() / "agents"
+        except Exception:
+            agents_dir = None
+
+        if agents_dir is None:
+            session_dir_env = (
+                os.environ.get('SPORE_CONVERSATION_LOG_DIR')
+                or os.environ.get('SPORE_SESSION_LOG_DIR')
+            )
+            if not session_dir_env:
+                self.agent_logger = None
+                return
+            agents_dir = Path(session_dir_env) / "agents"
+
+        agents_dir.mkdir(parents=True, exist_ok=True)
+
         # 创建子Agent专用的日志文件
         log_file = agents_dir / f"{self.agent_id}.log"
         
@@ -350,6 +363,15 @@ class SubAgentThread(threading.Thread):
     
     def run(self):
         """执行子Agent任务（使用文本协议）"""
+        # 整线程绑定父会话：日志/侧信道与主会话一致
+        if self.parent_conversation_id:
+            with conversation_context(self.parent_conversation_id):
+                self._run_impl()
+        else:
+            self._run_impl()
+
+    def _run_impl(self):
+        """子Agent实际执行体"""
         # 设置当前线程的 agent_id（用于文件修改标志）
         from base.utils.system_io import set_current_agent_id
         set_current_agent_id(self.agent_id)
@@ -464,7 +486,7 @@ class SubAgentThread(threading.Thread):
                     continue
                 
                 elif parsed.response_type == "final":
-                    # 检测到 FINAL，任务完成
+                    # 检测到 STOP_REASON，任务完成
                     if parsed.reply_content:
                         self.log_output(f"回复: {parsed.reply_content}")
                     
@@ -531,11 +553,11 @@ class SubAgentThread(threading.Thread):
                     # 添加user消息提示继续执行
                     self.messages.append({
                         "role": "user",
-                        "content": "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请输出 REPLY 块和 @SPORE:FINAL@ 标记。"
+                        "content": "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请输出 @SPORE:STOP_REASON=<自然语言终止原因>（不要再输出 REPLY 块）。"
                     })
                     
                     self._log_to_agent_file(
-                        f"LLM未输出ACTION或FINAL，提示继续执行",
+                        f"LLM未输出ACTION或STOP_REASON，提示继续执行",
                         "WARNING"
                     )
                     continue

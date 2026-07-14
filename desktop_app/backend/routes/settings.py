@@ -21,6 +21,60 @@ def _get_env_path() -> Path:
     return _PROJECT_ROOT / '.env'
 
 
+def _upsert_env_key(env_path: Path, key: str, value: str) -> None:
+    """Create or update a KEY=value line in .env (does not touch comments)."""
+    if not env_path.exists():
+        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
+        return
+
+    with open(env_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    found = False
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or not stripped:
+            new_lines.append(line)
+            continue
+        if stripped.startswith(f"{key}="):
+            new_lines.append(f"{key}={value}\n")
+            found = True
+        else:
+            new_lines.append(line)
+
+    if not found:
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines[-1] = new_lines[-1] + "\n"
+        new_lines.append("\n# Command intercept master switch\n")
+        new_lines.append(f"{key}={value}\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+
+def _sync_command_intercept(enabled: bool) -> None:
+    """Persist and apply command_intercept master switch without restarting chat process."""
+    env_path = _get_env_path()
+    _upsert_env_key(env_path, "COMMAND_INTERCEPT", "true" if enabled else "false")
+    # Keep legacy key in sync for old docs/tools
+    _upsert_env_key(env_path, "BLOCK_SHELL_DELETE", "true" if enabled else "false")
+
+    from base.config import get_config as get_base_config
+
+    base_cfg = get_base_config()
+    base_cfg.command_intercept = enabled
+
+    try:
+        from .. import core as desktop_core
+        if getattr(desktop_core, "_config", None) is not None:
+            desktop_core._config.command_intercept = enabled
+    except Exception:
+        pass
+
+
+
+
 class CharacterSelectRequest(BaseModel):
     """选择角色请求"""
     character_name: str
@@ -29,6 +83,7 @@ class CharacterSelectRequest(BaseModel):
 class SettingsUpdateRequest(BaseModel):
     """更新设置请求"""
     default_character: Optional[str] = None
+    command_intercept: Optional[bool] = None
 
 
 class ConfigProfileSaveRequest(BaseModel):
@@ -176,6 +231,7 @@ def get_settings() -> Dict[str, Any]:
                 "default_character": config.default_character,
                 "context_mode": config.context_mode,
                 "max_output_tokens": config.max_output_tokens,
+                "command_intercept": getattr(config, "command_intercept", True),
             }
         }
     except Exception as e:
@@ -353,13 +409,66 @@ def update_settings(request: SettingsUpdateRequest) -> Dict[str, Any]:
         if request.default_character is not None:
             config.default_character = request.default_character
             apply_runtime_config()
-        
+
+        if request.command_intercept is not None:
+            _sync_command_intercept(bool(request.command_intercept))
+
         return {
             "success": True,
-            "message": "设置已更新，部分设置需要重启后生效"
+            "message": "settings updated",
+            "command_intercept": (
+                bool(request.command_intercept)
+                if request.command_intercept is not None
+                else None
+            ),
         }
     except Exception as e:
         return {
             "success": False,
             "error": str(e)
         }
+
+
+@router.get("/settings/command_intercept")
+def get_command_intercept() -> Dict[str, Any]:
+    """Get command intercept master switch."""
+    try:
+        from base.config import get_config
+        config = get_config()
+        enabled = bool(getattr(config, "command_intercept", True))
+        return {"success": True, "command_intercept": enabled}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/settings/command_intercept/toggle")
+def toggle_command_intercept() -> Dict[str, Any]:
+    """Toggle command intercept master switch and persist to .env."""
+    try:
+        from base.config import get_config
+        config = get_config()
+        current = bool(getattr(config, "command_intercept", True))
+        new_value = not current
+        _sync_command_intercept(new_value)
+        return {
+            "success": True,
+            "command_intercept": new_value,
+            "message": "command intercept enabled" if new_value else "command intercept disabled",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/settings/command_intercept")
+def set_command_intercept(request: SettingsUpdateRequest) -> Dict[str, Any]:
+    """Set command intercept master switch."""
+    try:
+        if request.command_intercept is None:
+            return {"success": False, "error": "command_intercept is required"}
+        _sync_command_intercept(bool(request.command_intercept))
+        return {
+            "success": True,
+            "command_intercept": bool(request.command_intercept),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}

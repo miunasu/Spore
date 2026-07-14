@@ -9,7 +9,7 @@ import pyperclip
 from .state_manager import ConversationState
 from .utils import collect_skills_md_features, clear_last_todo_content
 from .todo_manager import todo_write
-from .memory_manager import save_messages, load_messages, get_latest_history_file
+from .memory_manager import save_messages, load_messages, get_latest_history_file, auto_save_messages
 from .logger import log_error
 from .text_protocol import is_standalone_marker
 from . import config as _config
@@ -36,7 +36,7 @@ class CLICommandHandler:
         print("7.paste ->从剪贴板粘贴多行文本，先用剪贴板复制你要输入的内容，以paste开头，输入你想说的话")
         print("8.save ->保存当前对话历史")
         print("9.load ->加载对话历史, 会覆盖当前对话历史，格式 load <对话历史文件名>")
-        print("  (每轮任务完成后系统会自动保存上下文到 history/autosave/，先入先出保留最近10次，可用 load autosave/<文件名> 恢复)")
+        print("  (按会话自动保存短记忆到 history/autosave/，实时覆盖更新，最多保留最近10个会话；可用 load autosave/<文件名> 恢复)")
         print("A.token ->计算当前记忆使用的token数")
         print("B.continue ->继续最近保存的历史对话")
         print("C.mode ->查看或切换上下文处理模式，格式: mode [strong_context|long_context|auto]")
@@ -244,6 +244,8 @@ class CLICommandHandler:
         try:
             self.state.messages = load_messages(user_input[5:])
             self.state.user_message_count = 0
+            session_id = getattr(self.state, "session_id", None) or getattr(self, "session_id", None)
+            auto_save_messages(self.state.messages, session_id=session_id)
         except Exception as e:
             print(f"[错误] 无法加载对话历史: {e}")
             log_error("MEMORY_LOAD_ERROR", "Failed to load conversation history", e, 
@@ -256,6 +258,8 @@ class CLICommandHandler:
             self.state.messages = load_messages(latest_file)
             self.state.user_message_count = 0
             _config.memory_continued = True  # 标记已继承记忆
+            session_id = getattr(self.state, "session_id", None) or getattr(self, "session_id", None)
+            auto_save_messages(self.state.messages, session_id=session_id)
             print(f"[对话已加载] 继续最近的对话: {latest_file}")
         except Exception as e:
             print(f"[错误] 无法加载最近的对话历史: {e}")

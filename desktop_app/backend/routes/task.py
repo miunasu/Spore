@@ -256,6 +256,15 @@ def task_status(task_id: Optional[str] = None, session_id: Optional[str] = None)
 
 def _run_task_loop(task_id: str, session_id: str, message: str, total_timeout: float) -> None:
     """运行后端自驱任务；失去 active 身份后旧 worker 仅负责退出。"""
+    from base.session_context import conversation_context
+
+    # 整段任务循环绑定会话：日志/TODO/侧信道全程隔离，不依赖内部局部 with
+    with conversation_context(session_id):
+        _run_task_loop_body(task_id, session_id, message, total_timeout)
+
+
+def _run_task_loop_body(task_id: str, session_id: str, message: str, total_timeout: float) -> None:
+    """任务循环实现体（调用方已绑定 conversation_context）。"""
     from ..core import get_session_manager
     from .chat import run_single_round
 

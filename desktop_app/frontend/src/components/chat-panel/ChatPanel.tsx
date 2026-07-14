@@ -376,22 +376,44 @@ export const ChatPanel: React.FC = () => {
     }
   };
 
-  // 短记忆（自动保存）与手动保存的历史文件分区
+  // 短记忆（按会话自动保存，实时更新，保留最近10个会话）与手动保存的历史文件分区
   const autosaveFiles = historyFiles.filter((f) => f.name.startsWith('autosave/'));
   const manualFiles = historyFiles.filter((f) => !f.name.startsWith('autosave/'));
 
-  // 短记忆条目的友好显示：auto_<时间戳>[_会话ID].mem -> 时间 + 会话
-  const describeAutosave = (name: string): { title: string; subtitle: string } => {
+  // 短记忆条目的友好显示：一会话一项
+  const describeAutosave = (
+    name: string,
+    modified?: number
+  ): { title: string; subtitle: string } => {
     const base = name.replace(/^autosave\//, '').replace(/\.mem$/, '');
-    const m = base.match(/^auto_(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})_\d+(?:_(.+))?$/);
-    if (m) {
+    const updatedAt = modified
+      ? new Date(modified * 1000).toLocaleString('zh-CN')
+      : '';
+
+    // 新版：session_<会话ID>
+    const sessionMatch = base.match(/^session_(.+)$/);
+    if (sessionMatch) {
       return {
-        title: `${m[1]} ${m[2]}:${m[3]}:${m[4]}`,
-        subtitle: m[5] ? `会话: ${m[5]}` : '自动保存',
+        title: sessionMatch[1],
+        subtitle: updatedAt ? `更新于 ${updatedAt}` : '会话短记忆',
       };
     }
-    // 重命名过的短记忆（已保留，不参与先入先出清理）
-    return { title: base, subtitle: '已保留' };
+
+    // 旧版快照：auto_<时间戳>[_会话ID]
+    const legacy = base.match(
+      /^auto_(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})_\d+(?:_(.+))?$/
+    );
+    if (legacy) {
+      return {
+        title: legacy[5] ? legacy[5] : `${legacy[1]} ${legacy[2]}:${legacy[3]}:${legacy[4]}`,
+        subtitle: legacy[5]
+          ? `旧快照 ${legacy[1]} ${legacy[2]}:${legacy[3]}:${legacy[4]}`
+          : '旧版自动保存',
+      };
+    }
+
+    // 重命名过的短记忆（已保留，不参与自动淘汰）
+    return { title: base, subtitle: updatedAt ? `已保留 · ${updatedAt}` : '已保留' };
   };
 
   // 历史文件行（短记忆与历史对话共用：点击加载、重命名、删除）
@@ -446,7 +468,7 @@ export const ChatPanel: React.FC = () => {
             setEditingHistoryName(file.name);
           }}
           className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-spore-accent/50 transition-opacity"
-          title={isAutosave ? '重命名（重命名后该短记忆将被保留，不再自动清理）' : '重命名历史文件'}
+          title={isAutosave ? '重命名（重命名后该短记忆将被保留，不再自动淘汰）' : '重命名历史文件'}
         >
           <svg className="w-3.5 h-3.5 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -480,14 +502,14 @@ export const ChatPanel: React.FC = () => {
       }}
     >
       <div className="px-3 py-1.5 text-xs text-spore-muted border-b border-spore-border/30">
-        短记忆（每轮任务完成后自动保存，保留最近10次）
+        短记忆（按会话自动保存，实时更新，保留最近10个会话）
       </div>
       {autosaveFiles.length === 0 ? (
         <div className="px-3 py-2 text-xs text-spore-muted text-center">
           暂无短记忆
         </div>
       ) : (
-        autosaveFiles.map((file) => renderHistoryRow(file, describeAutosave(file.name)))
+        autosaveFiles.map((file) => renderHistoryRow(file, describeAutosave(file.name, file.modified)))
       )}
       <div className="px-3 py-1.5 text-xs text-spore-muted border-y border-spore-border/30">
         历史对话

@@ -158,6 +158,215 @@ class ChatProcess:
         else:
             return self._do_openai_call(request_id, messages, model, system, client)
     
+
+    @staticmethod
+    def _extract_openai_responses_text(response: Any) -> str:
+        """从 Responses API 返回值中提取文本。
+
+        官方 SDK 返回带 output_text 的对象；部分代理/兼容网关可能返回 str、dict，
+        或只有 output 列表。这里做兜底，避免 AttributeError。
+        """
+        if response is None:
+            return ""
+
+        if isinstance(response, str):
+            return response
+
+        if isinstance(response, dict):
+            # 直接文本字段
+            for key in ("output_text", "text", "content"):
+                val = response.get(key)
+                if isinstance(val, str) and val:
+                    return val
+            output = response.get("output") or []
+            parts: list[str] = []
+            for item in output:
+                if isinstance(item, str):
+                    parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                # message item: content: [{type: output_text, text: ...}]
+                content = item.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            block_type = block.get("type")
+                            if block_type in ("output_text", "text") and block.get("text"):
+                                parts.append(str(block.get("text")))
+                            elif isinstance(block.get("text"), str):
+                                parts.append(block["text"])
+                        elif isinstance(block, str):
+                            parts.append(block)
+                elif item.get("type") in ("output_text", "text") and item.get("text"):
+                    parts.append(str(item.get("text")))
+            return "".join(parts)
+
+        # 官方 SDK Response 对象
+        output_text = getattr(response, "output_text", None)
+        if isinstance(output_text, str):
+            return output_text
+        if output_text is not None and not callable(output_text):
+            # 极少数实现里 output_text 可能不是 str
+            try:
+                return str(output_text)
+            except Exception:
+                pass
+
+        # 回退：遍历 output 消息块
+        parts: list[str] = []
+        output = getattr(response, "output", None) or []
+        for item in output:
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+                continue
+            if not content:
+                # 有些 item 本身就是 output_text
+                text_val = getattr(item, "text", None)
+                if text_val is None and isinstance(item, dict):
+                    text_val = item.get("text")
+                if isinstance(text_val, str):
+                    parts.append(text_val)
+                continue
+            for block in content:
+                block_type = getattr(block, "type", None)
+                if block_type is None and isinstance(block, dict):
+                    block_type = block.get("type")
+                text_val = getattr(block, "text", None)
+                if text_val is None and isinstance(block, dict):
+                    text_val = block.get("text")
+                if block_type in ("output_text", "text", None) and isinstance(text_val, str):
+                    parts.append(text_val)
+                elif isinstance(block, str):
+                    parts.append(block)
+        return "".join(parts)
+
+
+
+    @staticmethod
+    def _extract_openai_chat_completion(completion: Any) -> tuple[str, str, int, int]:
+        """从 Chat Completions 返回值提取 (content, role, prompt_tokens, completion_tokens)。
+
+        官方 SDK 返回 ChatCompletion 对象；部分代理可能返回 dict，
+        甚至直接返回纯文本 str（非标准）。
+        """
+        if completion is None:
+            return "", "assistant", 0, 0
+
+        # 非标准：API 直接返回字符串内容
+        if isinstance(completion, str):
+            return completion, "assistant", 0, 0
+
+        def _usage_from(obj: Any) -> tuple[int, int]:
+            usage = None
+            if isinstance(obj, dict):
+                usage = obj.get("usage") or {}
+                if isinstance(usage, dict):
+                    return (
+                        int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
+                        int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
+                    )
+                return 0, 0
+            usage = getattr(obj, "usage", None)
+            if usage is None:
+                return 0, 0
+            return (
+                int(getattr(usage, "prompt_tokens", 0) or getattr(usage, "input_tokens", 0) or 0),
+                int(getattr(usage, "completion_tokens", 0) or getattr(usage, "output_tokens", 0) or 0),
+            )
+
+        def _content_from_message(message: Any) -> tuple[str, str]:
+            if message is None:
+                return "", "assistant"
+            if isinstance(message, str):
+                return message, "assistant"
+            if isinstance(message, dict):
+                content = message.get("content")
+                role = message.get("role") or "assistant"
+            else:
+                content = getattr(message, "content", None)
+                role = getattr(message, "role", None) or "assistant"
+
+            if content is None:
+                return "", str(role)
+            if isinstance(content, str):
+                return content, str(role)
+            # content 可能是多段 list: [{type:text,text:...}]
+            if isinstance(content, list):
+                parts: list[str] = []
+                for block in content:
+                    if isinstance(block, str):
+                        parts.append(block)
+                    elif isinstance(block, dict):
+                        if block.get("type") in ("text", "output_text", None) and block.get("text"):
+                            parts.append(str(block.get("text")))
+                        elif isinstance(block.get("content"), str):
+                            parts.append(block["content"])
+                    else:
+                        text_val = getattr(block, "text", None)
+                        if isinstance(text_val, str):
+                            parts.append(text_val)
+                return "".join(parts), str(role)
+            return str(content), str(role)
+
+        # dict 形态
+        if isinstance(completion, dict):
+            choices = completion.get("choices") or []
+            if choices:
+                first = choices[0] or {}
+                if isinstance(first, dict):
+                    # 常见: choices[0].message.content
+                    if "message" in first:
+                        content, role = _content_from_message(first.get("message"))
+                        p, c = _usage_from(completion)
+                        return content, role, p, c
+                    # 部分兼容实现: choices[0].text
+                    if isinstance(first.get("text"), str):
+                        p, c = _usage_from(completion)
+                        return first["text"], "assistant", p, c
+                    if isinstance(first.get("content"), str):
+                        p, c = _usage_from(completion)
+                        return first["content"], "assistant", p, c
+            # 无 choices 时尝试顶层 content/text
+            for key in ("content", "text", "output_text", "response"):
+                val = completion.get(key)
+                if isinstance(val, str) and val:
+                    p, c = _usage_from(completion)
+                    return val, "assistant", p, c
+            raise TypeError(
+                "OpenAI Chat Completions returned a dict without recognizable choices/message. "
+                f"keys={list(completion.keys())[:20]}"
+            )
+
+        # 官方对象形态
+        choices = getattr(completion, "choices", None)
+        if choices:
+            first = choices[0]
+            message = getattr(first, "message", None)
+            if message is None and isinstance(first, dict):
+                message = first.get("message")
+            if message is not None:
+                content, role = _content_from_message(message)
+                p, c = _usage_from(completion)
+                return content, role, p, c
+            text_val = getattr(first, "text", None)
+            if text_val is None and isinstance(first, dict):
+                text_val = first.get("text")
+            if isinstance(text_val, str):
+                p, c = _usage_from(completion)
+                return text_val, "assistant", p, c
+
+        raise TypeError(
+            "OpenAI Chat Completions returned an unexpected object without choices: "
+            f"type={type(completion).__name__}, preview={str(completion)[:300]}"
+        )
+
+
     def _do_openai_call(
         self, 
         request_id: str, 
@@ -229,16 +438,25 @@ class ChatProcess:
             
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
-            
-            message = completion.choices[0].message
-            reply_content = message.content or ""
-            
-            # 从 API 响应中获取 token 统计（最准确）
-            input_tokens = 0
-            output_tokens = 0
-            if hasattr(completion, 'usage') and completion.usage:
-                input_tokens = getattr(completion.usage, 'prompt_tokens', 0)
-                output_tokens = getattr(completion.usage, 'completion_tokens', 0)
+
+            # 兼容官方 ChatCompletion 对象 / dict / 部分代理返回的纯文本 str
+            if isinstance(completion, str):
+                log_error(
+                    "LLM_API_CALL_ERROR",
+                    "OpenAI Chat Completions returned a plain string instead of a ChatCompletion object. "
+                    "This usually means OPENAI_API_URL is not a standard OpenAI-compatible /chat/completions endpoint, "
+                    "or the proxy returns raw text. Check LLM_SDK/OPENAI_API_URL/OPENAI_MODEL.",
+                    context={
+                        "request_id": request_id,
+                        "model": model,
+                        "response_type": "str",
+                        "response_preview": completion[:500],
+                        "openai_api_url": getattr(self.config, "openai_api_url", None),
+                        "use_responses_api": getattr(self.config, "use_responses_api", False),
+                    },
+                )
+
+            reply_content, reply_role, input_tokens, output_tokens = self._extract_openai_chat_completion(completion)
             
             # CLI 模式：打印 token 统计（后端自己处理累计）
             if input_tokens > 0 or output_tokens > 0:
@@ -260,8 +478,8 @@ class ChatProcess:
                     break
             
             result = {
-                "content": message.content,
-                "role": message.role,
+                "content": reply_content,
+                "role": reply_role or "assistant",
                 "sent_messages": current_sent,
                 "usage": {
                     "input_tokens": input_tokens,
@@ -277,9 +495,16 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
             
-            error_context = {"request_id": request_id, "model": model}
+            error_context = {
+                "request_id": request_id,
+                "model": model,
+                "openai_api_url": getattr(self.config, "openai_api_url", None),
+                "use_responses_api": getattr(self.config, "use_responses_api", False),
+                "llm_sdk": getattr(self, "llm_sdk", None),
+            }
             if 'completion' in locals() and completion is not None:
-                error_context["response"] = str(completion)
+                error_context["response_type"] = type(completion).__name__
+                error_context["response"] = str(completion)[:1000]
             log_error(
                 "LLM_API_CALL_ERROR",
                 f"OpenAI Chat API call error: {str(exc)}",
@@ -340,7 +565,21 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
-            reply_content = response.output_text or ""
+            # 兼容官方 SDK 对象 / dict / 部分代理返回的 str
+            if isinstance(response, str):
+                # 网关未返回标准 Responses 对象时给出更明确的错误上下文
+                log_error(
+                    "LLM_API_CALL_ERROR",
+                    "OpenAI Responses API returned a plain string instead of a Response object. "
+                    "This usually means the API base URL is not a full Responses-compatible endpoint. "
+                    "Try setting USE_RESPONSES_API=false, or use an official OpenAI Responses endpoint.",
+                    context={
+                        "request_id": request_id,
+                        "model": model,
+                        "response_preview": response[:500],
+                    },
+                )
+            reply_content = self._extract_openai_responses_text(response)
 
             # 从 API 响应中获取 token 统计（如果有）
             input_tokens = 0
@@ -471,6 +710,37 @@ class ChatProcess:
             # system 参数（仅在非 system_as_user 模式下使用）
             if anthropic_system:
                 request_params["system"] = anthropic_system
+
+            # Claude thinking / effort：
+            # - 现代模型：thinking={"type":"adaptive"} + output_config={"effort":...}
+            # - 旧模型手动扩展思考：thinking={"type":"enabled","budget_tokens":N}
+            thinking_mode = self.config.anthropic_thinking_mode
+            effort = self.config.anthropic_effort
+            budget_tokens = self.config.anthropic_thinking_budget_tokens
+
+            if thinking_mode is None:
+                if effort:
+                    thinking_mode = "adaptive"
+                elif budget_tokens:
+                    thinking_mode = "enabled"
+
+            if thinking_mode == "disabled":
+                request_params["thinking"] = {"type": "disabled"}
+            elif thinking_mode == "adaptive":
+                request_params["thinking"] = {"type": "adaptive"}
+            elif thinking_mode == "enabled":
+                # budget_tokens 必须 >= 1024 且 < max_tokens
+                resolved_budget = budget_tokens if budget_tokens is not None else min(10000, max(1024, max_tokens // 2))
+                if resolved_budget >= max_tokens:
+                    resolved_budget = max(1024, max_tokens - 1)
+                if resolved_budget >= 1024 and resolved_budget < max_tokens:
+                    request_params["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": resolved_budget,
+                    }
+
+            if effort:
+                request_params["output_config"] = {"effort": effort}
             
             response = client.messages.create(**request_params)
             
@@ -484,12 +754,13 @@ class ChatProcess:
                 input_tokens = getattr(response.usage, 'input_tokens', 0)
                 output_tokens = getattr(response.usage, 'output_tokens', 0)
             
-            # 提取响应内容
+            # 提取响应内容（忽略 thinking / redacted_thinking 块）
             content = ""
             if response.content:
                 for block in response.content:
-                    if hasattr(block, "text"):
-                        content += block.text
+                    block_type = getattr(block, "type", None)
+                    if block_type == "text" or (block_type is None and hasattr(block, "text") and not hasattr(block, "thinking")):
+                        content += getattr(block, "text", "") or ""
             
             # CLI 模式：打印 token 统计（后端自己处理累计）
             if input_tokens > 0 or output_tokens > 0:

@@ -1,181 +1,139 @@
-# 技能开发指南
+# 技能开发指南（v3.0）
+
+Spore 的扩展技能遵循 Claude Skills 风格目录规范：每个技能一个文件夹，核心是 `SKILL.md`。  
+主 Agent / 子 Agent 通过工具 **`skill_query`** 按需读取文档，避免把全部技能正文塞进 system prompt。
+
+---
 
 ## 技能包结构
 
-一个标准的技能包目录结构：
-
-```
+```text
 skills/your-skill/
-├── SKILL.md              # 技能说明文档（必需）
-├── scripts/              # 辅助脚本（可选）
-│   ├── script1.py
-│   └── script2.py
-├── references/           # 参考文档（可选）
-│   └── reference.md
-└── requirements.txt      # Python 依赖（可选）
+├── SKILL.md              # 必需：技能说明（Agent 查询入口）
+├── scripts/              # 可选：可执行脚本
+│   └── tool.py
+├── references/           # 可选：参考资料
+│   └── notes.md
+└── requirements.txt      # 可选：额外 Python 依赖
 ```
 
-## SKILL.md 格式
+当前仓库内置示例：
 
-`SKILL.md` 是技能包的核心文档，Agent 会通过 `skill_query` 工具查询这个文档。
+| 技能目录 | 用途 |
+|----------|------|
+| `skills/docx` | Word 创建 / 模板填充 / 分析 |
+| `skills/pdf` | PDF 提取、生成、表单等 |
+| `skills/pptx` | PowerPoint 生成与处理 |
+| `skills/pcap-analyst` | PCAP 流量分析、C2/Beacon、规则产出 |
+| `skills/skill-creator` | 帮助创建新技能包 |
 
-### 基本模板
+逆向（IDA 等）能力通常通过 **主机命令工具 + 外部工具链 + 案例目录** 完成，不强制内置在 `skills/`。案例见 `example/MalwareAnalysis/`。
+
+---
+
+## SKILL.md 建议格式
 
 ```markdown
+---
+name: your-skill
+description: "一句话说明何时应使用该技能"
+---
+
 # 技能名称
 
 ## 功能概述
 
-简要描述这个技能包的功能和用途。
+...
 
 ## 使用场景
 
-- 场景 1
-- 场景 2
-- 场景 3
+- ...
 
-## 工具列表
+## 工具 / 脚本
 
-### 工具 1
+### xxx
 
-**功能**：工具的功能描述
+**功能**：...
 
-**使用方法**：
-\```bash
-python scripts/tool1.py --arg1 value1 --arg2 value2
-\```
+**用法**：
 
-**参数说明**：
-- `arg1`：参数 1 的说明
-- `arg2`：参数 2 的说明
+```bash
+python scripts/xxx.py --input a --output b
+```
 
-**示例**：
-\```bash
-python scripts/tool1.py --input file.txt --output result.txt
-\```
+**参数**：
 
-### 工具 2
-
-...
+- `input`：...
 
 ## 注意事项
 
-使用这个技能包时需要注意的事项。
+...
 ```
 
-## 技能包示例
+Agent 侧调用形态（文本协议）：
 
-### IDA-Skill
-
-```
-skills/IDA-Skill/
-├── SKILL.md              # IDA Pro 逆向工程说明
-├── API.md                # IDA Python API 参考
-├── TOOLS.md              # 工具使用说明
-├── docs/                 # IDA API 详细文档
-│   ├── 01_core/
-│   ├── 02_disasm/
-│   └── ...
-├── tools/                # 辅助工具脚本
-│   ├── exec_ida.py
-│   ├── findcrypt.py
-│   └── ...
-├── analysis/             # 分析技术文档
-│   ├── malware-analysis.md
-│   ├── deobfuscation.md
-│   └── ...
-└── requirements.txt
-```
-
-## 开发步骤
-
-### 1. 创建技能包目录
-
-```bash
-mkdir skills/your-skill
-cd skills/your-skill
-```
-
-### 2. 编写 SKILL.md
-
-参考上面的模板，编写技能说明文档。
-
-### 3. 添加辅助脚本（可选）
-
-```bash
-mkdir scripts
-# 添加你的 Python 脚本
-```
-
-### 4. 添加依赖（可选）
-
-```bash
-# 创建 requirements.txt
-echo "your-dependency>=1.0.0" > requirements.txt
-```
-
-### 5. 测试技能包
-
-```bash
-# 启动 Spore
-python main.py
-
-# 在对话中测试
-User> 查询 your-skill 技能的使用方法
-```
-
-Agent 会自动调用 `skill_query` 工具查询你的 `SKILL.md` 文档。
-
-## 技能包最佳实践
-
-### 1. 文档清晰
-
-- 使用清晰的标题和分段
-- 提供具体的使用示例
-- 说明参数的含义和类型
-
-### 2. 脚本独立
-
-- 每个脚本应该可以独立运行
-- 使用命令行参数而不是硬编码
-- 提供 `--help` 参数
-
-### 3. 错误处理
-
-- 脚本应该有良好的错误处理
-- 输出清晰的错误信息
-- 返回合适的退出码
-
-### 4. 依赖管理
-
-- 在 `requirements.txt` 中列出所有依赖
-- 使用版本号固定依赖版本
-- 避免使用过多的依赖
-
-## 技能查询
-
-Agent 可以通过 `skill_query` 工具查询技能文档：
-
-```
+```text
 @SPORE:ACTION_SINGLE_START
 skill_query skill_name="your-skill"
 @SPORE:ACTION_SINGLE_END
 ```
 
-工具会搜索 `SKILL.md` 中包含"工具1"的相关内容并返回。
+实现见 `base/tools.py` → `handle_skill_query`，内容检索见 `base/utils/skills.py`。
 
-## 技能包示例
+系统提示中的技能目录摘要由 `prompt_loader.collect_skills_md_features()` 扫描装配到 `prompt/prompt.md` 的 `{skills}` 占位符。
 
-参考已有的技能包：
+---
 
-- [skill-creator](../skills/skill-creator/SKILL.md) - 技能包创建工具
+## 开发步骤
 
-## 贡献技能包
+1. 创建目录：`skills/your-skill/`
+2. 编写 `SKILL.md`（name/description + 可操作说明）
+3. 如需脚本：放 `scripts/`，参数化并支持 `--help`
+4. 额外依赖写入 `requirements.txt`，在运行环境中自行安装
+5. 启动 Spore，对话中要求「查询 your-skill 技能」验证 `skill_query`
 
-欢迎贡献你的技能包！
+CLI 自检：
 
-1. Fork 项目
-2. 在 `skills/` 目录创建你的技能包
-3. 提交 Pull Request
+```text
+User> skills
+```
 
-我们会审核并合并有价值的技能包。
+会打印已发现技能的功能摘要。
+
+---
+
+## 最佳实践
+
+1. **写清决策表**：什么任务用哪条命令/脚本  
+2. **脚本可独立运行**：不依赖 Spore 内部 import  
+3. **错误信息可读**：非 0 退出码 + stderr 说明  
+4. **少占上下文**：细节放 references，SKILL.md 保持可检索的精炼结构  
+5. **路径写绝对或明确相对工作目录**：Agent 主机操作以 cwd 为准  
+
+---
+
+## 与工具系统的关系
+
+技能 **不是** 新的 function-call 名称；技能教 Agent 如何组合已有工具：
+
+- `execute_command`：跑脚本 / PowerShell  
+- `file` / `edit` / `Grep`：读写改搜  
+- `web_browser`：在线资料  
+- `multi_agent_dispatch`（long_context）：并行调研与编辑  
+
+协议说明见 [ARCHITECTURE.md](ARCHITECTURE.md)「文本协议」一节。
+
+---
+
+## 贡献
+
+1. Fork 仓库  
+2. 在 `skills/` 添加技能包  
+3. 更新本页索引（如有）  
+4. 提交 PR  
+
+相关：
+
+- [配置说明](CONFIGURATION.md)
+- [架构设计](ARCHITECTURE.md)
+- [银狐案例](SILVERFOX.md)

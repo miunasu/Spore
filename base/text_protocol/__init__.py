@@ -15,6 +15,10 @@ from .protocol_manager import (
     ParsedResponse,
     find_standalone_marker,
     is_standalone_marker,
+    find_stop_reason_marker,
+    has_stop_reason_marker,
+    is_stop_reason_line,
+    extract_stop_reason_blocks,
 )
 from .action_parser import ActionParser, ParsedAction, ParsedActionBlock
 from .result_formatter import ResultFormatter
@@ -30,4 +34,8 @@ __all__ = [
     'ToolDocGenerator',
     'find_standalone_marker',
     'is_standalone_marker',
+    'find_stop_reason_marker',
+    'has_stop_reason_marker',
+    'is_stop_reason_line',
+    'extract_stop_reason_blocks',
 ]

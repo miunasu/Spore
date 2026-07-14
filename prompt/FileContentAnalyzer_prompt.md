@@ -37,25 +37,26 @@ file type=read file_path="C:\project\main.py" offset=13 limit=6
 
 第3轮:
 
-@SPORE:REPLY_START
-TODO 搜索结果:
-- C:\project\main.py 第15行: TODO: 添加错误处理
+@SPORE:STOP_REASON=<自然语言终止原因>
 
-共找到 1 处 TODO 标记。
-@SPORE:REPLY_END
+或（多行）：
 
-@SPORE:FINAL@
+@SPORE:STOP_REASON=@SPORE:CONTENT_START
+<自然语言终止原因>
+@SPORE:CONTENT_END
 
 ## 简单任务示例
 
-@SPORE:REPLY_START
-测试成功
-@SPORE:REPLY_END
+@SPORE:STOP_REASON=<自然语言终止原因>
 
-@SPORE:FINAL@
+或（多行）：
+
+@SPORE:STOP_REASON=@SPORE:CONTENT_START
+<自然语言终止原因>
+@SPORE:CONTENT_END
 
 ## 关键点
 
-- 调用工具时不要输出 `@SPORE:FINAL@`
+- 调用工具时不要输出 `@SPORE:STOP_REASON=`
 - 工具调用只使用 `ACTION_SINGLE`、`ACTION_SEQUENCE` 或 `ACTION_PARALLEL`
-- 任务完成时必须输出 REPLY 块和 `@SPORE:FINAL@`
+- 任务完成时必须输出 `@SPORE:STOP_REASON=<自然语言终止原因>`（不要 REPLY 块；多行用 CONTENT）

@@ -33,16 +33,11 @@ def setup_log_callbacks():
         # 调用原始方法（推送到日志监控终端）
         original_send(log_type, content)
         
-        # 获取当前会话 ID
+        # 只使用 conversation_context 绑定的会话 ID。
+        # 禁止回退到 session_manager.current_session_id：
+        # 流水线/API 多会话时 current 常是 default 或其它会话，会把所有日志灌进同一个对话。
         conversation_id = get_current_conversation_id()
-        try:
-            from ..core import get_session_manager
-            manager = get_session_manager()
-            if manager and not conversation_id:
-                conversation_id = manager.current_session_id
-        except:
-            pass
-        
+
         # 通过 IPC 队列推送到 WebSocket
         send_ws_message({
             "type": "log",
@@ -99,16 +94,9 @@ def setup_agent_monitor_callbacks():
         """Agent 日志回调"""
         nonlocal _registered_agents
         
-        # 获取当前会话 ID
+        # 只使用 conversation_context；禁止回退 current，避免子Agent日志串会话
         conversation_id = get_current_conversation_id()
-        try:
-            from ..core import get_session_manager
-            manager = get_session_manager()
-            if manager and not conversation_id:
-                conversation_id = manager.current_session_id
-        except:
-            pass
-        
+
         # 注册新 Agent
         is_new = agent_id not in _registered_agents
         register_agent(agent_id, agent_name, "running")

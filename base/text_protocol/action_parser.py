@@ -55,7 +55,10 @@ class ActionParser:
     REPLY_END = "@SPORE:REPLY_END"
     TODO_START = "@SPORE:TODO_START"
     TODO_END = "@SPORE:TODO_END"
-    FINAL_MARKER = "@SPORE:FINAL@"
+    STOP_REASON_MARKER = "@SPORE:STOP_REASON"
+    STOP_REASON_LINE_PREFIX = "@SPORE:STOP_REASON ="
+    # Backward-compatible alias used by older call sites
+    FINAL_MARKER = STOP_REASON_LINE_PREFIX
 
     ACTION_BLOCKS: Dict[str, tuple[str, ActionMode]] = {
         ACTION_SINGLE_START: (ACTION_SINGLE_END, "single"),

@@ -1,246 +1,148 @@
-# 构建指南
+# 构建指南（v3.0）
 
-## 从源码运行
-
-### 1. 安装依赖
-
-```bash
-# 安装 Python 依赖
-uv sync
-```
-
-> 📌 **注意**：其他外部工具依赖请查看 `README.md` 的 **构建与依赖** 章节。
-
-### 2. 配置环境
-
-编辑 `.env` 文件，填写 LLM API Key。
-
-### 3. 启动应用
-
-```bash
-# CLI 模式
-uv run python main.py
-
-# 桌面模式
-编译成功后双击release文件夹中的Spore.exe
-编译成功后通过release文件夹中的安装程序进行安装
-# 或
-uv run python main_entry.py
-```
+本文说明如何从源码构建 **Spore 3.0** Windows 桌面安装包（Tauri + PyInstaller 后端 sidecar）。
 
 ---
 
-## 构建 Windows 安装包
+## 产物与版本
 
-### 前置要求
+| 组件 | 版本字段位置 | 当前 |
+|------|--------------|------|
+| Python 工程 | `pyproject.toml` → `version` | `3.0.0` |
+| 前端 npm | `desktop_app/frontend/package.json` | `3.0.0` |
+| Tauri 应用 | `desktop_app/frontend/src-tauri/tauri.conf.json` → `package.version` | `3.0.0` |
+| Rust crate | `desktop_app/frontend/src-tauri/Cargo.toml` | `3.0.0` |
+| FastAPI | `desktop_app/backend/server.py` / `standalone.py` | `3.0.0` |
 
-- Python 3.10+
-- Node.js 18.x / 20.x LTS
-- Rust + Cargo
-- Visual Studio Build Tools（Windows）
-- uv（用于 Python 依赖与运行管理）
+安装包输出通常位于：
 
-> 首次构建需要联网访问 GitHub Releases（用于下载 ripgrep）。
+- `desktop_app/frontend/src-tauri/target/release/bundle/nsis/`
+- 或脚本汇总目录 `release/`
 
-### 最简顺序（推荐）
+---
 
-```bash
-# 1) 后端依赖（uv）
-uv sync
+## 环境要求
 
-# 2) 前端依赖（npm）
-cd desktop_app/frontend
-npm install
-cd ../..
+- Windows 10/11 x64
+- Python ≥ 3.10（推荐与 `.venv` 一致）
+- [uv](https://github.com/astral-sh/uv)
+- Node.js 18+ 或 20 LTS
+- Rust（`rustup`，MSVC toolchain）
+- Visual Studio Build Tools（C++ 桌面开发）
+- 项目根存在可用的 `.env`（打包会拷贝为资源）
 
-# 3) 一键构建安装包
+---
+
+## 一键构建（推荐）
+
+```bat
 build_installer.bat
 ```
 
-### 一键构建
+脚本主要步骤（摘要）：
 
-```bash
-build_installer.bat
-```
+1. 同步 Python 依赖（`uv sync`）
+2. 使用 PyInstaller + `spore_backend.spec` 打包 `spore_backend` 后端
+3. 准备 Tauri sidecar：`desktop_app/frontend/src-tauri/binaries/spore_backend-*.exe`
+4. 同步资源：`prompt/`、`skills/`、`characters/`、`.env`、`rg.exe`（ripgrep 可自动下载校验）
+5. 构建前端与 Tauri NSIS 安装包
 
-该脚本会自动完成以下步骤：
-1. 检测后端依赖，缺失时自动执行 `uv sync`，然后构建后端 onefile 可执行程序
-2. 准备 Tauri sidecar（复制后端 exe 并重命名为 `spore_backend-x86_64-pc-windows-msvc.exe`）
-3. 准备资源文件（prompt/skills/characters/.env）并自动下载、校验、解压 `rg.exe`
-4. 检测前端依赖，缺失时自动执行 `npm install`，并打包 NSIS 安装包
-5. 复制所有构建产物到 `release/` 目录
-
-### 输出文件
-
-```
-release/
-├── Spore.exe                           # Tauri 前端可执行文件
-└── Spore_1.0.0_x64-setup.exe          # NSIS 安装包（推荐分发）
-```
-
-### 安装后目录结构
-
-```
-安装目录/
-├── Spore.exe                    # Tauri 前端
-├── spore_backend.exe            # Python 后端（单文件，包含所有依赖）
-├── rg.exe                       # ripgrep 搜索工具
-├── prompt/                      # 提示词模板（只读）
-├── skills/                      # 技能包（只读）
-├── characters/                  # 角色定义（只读）
-├── .env                         # 配置文件
-└── 运行时创建的目录：
-    ├── output/                  # 输出文件
-    ├── history/                 # 对话历史
-    ├── logs/                    # 日志文件
-    └── note.txt                 # 笔记文件
-```
+失败时按报错阶段排查；ripgrep 缓存目录：`.tool-cache/ripgrep/`。
 
 ---
 
-## 技能子仓库维护（IDA-Skill）
+## 分步构建
 
-`skills/IDA-Skill` 使用 Git subtree 方式接入上游仓库：`https://github.com/miunasu/IDA-Skill`
-
-常用命令：
+### 1. Python 后端
 
 ```bash
-# 首次接入（本仓库已完成）
-git subtree add --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main --squash
-
-# 从上游同步更新
-git subtree pull --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main --squash
-
-# （可选）向上游推送本仓库在该子目录的改动
-git subtree push --prefix=skills/IDA-Skill https://github.com/miunasu/IDA-Skill.git main
-```
-
-> 如果你使用 SSH，可将仓库地址替换为 `git@github.com:miunasu/IDA-Skill.git`。
-
----
-
-## 手动构建（高级）
-
-如果需要单独构建各个组件：
-
-### 1. 构建后端
-
-```bash
-# 同步依赖（包含 PyInstaller）
 uv sync
-
-# 构建单文件可执行程序（onefile 模式）
 uv run pyinstaller spore_backend.spec --noconfirm
 ```
 
-输出位置：`dist/spore_backend.exe`（单文件，约 50-80MB）
+产物一般在 `dist/spore_backend/` 或 spec 指定路径；复制为 Tauri `externalBin` 所需文件名：
 
-### 2. 构建前端
+```text
+desktop_app/frontend/src-tauri/binaries/spore_backend-x86_64-pc-windows-msvc.exe
+```
+
+### 2. 前端
 
 ```bash
 cd desktop_app/frontend
-
-# 安装依赖
 npm install
+npm run build
+```
 
-# 构建 Tauri 应用
+### 3. Tauri
+
+```bash
+cd desktop_app/frontend
 npm run tauri build
 ```
 
-输出位置：
-- 可执行文件：`desktop_app/frontend/src-tauri/target/release/Spore.exe`
-- NSIS 安装包：`desktop_app/frontend/src-tauri/target/release/bundle/nsis/Spore_1.0.0_x64-setup.exe`
+开发联调：
+
+```bash
+# 终端 A：后端
+uv run python main_entry.py   # LAUNCH_MODE=desktop
+
+# 终端 B：前端
+cd desktop_app/frontend
+npm run dev
+
+# 或 Tauri 开发窗
+npm run tauri dev
+```
+
+默认 API：`http://127.0.0.1:8765`，WebSocket：`8766`（端口 + 1）。
 
 ---
 
-## 构建配置
+## 打包结构要点
 
-### PyInstaller 配置（spore_backend.spec）
-
-关键配置说明：
-
-- **模式**：onefile 模式，所有依赖打包到单个 exe 文件
-- **入口**：`main_entry.py`
-- **资源文件**：不包含在 exe 中，由 Tauri 的 resources 机制处理
-- **隐藏导入**：包含所有必需的 Python 模块（base、desktop_app、uvicorn、fastapi 等）
-- **排除模块**：排除不需要的大型库（tkinter、matplotlib、numpy 等）
-- **UPX 压缩**：启用，但排除 Python DLL 以避免兼容性问题
-- **控制台**：`console=False`，无控制台窗口
-
-### Tauri 配置（tauri.conf.json）
-
-关键配置说明：
-
-- **产品名称**：Spore
-- **版本**：1.0.0
-- **打包目标**：NSIS（Windows 安装包）
-- **标识符**：com.spore.desktop
-- **资源文件**：prompt/、skills/、characters/、.env、rg.exe
-- **外部二进制**：spore_backend（自动添加平台后缀）
-- **窗口配置**：1400x900，最小 1000x600，无边框，透明背景
+- **后端**：PyInstaller onefile/onedir 由 `spore_backend.spec` 决定；入口 `main_entry.py`
+- **资源**：Tauri `resources` 包含 prompt/skills/characters/.env/rg.exe
+- **工作目录**：安装后由 Tauri `main.rs` 与 `resource_manager` 保证 cwd / `SPORE_RESOURCE_DIR` 正确
+- **隐藏导入**：若运行缺模块，补 `spore_backend.spec` 的 `hiddenimports`
 
 ---
 
 ## 常见问题
 
-### Q: PyInstaller 打包后运行报错？
+### PyInstaller 运行报错缺模块
 
-检查 `spore_backend.spec` 中的 `hiddenimports` 是否包含所有依赖模块。常见缺失模块：
-- base 及其子模块
-- desktop_app 及其子模块
-- uvicorn、fastapi、starlette
-- openai、anthropic、tiktoken
+补全 `hiddenimports`：`base` 及其子包、`desktop_app`、`uvicorn`/`fastapi`/`starlette`、`openai`/`anthropic`/`tiktoken` 等。
 
-### Q: Tauri 构建失败？
+### Tauri 构建失败
 
-1. 确保已安装 Rust：`rustc --version`
-2. 确保已安装 Visual Studio Build Tools（包含 C++ 工具）
-3. 检查 Node.js 版本：推荐 18.x 或 20.x LTS
-4. 清理缓存后重试：删除 `desktop_app/frontend/dist` 和 `node_modules/.vite`
+1. `rustc --version` / VS C++ 工具是否可用  
+2. Node 版本是否过旧  
+3. 清理 `desktop_app/frontend/dist`、`node_modules/.vite` 后重试  
 
-### Q: build_installer.bat 执行失败？
+### build_installer.bat 失败
 
-1. 检查是否缺少 `.env` 文件（必需）
-2. 检查网络/代理是否可访问 GitHub（ripgrep 由脚本自动下载并校验）
-3. 删除 `.tool-cache/ripgrep/` 后重试，排除损坏缓存
-4. 确保依赖已同步：`uv sync`
-5. 查看错误信息，确认是哪个步骤失败
+1. 根目录是否有 `.env`  
+2. 网络是否能拉 ripgrep  
+3. 删除 `.tool-cache/ripgrep/` 后重试  
+4. `uv sync` 是否成功  
 
-### Q: 安装包体积太大？
+### 安装包体积
 
-后端 exe 约 50-80MB 是正常的（包含 Python 运行时和所有依赖）。
-PyInstaller spec 已启用 UPX 压缩，无需额外操作。
+后端 50–80MB 量级常见（含 Python 运行时）。
 
-### Q: 如何修改安装包图标？
+### 修改图标
 
-修改 `desktop_app/frontend/src-tauri/icons/icon.ico`，然后重新构建。
+替换 `desktop_app/frontend/src-tauri/icons/` 后重新构建。
+
+### 修改版本号
+
+同步修改上表所有版本字段为同一主版本（例如 `3.0.0`），再执行完整构建。
 
 ---
 
-## 开发模式
+## 相关
 
-### 前端开发
-
-```bash
-cd desktop_app/frontend
-npm run dev
-```
-
-前端会在 `http://localhost:1420` 启动，支持热重载。
-
-### 后端开发
-
-```bash
-uv run python main_entry.py
-```
-
-后端 API 在 `http://127.0.0.1:8765` 启动。
-
-### 调试 Tauri
-
-```bash
-cd desktop_app/frontend
-npm run tauri dev
-```
-
-会同时启动前端开发服务器和 Tauri 窗口。
+- [架构设计](ARCHITECTURE.md)
+- [配置说明](CONFIGURATION.md)
+- [前端使用](FRONTEND.md)

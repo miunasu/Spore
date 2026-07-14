@@ -2,7 +2,7 @@
 对话循环处理器
 
 处理主要的对话循环逻辑，包括消息管理、子agent恢复、LLM交互等。
-使用文本协议（ACTION_SINGLE / ACTION_SEQUENCE / ACTION_PARALLEL / RESULT / FINAL）与 LLM 交互。
+使用文本协议（ACTION_SINGLE / ACTION_SEQUENCE / ACTION_PARALLEL / RESULT / STOP_REASON）与 LLM 交互。
 """
 import json
 import time
@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from .state_manager import ConversationState
 from .tools import TOOL_HANDLERS, TOOL_DEFINITIONS
-from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock, is_standalone_marker
+from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock, is_standalone_marker, has_stop_reason_marker, is_stop_reason_line
 from .utils import (
     json_query, 
     validate_json_response, 
@@ -669,6 +669,8 @@ class ConversationLoop:
         self.state.messages.append({"role": "user", "content": result_text})
         self._check_and_handle_oversized_tool_result()
         self.state.save_temp_messages()
+        # 工具执行完成后实时更新该会话短记忆
+        auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
 
         return "break" if should_break else "continue"
 
@@ -740,7 +742,7 @@ class ConversationLoop:
         """
         验证响应并检查状态（文本协议版本）
         
-        使用 ProtocolManager 解析响应，检测 ACTION、FINAL 或继续状态
+        使用 ProtocolManager 解析响应，检测 ACTION、STOP_REASON 或继续状态
         同时解析 TODO 块并更新任务状态
         
         参数:
@@ -763,6 +765,7 @@ class ConversationLoop:
                 result_text = self.protocol_manager.format_parse_error("ACTION 块解析失败")
                 self.state.messages.append({"role": "assistant", "content": reply})
                 self.state.messages.append({"role": "user", "content": result_text})
+                auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
                 return "continue"
             # 有 ACTION 块，执行工具
             self._no_action_count = 0  # 重置无 ACTION 计数器
@@ -783,10 +786,11 @@ class ConversationLoop:
                 "role": "user",
                 "content": result_text
             })
+            auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
             return "continue"
         
         elif parsed.response_type == "final":
-            # 检测到 FINAL，任务完成
+            # 检测到 STOP_REASON，任务完成
             self._no_action_count = 0  # 重置无 ACTION 计数器
             # 优先显示 REPLY 内容，否则显示 prefix_text（过滤掉 TODO 块）
             display_text = parsed.reply_content
@@ -798,7 +802,7 @@ class ConversationLoop:
             # 添加 assistant 消息到对话历史（使用 add_assistant_message 增加计数）
             self.state.add_assistant_message(reply)
 
-            # 回合完成，自动保存上下文（FIFO 队列，最多保留最近 10 次）
+            # 回合完成：按会话 upsert 短记忆（最近 10 个会话）
             auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
 
             # 清理状态
@@ -809,7 +813,7 @@ class ConversationLoop:
             return "break"
         
         else:
-            # continue 类型：既没有 ACTION 也没有 FINAL
+            # continue 类型：既没有 ACTION 也没有 STOP_REASON
             # 优先使用 REPLY 内容
             current_answer = parsed.reply_content or parsed.prefix_text or reply.strip()
             # 过滤掉只包含 < 或 <<< 等不完整标记的情况
@@ -843,7 +847,7 @@ class ConversationLoop:
                     "content": reply
                 })
 
-                # 回合完成（supervisor 判定结束），自动保存上下文
+                # 回合完成（supervisor 判定结束）：按会话 upsert 短记忆
                 auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
 
                 self.state.restore_temp_messages()
@@ -873,6 +877,9 @@ class ConversationLoop:
             # 添加 assistant 消息（使用 add_assistant_message 增加计数）
             self.state.add_assistant_message(reply)
             
+            # 多轮 ACTION/继续过程中也实时更新该会话短记忆
+            auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
+
             return "continue"
     
     def cancel_current_request(self) -> bool:
@@ -913,8 +920,8 @@ class ConversationLoop:
         elif last_msg.get("role") == "assistant":
             content = last_msg.get("content", "")
             
-            # 检查是否包含 FINAL，说明是完整回复
-            if is_standalone_marker(content, "@SPORE:FINAL@"):
+            # 检查是否包含 STOP_REASON，说明是完整回复
+            if has_stop_reason_marker(content):
                 pass  # 保留完整的最终响应
             
             # 检查是否包含未完成的 ACTION 块

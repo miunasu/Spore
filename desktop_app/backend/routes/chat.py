@@ -28,11 +28,16 @@ router = APIRouter()
 _executor = ThreadPoolExecutor(max_workers=16)
 
 
+def is_stop_reason_line(stripped: str) -> bool:
+    return bool(re.match(r"^@SPORE:STOP_REASON\s*=", stripped or ""))
+
+
 def is_hidden_protocol_line(stripped: str) -> bool:
+    if is_stop_reason_line(stripped):
+        return True
     return stripped in {
         "@SPORE:REPLY_START",
         "@SPORE:REPLY_END",
-        "@SPORE:FINAL@",
         "@SPORE:CONTENT_START",
         "@SPORE:CONTENT_END",
         "@SPORE:RESULT",
@@ -48,11 +53,22 @@ def extract_user_visible_content(reply: str) -> str:
     - @SPORE:TODO_START ... @SPORE:TODO_END
     - @SPORE:ACTION_SINGLE/SEQUENCE/PARALLEL_START ... END
     - ### RULE_REMINDER
-    - @SPORE:FINAL@
+    - @SPORE:STOP_REASON=<自然语言原因>（终止原因按 REPLY 逻辑展示）
     - @SPORE:CONTENT_END
     """
     if not reply:
         return ""
+
+    # 终止回复：STOP_REASON 的自然语言原因直接作为用户可见内容
+    try:
+        from base.text_protocol import extract_stop_reason_blocks
+        stop_blocks, stop_err = extract_stop_reason_blocks(reply)
+        if not stop_err and stop_blocks:
+            reason = (stop_blocks[0].get("content") or "").strip()
+            if reason:
+                return reason
+    except Exception:
+        pass
 
     visible_lines = []
     in_protocol_block = False
@@ -69,7 +85,7 @@ def extract_user_visible_content(reply: str) -> str:
                 has_reply_block = True
                 current_segment = []
             continue
-        if stripped in {"@SPORE:REPLY_END", "@SPORE:FINAL@"}:
+        if stripped == "@SPORE:REPLY_END" or is_stop_reason_line(stripped):
             reply_segments.append("\n".join(current_segment).strip())
             current_segment = None
             continue
@@ -94,7 +110,7 @@ def extract_user_visible_content(reply: str) -> str:
             continue
 
         if is_hidden_protocol_line(stripped):
-            if stripped == "@SPORE:FINAL@":
+            if is_stop_reason_line(stripped):
                 break
             continue
 
@@ -189,9 +205,9 @@ def run_single_round(
     if conversation_id not in session_manager.list_sessions():
         session_manager.create_session(conversation_id)
 
-    # 切换到目标会话（确保 session_manager.current 指向正确的会话）
-    # 这样 load_system_prompt() 中的 get_current_todos_for_prompt() 才能获取正确的TODO
-    session_manager.switch_session(conversation_id)
+    # 注意：不再 switch_session(conversation_id)。
+    # 任务/流水线并发时切换全局 current 会污染其它会话的 TODO/CLI 侧信道。
+    # load_system_prompt / TODO 通过下方 conversation_context(conversation_id) 绑定。
 
     # 获取该会话的状态
     target_state = session_manager.get_session(conversation_id)
@@ -483,6 +499,13 @@ class SwitchSessionRequest(BaseModel):
     session_id: str
 
 
+class CreateSessionRequest(BaseModel):
+    """创建会话请求"""
+    session_id: str
+    # UI 手动新建会话默认切到新会话；流水线/API 应传 False，避免抢占 current
+    switch_current: bool = True
+
+
 @router.post("/session/switch")
 def switch_session_route(req: SwitchSessionRequest) -> Dict[str, Any]:
     """切换到指定会话"""
@@ -490,9 +513,9 @@ def switch_session_route(req: SwitchSessionRequest) -> Dict[str, Any]:
 
 
 @router.post("/session/create")
-def create_session_route(req: SwitchSessionRequest) -> Dict[str, Any]:
+def create_session_route(req: CreateSessionRequest) -> Dict[str, Any]:
     """创建新会话"""
-    return create_session(req.session_id)
+    return create_session(req.session_id, switch_current=req.switch_current)
 
 
 @router.post("/session/delete")

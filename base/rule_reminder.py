@@ -9,7 +9,7 @@ from typing import List, Optional
 RULE_REMINDER_TEMPLATE = """[系统提醒] 请严格遵守以下规则：
 
 ## 格式规范
-所有协议块标识符必须独占一行，使用 REPLY_START/END、TODO_START/END、{action_block_marker_text} 和 @SPORE:FINAL@。
+所有协议块标识符必须独占一行，使用 REPLY_START/END、TODO_START/END、{action_block_marker_text} 和 `@SPORE:STOP_REASON=<自然语言原因>`。
 
 工具调用示例：
 
@@ -31,7 +31,7 @@ tool_name param1=value1 param2=value2
 给用户的回复内容必须放在 @SPORE:REPLY_START / @SPORE:REPLY_END 块中
 
 ## 任务完成标记
-完成后最后一次输出必须包含 @SPORE:FINAL@
+完成后最后一次输出用 `@SPORE:STOP_REASON=` 写自然语言终止原因（不要再写 REPLY 块）；多行原因用 CONTENT 包裹
 
 {multi_agent_reminder}
 
@@ -48,10 +48,10 @@ tool_name param1=value1 param2=value2
 
 # 精简版本（token 敏感时使用）
 RULE_REMINDER_SHORT_TEMPLATE = """[系统提醒] 关键规则：
-1. **工具调用必须输出 {action_blocks} 块；完成时输出 REPLY 块和 @SPORE:FINAL@**
+1. **工具调用必须输出 {action_blocks} 块；完成时输出 @SPORE:STOP_REASON=<自然语言原因>（不要 REPLY）**
 2. 所有 START/END 标识符必须独占一行并成对出现
 3. 回复必须放在 @SPORE:REPLY_START / @SPORE:REPLY_END 块中
-4. 任务完成后输出 @SPORE:FINAL@
+4. 任务完成后输出 @SPORE:STOP_REASON=<自然语言原因>
 
 可用工具: {tools_short}
 可用技能: {skills_short}""".strip()

@@ -396,19 +396,29 @@ def stop_global_monitor() -> None:
 def get_agent_log_dir() -> Path:
     """
     获取当前会话的 Agent 日志目录
-    
-    优先使用会话日志目录（如 logs/2025-12-28_10-48-47/agents/）
-    如果没有会话目录，则使用全局目录（logs/agents/）
+
+    优先：当前 conversation 的日志目录/agents
+    其次：SPORE_CONVERSATION_LOG_DIR / SPORE_SESSION_LOG_DIR
+    最后：全局 logs/agents
     """
-    # 检查环境变量中的会话日志目录
-    session_dir_env = os.environ.get('SPORE_SESSION_LOG_DIR')
+    try:
+        from .logger import get_logger
+        agent_dir = get_logger().get_active_log_dir() / "agents"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        return agent_dir
+    except Exception:
+        pass
+
+    session_dir_env = (
+        os.environ.get('SPORE_CONVERSATION_LOG_DIR')
+        or os.environ.get('SPORE_SESSION_LOG_DIR')
+    )
     if session_dir_env:
         session_dir = Path(session_dir_env)
-        if session_dir.exists():
-            agent_dir = session_dir / "agents"
-            agent_dir.mkdir(parents=True, exist_ok=True)
-            return agent_dir
-    
+        agent_dir = session_dir / "agents"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        return agent_dir
+
     # 回退到全局目录
     global_agent_dir = LOG_DIR / "agents"
     global_agent_dir.mkdir(parents=True, exist_ok=True)

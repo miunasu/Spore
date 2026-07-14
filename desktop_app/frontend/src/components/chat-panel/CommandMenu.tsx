@@ -50,6 +50,9 @@ const MAIN_SDK_PROFILE_KEYS = {
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_API_URL',
     'ANTHROPIC_MODEL',
+    'ANTHROPIC_EFFORT',
+    'ANTHROPIC_THINKING_MODE',
+    'ANTHROPIC_THINKING_BUDGET_TOKENS',
   ],
 } as const;
 
@@ -82,7 +85,11 @@ const ANTHROPIC_COMPAT_PROFILE_KEYS = [
 ] as const;
 
 // ENV 配置分组
-const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
+// basic: 最小可用配置（能连上模型即可跑）
+// advanced: 其余调优/兼容/资源/路径等，UI 中默认折叠
+type EnvConfigGroup = { title: string; items: EnvConfigItem[] };
+
+const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
   {
     title: 'LLM SDK 选择',
     items: [
@@ -97,6 +104,19 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         description: 'openai 支持 OpenAI/DeepSeek/第三方代理，anthropic 直连 Claude API',
         placeholder: '默认: openai',
       },
+    ],
+  },
+  {
+    title: 'OpenAI API',
+    items: [
+      { key: 'OPENAI_API_KEY', label: 'API Key', type: 'text', placeholder: '默认: 无' },
+      {
+        key: 'OPENAI_API_URL',
+        label: 'API URL',
+        type: 'text',
+        placeholder: '默认: https://api.openai.com/v1',
+      },
+      { key: 'OPENAI_MODEL', label: '模型', type: 'text', placeholder: '默认: gpt-4o-mini' },
     ],
   },
   {
@@ -117,17 +137,12 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
       },
     ],
   },
+];
+
+const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
   {
-    title: 'OpenAI API',
+    title: 'OpenAI 高级',
     items: [
-      { key: 'OPENAI_API_KEY', label: 'API Key', type: 'text', placeholder: '默认: 无' },
-      {
-        key: 'OPENAI_API_URL',
-        label: 'API URL',
-        type: 'text',
-        placeholder: '默认: https://api.openai.com/v1',
-      },
-      { key: 'OPENAI_MODEL', label: '模型', type: 'text', placeholder: '默认: gpt-4o-mini' },
       {
         key: 'USE_RESPONSES_API',
         label: '使用 Responses API',
@@ -149,6 +164,44 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
           { value: 'xhigh', label: 'xhigh' },
         ],
         placeholder: '默认: 不传',
+      },
+    ],
+  },
+  {
+    title: 'Anthropic 高级',
+    items: [
+      {
+        key: 'ANTHROPIC_EFFORT',
+        label: 'Thinking Effort',
+        type: 'select',
+        options: [
+          { value: 'low', label: 'low' },
+          { value: 'medium', label: 'medium' },
+          { value: 'high', label: 'high' },
+          { value: 'xhigh', label: 'xhigh' },
+          { value: 'max', label: 'max' },
+        ],
+        placeholder: '默认: 不传',
+        description: 'Claude output_config.effort；设置后默认启用 adaptive thinking',
+      },
+      {
+        key: 'ANTHROPIC_THINKING_MODE',
+        label: 'Thinking Mode',
+        type: 'select',
+        options: [
+          { value: 'adaptive', label: 'adaptive（推荐）' },
+          { value: 'enabled', label: 'enabled（手动 budget）' },
+          { value: 'disabled', label: 'disabled' },
+        ],
+        placeholder: '默认: 自动',
+        description: '留空时：有 effort 用 adaptive，有 budget 用 enabled',
+      },
+      {
+        key: 'ANTHROPIC_THINKING_BUDGET_TOKENS',
+        label: 'Thinking Budget Tokens',
+        type: 'text',
+        placeholder: '默认: 自动（仅 enabled 模式）',
+        description: '手动扩展思考 budget_tokens，需 >=1024 且 < max_tokens',
       },
     ],
   },
@@ -372,18 +425,6 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
         key: 'WEB_MAX_CONTENT_LENGTH',
         label: 'Web 内容最大长度',
         type: 'text',
-        placeholder: '默认: 15000 字符',
-      },
-      {
-        key: 'FILE_READ_DEFAULT_LIMIT',
-        label: '文件读取行数限制',
-        type: 'text',
-        placeholder: '默认: 2000',
-      },
-      {
-        key: 'FILE_MAX_LINE_LENGTH',
-        label: '文件最大行长度',
-        type: 'text',
         placeholder: '默认: 2000 字符',
       },
       {
@@ -504,6 +545,44 @@ const ENV_CONFIG_GROUPS: { title: string; items: EnvConfigItem[] }[] = [
       { key: 'DESKTOP_API_PORT', label: 'API Port', type: 'text', placeholder: '默认: 8765' },
     ],
   },
+  {
+    title: '拦截开关',
+    items: [
+      {
+        key: 'COMMAND_INTERCEPT',
+        label: '拦截开关',
+        type: 'select',
+        options: [
+          { value: 'true', label: '开启（推荐）' },
+          { value: 'false', label: '关闭' },
+        ],
+        description: '总开关：开启后启用 shell 安全拦截策略（删除/写入等，后续可扩展）',
+        placeholder: '默认: true',
+      },
+      {
+        key: 'INTERCEPT_SHELL_DELETE',
+        label: '拦截 shell 删除',
+        type: 'select',
+        options: [
+          { value: 'true', label: '开启' },
+          { value: 'false', label: '关闭' },
+        ],
+        description: '仅总开关开启时生效；拦截 del/rm/rmdir/Remove-Item',
+        placeholder: '默认: true（不写则开启）',
+      },
+      {
+        key: 'INTERCEPT_SHELL_WRITE',
+        label: '拦截 shell 写入',
+        type: 'select',
+        options: [
+          { value: 'true', label: '开启' },
+          { value: 'false', label: '关闭' },
+        ],
+        description: '仅总开关开启时生效；拦截 Set-Content/Out-File（防 BOM）',
+        placeholder: '默认: true（不写则开启）',
+      },
+    ],
+  },
 ];
 
 // 解析 .env 内容为对象
@@ -567,6 +646,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [isOpen, setIsOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'general' | 'env'>('general');
+  const [showAdvancedEnv, setShowAdvancedEnv] = useState(false);
   const [envContent, setEnvContent] = useState('');
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [envLoading, setEnvLoading] = useState(false);
@@ -939,7 +1019,24 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
         });
       },
     },
-    {
+        {
+      id: 'intercept',
+      label: '拦截开关',
+      icon: 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636',
+      action: async () => {
+        const result = await settingsApi.toggleCommandIntercept();
+        if (!result.success) {
+          throw new Error(result.error || '切换失败');
+        }
+        setModalContent({
+          title: '拦截开关',
+          content: result.command_intercept
+            ? '已开启：命令拦截策略生效（含 shell 删除/危险写入等）。'
+            : '已关闭：已关闭全部命令拦截策略（请谨慎）。',
+        });
+      },
+    },
+{
       id: 'clearlogs',
       label: '清理日志',
       icon: 'M9 13h6m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2zM12 11V7',
@@ -1273,57 +1370,143 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                       <span className="text-spore-muted">加载中...</span>
                     </div>
                   ) : (
-                    ENV_CONFIG_GROUPS.map((group) => {
-                      const selectedSdk = envValues['LLM_SDK'] || '';
-                      // 根据选择的 SDK 判断是否禁用该组
-                      const isDisabled =
-                        (group.title === 'Anthropic API' && selectedSdk === 'openai') ||
-                        (group.title === 'OpenAI API' && selectedSdk === 'anthropic');
-
-                      return (
-                        <div key={group.title} className={`space-y-3 ${isDisabled ? 'opacity-40' : ''}`}>
-                          <h4 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
-                            {group.title}
-                          </h4>
-                          <div className="space-y-3">
-                            {group.items.map((item) => (
-                              <div key={item.key} className="space-y-1">
-                                <label className="flex items-center gap-2 text-xs text-spore-muted">
-                                  <span>{item.label}</span>
-                                  {item.description && (
-                                    <span className="text-spore-muted/60">({item.description})</span>
-                                  )}
-                                </label>
-                                {item.type === 'select' ? (
-                                  <select
-                                    value={envValues[item.key] || ''}
-                                    onChange={(e) => updateEnvValue(item.key, e.target.value)}
-                                    disabled={isDisabled}
-                                    className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 ${isDisabled ? 'cursor-not-allowed' : ''}`}
-                                  >
-                                    <option value="">{item.placeholder || '未设置'}</option>
-                                    {item.options?.map((opt) => (
-                                      <option key={opt.value} value={opt.value}>
-                                        {opt.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                ) : (
-                                  <input
-                                    type={item.type === 'number' ? 'number' : 'text'}
-                                    value={envValues[item.key] || ''}
-                                    onChange={(e) => updateEnvValue(item.key, e.target.value)}
-                                    placeholder={item.placeholder}
-                                    disabled={isDisabled}
-                                    className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono ${isDisabled ? 'cursor-not-allowed' : ''}`}
-                                  />
-                                )}
-                              </div>
-                            ))}
-                          </div>
+                    <>
+                      {/* 基础配置：最小可用 */}
+                      <div className="space-y-4">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <h4 className="text-sm font-semibold text-spore-text">基础配置</h4>
+                          <span className="text-[11px] text-spore-muted">最小可用：SDK + Key / URL / 模型</span>
                         </div>
-                      );
-                    })
+                        {ENV_BASIC_CONFIG_GROUPS.map((group) => {
+                          const selectedSdk = (envValues['LLM_SDK'] || '').toLowerCase();
+                          const isDisabled =
+                            (group.title === 'Anthropic API' && selectedSdk === 'openai') ||
+                            (group.title === 'OpenAI API' && selectedSdk === 'anthropic');
+
+                          return (
+                            <div key={group.title} className={`space-y-3 ${isDisabled ? 'opacity-40' : ''}`}>
+                              <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
+                                {group.title}
+                              </h5>
+                              <div className="space-y-3">
+                                {group.items.map((item) => (
+                                  <div key={item.key} className="space-y-1">
+                                    <label className="flex items-center gap-2 text-xs text-spore-muted">
+                                      <span>{item.label}</span>
+                                      {item.description && (
+                                        <span className="text-spore-muted/60">({item.description})</span>
+                                      )}
+                                    </label>
+                                    {item.type === 'select' ? (
+                                      <select
+                                        value={envValues[item.key] || ''}
+                                        onChange={(e) => updateEnvValue(item.key, e.target.value)}
+                                        disabled={isDisabled}
+                                        className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 ${isDisabled ? 'cursor-not-allowed' : ''}`}
+                                      >
+                                        <option value="">{item.placeholder || '未设置'}</option>
+                                        {item.options?.map((opt) => (
+                                          <option key={opt.value} value={opt.value}>
+                                            {opt.label}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    ) : (
+                                      <input
+                                        type={item.type === 'number' ? 'number' : 'text'}
+                                        value={envValues[item.key] || ''}
+                                        onChange={(e) => updateEnvValue(item.key, e.target.value)}
+                                        placeholder={item.placeholder}
+                                        disabled={isDisabled}
+                                        className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono ${isDisabled ? 'cursor-not-allowed' : ''}`}
+                                      />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* 高级配置：默认折叠 */}
+                      <div className="rounded-xl border border-spore-border/50 overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setShowAdvancedEnv((v) => !v)}
+                          className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-spore-bg/50 hover:bg-spore-accent/30 transition-colors"
+                        >
+                          <div className="text-left">
+                            <div className="text-sm font-semibold text-spore-text">高级配置</div>
+                            <div className="text-[11px] text-spore-muted">
+                              兼容性、子 Agent、超时、日志、路径、拦截等
+                            </div>
+                          </div>
+                          <svg
+                            className={`w-4 h-4 text-spore-muted shrink-0 transition-transform ${showAdvancedEnv ? 'rotate-180' : ''}`}
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        {showAdvancedEnv && (
+                          <div className="space-y-6 p-4 border-t border-spore-border/30">
+                            {ENV_ADVANCED_CONFIG_GROUPS.map((group) => {
+                              const selectedSdk = (envValues['LLM_SDK'] || '').toLowerCase();
+                              const isDisabled =
+                                (group.title === 'Anthropic 高级' && selectedSdk === 'openai') ||
+                                (group.title === 'OpenAI 高级' && selectedSdk === 'anthropic');
+
+                              return (
+                                <div key={group.title} className={`space-y-3 ${isDisabled ? 'opacity-40' : ''}`}>
+                                  <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
+                                    {group.title}
+                                  </h5>
+                                  <div className="space-y-3">
+                                    {group.items.map((item) => (
+                                      <div key={item.key} className="space-y-1">
+                                        <label className="flex items-center gap-2 text-xs text-spore-muted">
+                                          <span>{item.label}</span>
+                                          {item.description && (
+                                            <span className="text-spore-muted/60">({item.description})</span>
+                                          )}
+                                        </label>
+                                        {item.type === 'select' ? (
+                                          <select
+                                            value={envValues[item.key] || ''}
+                                            onChange={(e) => updateEnvValue(item.key, e.target.value)}
+                                            disabled={isDisabled}
+                                            className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 ${isDisabled ? 'cursor-not-allowed' : ''}`}
+                                          >
+                                            <option value="">{item.placeholder || '未设置'}</option>
+                                            {item.options?.map((opt) => (
+                                              <option key={opt.value} value={opt.value}>
+                                                {opt.label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        ) : (
+                                          <input
+                                            type={item.type === 'number' ? 'number' : 'text'}
+                                            value={envValues[item.key] || ''}
+                                            onChange={(e) => updateEnvValue(item.key, e.target.value)}
+                                            placeholder={item.placeholder}
+                                            disabled={isDisabled}
+                                            className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono ${isDisabled ? 'cursor-not-allowed' : ''}`}
+                                          />
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               )}

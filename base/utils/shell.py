@@ -195,39 +195,52 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     cmd_str = command if isinstance(command, str) else ' '.join(command)
     cmd_lower = cmd_str.strip().lower()
     
-    # 检测危险命令（包括 PowerShell 的 Remove-Item）
-    dangerous_pattern = r'\b(del|rm|rmdir|rd|remove-item)\b'
-    
-    # 检测文件写入命令（会加BOM，导致编码问题）
-    write_file_pattern = r'\b(set-content|out-file)\b'
-    write_match = re.search(write_file_pattern, cmd_lower)
-    if write_match:
-        detected_cmd = write_match.group(1)
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"错误: 不允许使用 '{detected_cmd}' 写文件（会产生BOM编码问题）。\n请使用 file type=write 工具来写入文件。",
-            "duration_sec": 0,
-            "shell_used": isinstance(command, str),
-        }
-    
-    match = re.search(dangerous_pattern, cmd_lower)
-    if match:
-        detected_cmd = match.group(1)
-        start_pos = max(0, match.start() - 20)
-        end_pos = min(len(cmd_lower), match.end() + 20)
-        context = cmd_lower[start_pos:end_pos].strip()
-        
-        return {
-            "ok": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": f"错误: 不允许在命令中使用 '{detected_cmd}' 删除文件。\n检测到的命令片段: ...{context}...\n请使用 file type=delete 工具来安全地删除文件或目录。",
-            "duration_sec": 0,
-            "shell_used": isinstance(command, str),
-        }
-    
+    # Command intercept strategies (master: COMMAND_INTERCEPT / config.command_intercept)
+    from ..config import get_config
+    _cfg = get_config()
+
+    # strategy: shell_write — block Set-Content/Out-File (BOM risk)
+    if _cfg.is_intercept_enabled("shell_write"):
+        write_file_pattern = r'\b(set-content|out-file)\b'
+        write_match = re.search(write_file_pattern, cmd_lower)
+        if write_match:
+            detected_cmd = write_match.group(1)
+            return {
+                "ok": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": (
+                    f"错误: 不允许使用 '{detected_cmd}' 写文件（会产生BOM编码问题）。\n"
+                    f"请使用 file type=write 工具来写入文件。\n"
+                    f"（可在桌面菜单关闭“拦截开关”以放行）"
+                ),
+                "duration_sec": 0,
+                "shell_used": isinstance(command, str),
+            }
+
+    # strategy: shell_delete — block del/rm/rmdir/rd/Remove-Item
+    if _cfg.is_intercept_enabled("shell_delete"):
+        dangerous_pattern = r'\b(del|rm|rmdir|rd|remove-item)\b'
+        match = re.search(dangerous_pattern, cmd_lower)
+        if match:
+            detected_cmd = match.group(1)
+            start_pos = max(0, match.start() - 20)
+            end_pos = min(len(cmd_lower), match.end() + 20)
+            context = cmd_lower[start_pos:end_pos].strip()
+            return {
+                "ok": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": (
+                    f"错误: 不允许在命令中使用 '{detected_cmd}' 删除文件。\n"
+                    f"检测到的命令片段: ...{context}...\n"
+                    f"请使用 file type=delete 工具来安全地删除文件或目录。\n"
+                    f"（可在桌面菜单关闭“拦截开关”以允许 shell 删除）"
+                ),
+                "duration_sec": 0,
+                "shell_used": isinstance(command, str),
+            }
+
     # 检测交互式命令：这些命令会等待用户输入，导致 agent 卡住
     # interactive_patterns = [
     #     # 文本编辑器

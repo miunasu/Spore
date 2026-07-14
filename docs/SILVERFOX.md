@@ -1,5 +1,8 @@
 # 🦊 SilverFox 恶意软件分析指南
 
+> 适用于 Spore 3.0。请使用桌面或 CLI 启动后按下列提示复现；样本与输出见 example/MalwareAnalysis/SliverFox/。
+
+
 ## 📋 准备工作
 
 ### 1. 安装软件

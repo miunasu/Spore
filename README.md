@@ -3,7 +3,7 @@
   
   # Spore AI Agent
   
-  **具有现代GUI透明可控的 AI Agent | 在主机上完成任何任务**
+  **Version 3.0** · 具有现代 GUI、透明可控的 AI Agent | 在主机上完成任何任务
   
   不只是写代码 - 文档处理、逆向分析、网络流量解析、文件管理、系统操作...
   
@@ -50,11 +50,12 @@
 
 **Spore 让一切透明：**
 
-- **实时监控**：每条消息都可展开查看完整的工具调用记录（ACTION/RESULT）
-- **独立日志**：系统事件和 Agent 行为全部记录，多 Agent 协作时每个子 Agent 有独立监控窗口
-- **危险操作确认**：删除、覆盖文件前必须经过你的确认，显示详细文件列表
-- **随时中断**：Ctrl+C 或停止按钮，随时打断 Agent 执行
-- **动态调整**：实时切换上下文模式、角色、技能，无需重启
+- **实时监控**：每条消息都可展开查看完整工具调用（文本协议 `ACTION` / `RESULT` / `STOP_REASON`）
+- **独立日志**：系统事件和 Agent 行为全部记录，多 Agent 协作时每个子 Agent 可有独立监控窗口
+- **危险操作确认**：删除、覆盖文件前可经你确认，并显示详细列表
+- **命令拦截**：可拦截高风险 Shell 删除/写入等操作（`COMMAND_INTERCEPT`）
+- **随时中断**：Ctrl+C 或停止按钮，可打断当前会话与子 Agent
+- **动态调整**：实时切换上下文模式、角色、技能与配置档案
 
 **你不再是旁观者，而是掌控者。**
 
@@ -64,13 +65,13 @@
 
 **Spore 是真正的主机级全能助手：**
 
-- **📝 文档处理**：解析和生成 PDF、Word、PowerPoint 文档，甚至你可以提供模板和原始数据，让Spore处理数据并按照原格式帮你写报告。
-- **🔍 逆向分析**：集成 IDA Pro，自动化二进制分析和漏洞挖掘 [银狐、ShadyPanda恶意样本分析](example/MalwareAnalysis/)
-- **🌐 网络分析**：解析 PCAP 流量包，提取关键信息 [Remcos、Mirai Pcap分析](example/PcapAnalysis/)
-- **📊 数据分析**：自动收集网络数据、处理分析、生成可视化报告 [2025-2026全球金融市场综合分析报告](example/MarketReport/)
+- **📝 文档处理**：解析和生成 PDF、Word、PowerPoint；可基于模板与原始数据写报告
+- **🔍 逆向分析**：结合主机工具链（如 IDA Pro）做二进制分析 [银狐、ShadyPanda 案例](example/MalwareAnalysis/)
+- **🌐 网络分析**：PCAP 深度分析 [Remcos、Mirai](example/PcapAnalysis/)
+- **📊 数据分析**：收集、处理并生成报告 [2025-2026 全球金融市场综合分析报告](example/MarketReport/)
 - **💾 文件操作**：搜索、读写、批量处理本地文件
-- **⚙️ 系统管理**：执行命令、管理进程、自动化运维任务
-- **💻 代码开发**：当然，也能写代码、调试、重构  
+- **⚙️ 系统管理**：执行 PowerShell、自动化运维
+- **💻 代码开发**：编写、调试、重构
 
 [银狐 SilverFox1 案例快速复现指南](docs/SILVERFOX.md)
 
@@ -78,40 +79,47 @@
 
 ---
 
-## 核心特性
+## 核心特性（3.0）
 
 ### 🎯 智能上下文模式
 
-- **强上下文模式**：保留完整对话历史，适合需要精确推理和上下文强关联的任务，Spore会单agent行动，拥有多工具异步或同步执行的能力。
-- **长上下文模式**：优化大文本处理，适合大项目编程和文档分析，Spore能够调用子agent，拥有多工具异步调用的能力。
-- **自动模式**：根据任务类型自动判断并切换最佳模式
-- 运行时动态切换，无需重启
+- **强上下文模式 (`strong_context`)**：单 Agent + 完整主机工具集，**不含** `multi_agent_dispatch`；支持单工具 / 顺序 / 并行 ACTION
+- **长上下文模式 (`long_context`)**：额外开放 `multi_agent_dispatch`，适合大项目、长文档与可并行拆解任务
+- **自动模式 (`auto`)**：由 ModeSelector 按任务选择 strong / long
+- 运行时可按**会话**切换，无需重启进程
 
 ### 🤖 多 Agent 协作
 
-- 主 Agent 派发任务，子 Agent 并发执行
-- 每个子 Agent 拥有独立监控终端窗口
-- 自动检测循环和死锁，智能终止无效任务
+- 主 Agent 通过 `multi_agent_dispatch` 派发任务
+- 子 Agent 类型：Coder / WebInfoCollector / FileContentAnalyzer / TextEditor
+- 独立线程执行、独立日志，可选监控终端
+- 支持中断、纠正后重派与结果汇总
 
-### 🧩 Claude Skils 扩展系统
+### 🧩 Claude Skills 扩展系统
 
-- **内置专业技能**：PDF/DOCX/PPTX 文档处理、PCAP 网络流量分析
-- **主机操作能力**：文件搜索、命令执行、进程管理、批量文件处理
-- **动态加载**：按需查询技能文档，不占用上下文
-- **易于扩展**：遵循规范即可添加自定义技能包
+- **内置技能包**：`docx` / `pdf` / `pptx` / `pcap-analyst` / `skill-creator`
+- **按需加载**：`skill_query` 查询 `SKILL.md`，不把全文塞进 system prompt
+- **主机工具**：`file` / `edit` / `Grep` / `execute_command` / `web_browser`
+- **易于扩展**：在 `skills/` 添加目录即可（见 [技能开发](docs/SKILLS.md)）
 
 ### 🎭 角色系统
 
-- **常驻角色选择**：配置默认角色后，每次对话都带有角色属性
-- **预定义专业角色**：恶意代码分析师、Python 专家、数据分析师等
-- **手动管理**：通过 CLI 命令（`char list/select/remove`）或前端设置切换角色
-- **支持自定义角色**：添加 Markdown 文件即可创建新角色
+- 配置 `DEFAULT_CHARACTER` 后自动注入专业角色
+- 预置：恶意代码分析师、Python 专家、数据分析师等（`characters/`）
+- CLI：`char list|select|remove`；桌面设置页同样可管理
 
 ### 🔧 文本协议交互
 
-- 不依赖 OpenAI Function Calling，使用自定义文本协议
-- 跨 SDK 兼容（OpenAI、Anthropic等）
-- 可读性强，便于调试和日志分析
+- **不依赖** OpenAI Function Calling
+- 统一标记：`ACTION_SINGLE` / `ACTION_SEQUENCE` / `ACTION_PARALLEL` / `RESULT` / `STOP_REASON`
+- 跨 SDK：OpenAI、Anthropic、DeepSeek 及兼容网关
+- 可读性强，便于调试与审计
+
+### 🖥️ 桌面多会话架构
+
+- 每会话独立 `ConversationLoop`
+- FastAPI + 独立 WebSocket 推送进程
+- 配置档案（profiles）、历史 `history/` 与 autosave
 
 ---
 
@@ -119,60 +127,76 @@
 
 ### 1. 下载安装（推荐）
 
-从 [Release 页面](https://github.com/miunasu/Spore/releases) 下载安装包，一键安装即可。
+从 [Release 页面](https://github.com/miunasu/Spore/releases) 下载 **3.0** 安装包，一键安装。
 
 ### 2. 配置 LLM 参数
 
-启动后点击右侧"设置"按钮，在"环境配置"页面填写 LLM API Key 与 url。  
+启动后打开「设置 → 环境配置」：**基础配置**中填写 SDK 与 API Key / URL / 模型即可使用；高级项默认折叠。也可直接编辑安装目录 / 项目根目录的 `.env`：
 
-在 LLM 参数章节根据使用的模型填写最大输出 Token 和上下文最大 Token（默认为DeepSeek配置）。
+```env
+LLM_SDK=openai
+OPENAI_API_KEY=sk-...
+OPENAI_API_URL=https://api.deepseek.com
+OPENAI_MODEL=deepseek-chat
+LAUNCH_MODE=desktop
+CONTEXT_MODE=strong_context
+CONTEXT_MAX_TOKENS=128000
+MAX_OUTPUT_TOKENS=15000
+```
 
-或者直接编辑 `.env` 文件，填写配置。
+完整变量表见 [配置说明](docs/CONFIGURATION.md)。
 
 ### 3. 开始使用
 
-输入消息与 Spore AI 交流，Spore会完成你的一切任务。
+输入任务即可。需要并行拆解时切换到 **long_context** 或 **auto**。
+
+源码运行：
+
+```bash
+uv sync
+# .env 中 LAUNCH_MODE=desktop 或 cli
+uv run python main_entry.py
+```
 
 ---
 
 ## 技术栈
 
-- **后端**：Python + FastAPI + WebSocket
-- **前端**：React + TypeScript + Vite + Tauri
-- **LLM**：支持 OpenAI、Anthropic、DeepSeek 等
-- **协议**：自定义文本协议（不依赖 Function Calling）
+- **后端**：Python 3.10+ · FastAPI · multiprocessing IPC · PyInstaller
+- **前端**：React · TypeScript · Vite · Tauri 1.x · Zustand
+- **LLM**：OpenAI / Anthropic SDK，兼容第三方 Base URL
+- **协议**：Spore 文本协议（`base/text_protocol`）
 
 ---
 
 ## 系统要求
 
-- Windows 10/11（主要支持）
-- Python 3.10+（从源码运行）
+- Windows 10/11 x64（主要支持平台）
+- 源码运行：Python 3.10+
 
 ---
 
 ## 构建与依赖
 
-### 必需环境（源码运行/构建）
+### 必需环境（源码 / 打包）
 
 - Python 3.10+
-- uv（Python 依赖同步与运行管理）
+- [uv](https://github.com/astral-sh/uv)
 - Node.js 18.x / 20.x LTS
 - Rust + Cargo
-- Visual Studio Build Tools（Windows，含 C++ 工具链）
+- Visual Studio Build Tools（含 C++ 工具链）
 
 ### 构建
 
-双击 `build_installer.bat` 即可开始快速构建
+双击 `build_installer.bat` 一键构建。
 
-📖 构建详情请见 [🔨 构建指南](docx/BUILD.md) 
-
+📖 详情见 [构建指南](docs/BUILD.md)
 
 ### 外部工具说明
 
-- `rg.exe`：不再放在仓库中。`build_installer.bat` 会在构建时自动下载、校验（SHA256）并打包到安装目录，终端用户无需手动安装。
-- `NSIS`：用于生成 Windows 安装包（setup.exe），由 Tauri 的 `nsis` 打包目标使用。
-- `UPX`：在 `spore_backend.spec` 中用于 PyInstaller 压缩后端可执行文件，非基础运行必需。
+- `rg.exe`：构建时由脚本下载并校验（SHA256），打包进安装目录
+- `NSIS`：Tauri `nsis` 目标生成 setup.exe
+- `UPX`：可选，用于压缩后端可执行文件（见 `spore_backend.spec`）
 
 ---
 
@@ -196,7 +220,7 @@
 
 <div align="center">
   
-**Spore AI Agent** - 透明可控，让你真正掌控 AI 🚀
+**Spore AI Agent 3.0** - 透明可控，让你真正掌控 AI 🚀
 
 [GitHub](https://github.com/miunasu/Spore) | [文档](docs/) | [Release](https://github.com/miunasu/Spore/releases)
 

@@ -267,30 +267,30 @@ def switch_session(session_id: str) -> Dict[str, Any]:
     }
 
 
-def create_session(session_id: str) -> Dict[str, Any]:
+def create_session(session_id: str, switch_current: bool = False) -> Dict[str, Any]:
     """
-    创建新会话并切换到该会话
-    
+    创建新会话。
+
     Args:
         session_id: 会话 ID
-        
+        switch_current: 是否切换全局当前会话。
+            - True: 桌面 UI 手动新建会话时使用
+            - False(默认): API/流水线只创建隔离会话，不抢占 current
+
     Returns:
         Dict: 包含会话信息
     """
     global _cli_handler
-    
+
     if not _initialized or _state is None:
         return {"success": False, "error": "后端未初始化"}
-    
-    # 创建新会话
+
     new_state = _state.create_session(session_id)
-    _state.switch_session(session_id)
-    
-    # 更新 CLI handler 引用（conv_loop 会动态获取）
-    if _cli_handler:
-        _cli_handler.state = new_state
-    
-    
+    if switch_current:
+        _state.switch_session(session_id)
+        if _cli_handler:
+            _cli_handler.state = new_state
+
     return {
         "success": True,
         "session_id": session_id

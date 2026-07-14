@@ -153,10 +153,12 @@ def load_conversation(req: LoadRequest):
         raise HTTPException(status_code=503, detail="后端未初始化")
     
     try:
-        from base.memory_manager import load_messages
-        state, _ = _get_target_state(session_manager, req.conversation_id)
+        from base.memory_manager import load_messages, auto_save_messages
+        state, resolved_conversation_id = _get_target_state(session_manager, req.conversation_id)
         state.messages = load_messages(req.filename)
         state.user_message_count = 0
+        # 加载后立即写入/刷新该会话短记忆，使其进入最近 10 会话队列
+        auto_save_messages(state.messages, session_id=resolved_conversation_id)
         return {"success": True, "message_count": len(state.messages)}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"文件不存在: {req.filename}")
@@ -173,15 +175,17 @@ def continue_recent(req: Optional[ConversationCommandRequest] = None):
         raise HTTPException(status_code=503, detail="后端未初始化")
     
     try:
-        from base.memory_manager import load_messages, get_latest_history_file
+        from base.memory_manager import load_messages, get_latest_history_file, auto_save_messages
         from base import config as _config
         
         conversation_id = req.conversation_id if req else None
-        state, _ = _get_target_state(session_manager, conversation_id)
+        state, resolved_conversation_id = _get_target_state(session_manager, conversation_id)
         latest_file = get_latest_history_file()
         state.messages = load_messages(latest_file)
         state.user_message_count = 0
         _config.memory_continued = True
+        # 继续最近对话后，刷新该会话短记忆
+        auto_save_messages(state.messages, session_id=resolved_conversation_id)
         
         return {
             "success": True,
@@ -358,6 +362,13 @@ def list_history_files() -> Dict[str, Any]:
     """列出历史文件 - 包括 history 目录下所有 .mem 文件"""
     import os
     from pathlib import Path
+
+    # 触发短记忆旧快照 -> 会话文件迁移，避免 UI 仍显示多份时间戳副本
+    try:
+        from base.memory_manager import list_autosave_files
+        list_autosave_files()
+    except Exception:
+        pass
     
     history_dir = Path("history")
     if not history_dir.exists():

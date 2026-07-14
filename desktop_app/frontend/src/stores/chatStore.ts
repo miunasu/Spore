@@ -18,19 +18,60 @@ const frontendLog = (message: string) => {
   useLogStore.getState().addFrontendLog(message);
 };
 
+const isStopReasonLine = (trimmed: string): boolean =>
+  /^@SPORE:STOP_REASON\s*=/.test(trimmed || '');
+
 const isHiddenProtocolLine = (trimmed: string): boolean =>
+  isStopReasonLine(trimmed) ||
   [
     '@SPORE:REPLY_START',
     '@SPORE:REPLY_END',
-    '@SPORE:FINAL@',
     '@SPORE:CONTENT_START',
     '@SPORE:CONTENT_END',
     '@SPORE:RESULT',
   ].includes(trimmed);
 
+
+const extractStopReasonContent = (content: string): string | null => {
+  if (!content) return null;
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^[ \t]*@SPORE:STOP_REASON[ \t]*=[ \t]*(.*?)[ \t]*$/);
+    if (!match) continue;
+    const value = (match[1] || '').trim();
+    if (value.startsWith('@SPORE:CONTENT_START')) {
+      let body = value.slice('@SPORE:CONTENT_START'.length);
+      // same-line end
+      const sameEnd = body.indexOf('@SPORE:CONTENT_END');
+      if (sameEnd >= 0) {
+        return body.slice(0, sameEnd).replace(/^\r?\n/, '').replace(/\s+$/, '');
+      }
+      const parts: string[] = [];
+      if (body) parts.push(body.replace(/^\r?\n/, ''));
+      for (let j = i + 1; j < lines.length; j++) {
+        const endIdx = lines[j].indexOf('@SPORE:CONTENT_END');
+        if (endIdx >= 0) {
+          const before = lines[j].slice(0, endIdx);
+          if (before) parts.push(before);
+          return parts.join('\n').replace(/^\r?\n/, '').replace(/\s+$/, '');
+        }
+        parts.push(lines[j]);
+      }
+      return parts.join('\n').trim() || null;
+    }
+    return value || null;
+  }
+  return null;
+};
+
 // 提取消息的显示内容（处理新协议 @SPORE: 标记）
 const extractDisplayContent = (content: string): string => {
   if (!content) return '';
+
+  const stopReason = extractStopReasonContent(content);
+  if (stopReason) {
+    return stopReason;
+  }
   
   const lines = content.split('\n');
   const replyStart = '@SPORE:REPLY_START';
@@ -52,7 +93,7 @@ const extractDisplayContent = (content: string): string => {
       continue;
     }
 
-    if (trimmed === replyEnd || trimmed === '@SPORE:FINAL@') {
+    if (trimmed === replyEnd || isStopReasonLine(trimmed)) {
       replySegments.push(currentSegment.join('\n').trim());
       currentSegment = null;
       continue;
@@ -91,7 +132,7 @@ const extractDisplayContent = (content: string): string => {
     }
 
     if (isHiddenProtocolLine(trimmed)) {
-      if (trimmed === '@SPORE:FINAL@') {
+      if (isStopReasonLine(trimmed)) {
         break;
       }
       continue;
@@ -874,11 +915,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
       try {
         frontendLog(`[加载] 历史文件: ${filename}`);
         const base = (filename.split('/').pop() ?? filename).replace('.mem', '');
-        // 短记忆文件用时间做标签名：auto_2026-07-10_150015_xxx -> 短记忆 07-10 15:00
+        // 短记忆标签名：优先会话 ID，兼容旧时间戳快照
+        const sessionMatch = base.match(/^session_(.+)$/);
         const autoMatch = base.match(/^auto_\d{4}-(\d{2})-(\d{2})_(\d{2})(\d{2})\d{2}_/);
-        const name = autoMatch
-          ? `短记忆 ${autoMatch[1]}-${autoMatch[2]} ${autoMatch[3]}:${autoMatch[4]}`
-          : base.slice(0, 20);
+        const name = sessionMatch
+          ? `短记忆 ${sessionMatch[1].slice(0, 24)}`
+          : autoMatch
+            ? `短记忆 ${autoMatch[1]}-${autoMatch[2]} ${autoMatch[3]}:${autoMatch[4]}`
+            : base.slice(0, 20);
         const newConv = createConversation(name, filename);
         newConv.backendPort = MAIN_PORT;
         newConv.backendStatus = 'running';
@@ -949,6 +993,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             conversations: [...state.conversations, newConv],
             activeConversationId: newConv.id,
           }));
+          // 加载会刷新该会话短记忆，同步更新列表
+          void get().fetchHistoryFiles();
         } else {
           frontendLog(`[错误] 加载失败: ${loadResponse.message_count}`);
         }

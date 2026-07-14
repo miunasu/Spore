@@ -1,6 +1,6 @@
 [package]
 name = "spore-desktop"
-version = "1.0.0"
+version = "3.0.0"
 description = "Spore AI Agent Desktop Application"
 authors = ["Spore Team"]
 license = ""

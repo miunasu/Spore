@@ -211,8 +211,7 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                 "stdout": "",
                 "stderr": (
                     f"错误: 不允许使用 '{detected_cmd}' 写文件（会产生BOM编码问题）。\n"
-                    f"请使用 file type=write 工具来写入文件。\n"
-                    f"（可在桌面菜单关闭“拦截开关”以放行）"
+                    f"请使用 file 或 edit 工具来编辑文件。\n"
                 ),
                 "duration_sec": 0,
                 "shell_used": isinstance(command, str),

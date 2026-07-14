@@ -114,7 +114,7 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
                     "file_path": {"type": "string", "description": "文件路径（read/write时使用）"},
                     "path": {"type": "string", "description": "文件路径（write时也可用此参数）"},
                     "content": {"type": "string", "description": "写入内容（write时必需）"},
-                    "append": {"type": "boolean", "description": "是否追加模式（write时可选）"},
+                    "append": {"type": "boolean", "description": "是否追加模式（write时可选），**警告**：write时未选择append将采取覆写写入！原始文件将被清空！"},
                     "encoding": {"type": "string", "description": "文件编码（write时可选）"},
                     "offset": {"type": "number", "description": "起始行号（read时可选）"},
                     "limit": {"type": "number", "description": "读取行数（read时可选）"},

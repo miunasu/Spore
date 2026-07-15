@@ -462,7 +462,12 @@ class SubAgentThread(threading.Thread):
                             "content": self.protocol_manager.format_parse_error("ACTION 块解析失败")
                         })
                         continue
-                    result = self._handle_action_block(parsed.action_block, parsed.prefix_text, reply_content)
+                    result = self._handle_action_block(
+                        parsed.action_block,
+                        parsed.prefix_text,
+                        reply_content,
+                        protocol_warning=parsed.protocol_warning,
+                    )
                     if result == "break":
                         return
                     # 重置循环检测
@@ -551,9 +556,12 @@ class SubAgentThread(threading.Thread):
                     })
                     
                     # 添加user消息提示继续执行
+                    continue_prompt = "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请输出 @SPORE:STOP_REASON=<自然语言终止原因>（不要再输出 REPLY 块）。"
+                    if parsed.protocol_warning:
+                        continue_prompt = f"[协议警告] {parsed.protocol_warning}\n\n{continue_prompt}"
                     self.messages.append({
                         "role": "user",
-                        "content": "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请输出 @SPORE:STOP_REASON=<自然语言终止原因>（不要再输出 REPLY 块）。"
+                        "content": continue_prompt
                     })
                     
                     self._log_to_agent_file(
@@ -688,6 +696,7 @@ class SubAgentThread(threading.Thread):
         action_block: ParsedActionBlock,
         prefix_text: str,
         full_reply: str,
+        protocol_warning: Optional[str] = None,
     ) -> str:
         """处理 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块。"""
         if prefix_text:
@@ -758,6 +767,7 @@ class SubAgentThread(threading.Thread):
 
             result_text = self.protocol_manager.format_result({"mode": "parallel", "results": results}, "ACTION_PARALLEL")
         
+        result_text = self.protocol_manager.append_protocol_warning(result_text, protocol_warning)
         self.messages.append({
             "role": "user",
             "content": result_text

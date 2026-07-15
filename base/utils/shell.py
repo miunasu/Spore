@@ -199,18 +199,35 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     from ..config import get_config
     _cfg = get_config()
 
-    # strategy: shell_write — block Set-Content/Out-File (BOM risk)
+    # strategy: shell_write — block PowerShell file-write commands
+    # (Set-Content/Out-File/Add-Content, New-Item file writes, [System.IO.File]::Write*/Append*)
+    # New-Item used only for directory/link creation is allowed.
     if _cfg.is_intercept_enabled("shell_write"):
-        write_file_pattern = r'\b(set-content|out-file)\b'
+        write_file_pattern = (
+            r'\b(set-content|out-file|add-content)\b'
+            r'|\b(writealltext|writeallbytes|writealllines|appendalltext|appendalllines)\b'
+        )
         write_match = re.search(write_file_pattern, cmd_lower)
+        detected_cmd = None
         if write_match:
-            detected_cmd = write_match.group(1)
+            detected_cmd = next(g for g in write_match.groups() if g)
+        elif re.search(r'\bnew-item\b', cmd_lower):
+            # Allow New-Item for non-file item types (Directory / Junction / links).
+            is_non_file_item = re.search(
+                r'(?:-itemtype|-type)\s+[\'"]?(directory|dir|container|junction|symboliclink|hardlink)\b',
+                cmd_lower,
+            )
+            if not is_non_file_item:
+                detected_cmd = "new-item"
+
+        if detected_cmd:
             return {
                 "ok": False,
                 "returncode": -1,
                 "stdout": "",
                 "stderr": (
-                    f"错误: 不允许使用 '{detected_cmd}' 写文件（会产生BOM编码问题）。\n"
+                    f"错误: 不允许使用 '{detected_cmd}' 通过 shell 写文件。\n"
+                    f"可能产生 BOM 编码问题）\n"
                     f"请使用 file 或 edit 工具来编辑文件。\n"
                 ),
                 "duration_sec": 0,

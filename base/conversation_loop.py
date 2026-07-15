@@ -579,6 +579,7 @@ class ConversationLoop:
         action_block: ParsedActionBlock,
         prefix_text: Optional[str] = None,
         full_reply: Optional[str] = None,
+        protocol_warning: Optional[str] = None,
     ) -> Optional[str]:
         """Execute ACTION_SINGLE, ACTION_SEQUENCE, or ACTION_PARALLEL."""
         self._emit_event("tool_call", {
@@ -666,6 +667,7 @@ class ConversationLoop:
 
             result_text = self.protocol_manager.format_result({"mode": "parallel", "results": results}, "ACTION_PARALLEL")
 
+        result_text = self.protocol_manager.append_protocol_warning(result_text, protocol_warning)
         self.state.messages.append({"role": "user", "content": result_text})
         self._check_and_handle_oversized_tool_result()
         self.state.save_temp_messages()
@@ -774,7 +776,12 @@ class ConversationLoop:
             # 如果有 REPLY 内容，先显示
             if parsed.reply_content:
                 safe_print(f"{_config.current_agent_name}> {parsed.reply_content}")
-            return self.handle_action_block(parsed.action_block, parsed.prefix_text, reply)
+            return self.handle_action_block(
+                parsed.action_block,
+                parsed.prefix_text,
+                reply,
+                protocol_warning=parsed.protocol_warning,
+            )
         
         elif parsed.response_type == "protocol_error":
             result_text = self.protocol_manager.format_protocol_error(parsed.protocol_error)
@@ -876,6 +883,13 @@ class ConversationLoop:
             
             # 添加 assistant 消息（使用 add_assistant_message 增加计数）
             self.state.add_assistant_message(reply)
+
+            # 无工具可拼 RESULT 时，仍把软警告回给 LLM
+            if parsed.protocol_warning:
+                self.state.messages.append({
+                    "role": "user",
+                    "content": f"[协议警告] {parsed.protocol_warning}",
+                })
             
             # 多轮 ACTION/继续过程中也实时更新该会话短记忆
             auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())

@@ -174,6 +174,8 @@ class ParsedResponse:
     final_content: Optional[str] = None
     raw_response: str = ""
     protocol_error: Optional[ProtocolError] = None
+    # Soft protocol notice (e.g. content outside blocks). Not a hard failure.
+    protocol_warning: Optional[str] = None
 
 
 PROTOCOL_TEMPLATE = """
@@ -318,6 +320,11 @@ task_id=grep_todos tool=Grep pattern="TODO" path="C:/project" output_mode=conten
 class ProtocolManager:
     """Text protocol manager."""
 
+    # Soft warning when non-empty text appears outside protocol blocks.
+    # Actions still execute; warning is returned to the LLM with tool results.
+    CONTENT_OUTSIDE_WARNING = "协议块外存在非空内容，所有内容应当在协议块内"
+
+
     BLOCK_MARKERS = {
         "REPLY": ("@SPORE:REPLY_START", "@SPORE:REPLY_END"),
         "TODO": ("@SPORE:TODO_START", "@SPORE:TODO_END"),
@@ -429,7 +436,7 @@ class ProtocolManager:
             return None
         return response[content_start:content_start + end].strip() or None
 
-    def _scan_protocol(self, response: str) -> tuple[List[Dict[str, Any]], Optional[ProtocolError]]:
+    def _scan_protocol(self, response: str) -> tuple[List[Dict[str, Any]], Optional[ProtocolError], str]:
         blocks: List[Dict[str, Any]] = []
         stack: List[Dict[str, Any]] = []
         content_spans: List[tuple[int, int]] = []
@@ -438,7 +445,7 @@ class ProtocolManager:
         # Pre-parse STOP_REASON (supports plain text and CONTENT multi-line form)
         stop_blocks, stop_err = extract_stop_reason_blocks(response)
         if stop_err:
-            return blocks, ProtocolError("invalid_stop_reason", stop_err)
+            return blocks, ProtocolError("invalid_stop_reason", stop_err), ""
         for stop_block in stop_blocks:
             blocks.append(stop_block)
             final_spans.append((stop_block["start"], stop_block["end"]))
@@ -469,38 +476,38 @@ class ProtocolManager:
                 continue
 
             if marker not in self.VALID_MARKERS:
-                return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 标识符: {marker}")
+                return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 标识符: {marker}"), ""
 
             if marker in self.CONTENT_MARKERS:
                 if not stack or stack[-1]["name"] not in self.ACTION_BLOCK_NAMES:
-                    return blocks, ProtocolError("unknown_protocol_block", f"{marker} 只能出现在 ACTION 参数内容中")
+                    return blocks, ProtocolError("unknown_protocol_block", f"{marker} 只能出现在 ACTION 参数内容中"), ""
                 if marker == "@SPORE:CONTENT_START":
                     in_content = True
                 else:
-                    return blocks, ProtocolError("mismatched_end_marker", "@SPORE:CONTENT_END 缺少对应的 @SPORE:CONTENT_START")
+                    return blocks, ProtocolError("mismatched_end_marker", "@SPORE:CONTENT_END 缺少对应的 @SPORE:CONTENT_START"), ""
                 continue
 
             if marker == "@SPORE:STOP_REASON":
                 return blocks, ProtocolError(
                     "invalid_stop_reason",
                     "终止符格式应为 @SPORE:STOP_REASON=<自然语言原因> 或 @SPORE:STOP_REASON=@SPORE:CONTENT_START ... @SPORE:CONTENT_END",
-                )
+                ), ""
 
             if marker.endswith("_START"):
                 block_name = marker[len("@SPORE:"):-len("_START")]
                 if block_name not in self.BLOCK_MARKERS:
-                    return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 协议块: {marker}")
+                    return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 协议块: {marker}"), ""
                 if stack:
-                    return blocks, ProtocolError("mismatched_end_marker", f"协议块不允许嵌套: {marker}")
+                    return blocks, ProtocolError("mismatched_end_marker", f"协议块不允许嵌套: {marker}"), ""
                 stack.append({"name": block_name, "start_marker": marker, "start": match.start(), "content_start": match.end()})
                 continue
 
             if marker.endswith("_END"):
                 block_name = marker[len("@SPORE:"):-len("_END")]
                 if block_name not in self.BLOCK_MARKERS:
-                    return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 协议块: {marker}")
+                    return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 协议块: {marker}"), ""
                 if not stack:
-                    return blocks, ProtocolError("mismatched_end_marker", f"缺少开始标识符: {marker}")
+                    return blocks, ProtocolError("mismatched_end_marker", f"缺少开始标识符: {marker}"), ""
                 open_block = stack.pop()
                 if open_block["name"] != block_name:
                     expected_end = f"@SPORE:{open_block['name']}_END"
@@ -508,11 +515,11 @@ class ProtocolManager:
                         return blocks, ProtocolError(
                             "mismatched_end_marker",
                             f"{expected_end} 未独占一行（不能与其他内容或标识符粘连在同一行），协议块标识符必须独占一行",
-                        )
+                        ), ""
                     return blocks, ProtocolError(
                         "mismatched_end_marker",
                         f"开始标识符 {open_block['start_marker']} 与结束标识符 {marker} 不匹配",
-                    )
+                    ), ""
                 blocks.append({
                     "name": block_name,
                     "start": open_block["start"],
@@ -525,7 +532,7 @@ class ProtocolManager:
                 content_spans.append((open_block["start"], match.end()))
 
         if in_content:
-            return blocks, ProtocolError("missing_end_marker", "缺少结束标识符: @SPORE:CONTENT_END")
+            return blocks, ProtocolError("missing_end_marker", "缺少结束标识符: @SPORE:CONTENT_END"), ""
 
         if stack:
             open_block = stack[-1]
@@ -534,19 +541,18 @@ class ProtocolManager:
                 return blocks, ProtocolError(
                     "missing_end_marker",
                     f"{end_marker} 未独占一行（不能与其他内容或标识符粘连在同一行），协议块标识符必须独占一行",
-                )
-            return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: {end_marker}")
+                ), ""
+            return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: {end_marker}"), ""
 
         if len(final_spans) > 1:
-            return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:STOP_REASON =")
+            return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:STOP_REASON ="), ""
         if final_spans:
             content_spans.append(final_spans[0])
 
         uncovered = self._content_outside_spans(response, content_spans)
-        if uncovered:
-            return blocks, ProtocolError("content_outside_block", "协议块外存在非空内容")
-
-        return blocks, None
+        # Soft policy: outside text is treated as REPLY later; ACTION still executes.
+        # Hard error removed — warning is attached in parse_response / tool RESULT.
+        return blocks, None, uncovered
 
     def _content_outside_spans(self, response: str, spans: List[tuple[int, int]]) -> str:
         if not response.strip():
@@ -568,13 +574,16 @@ class ProtocolManager:
         if not response:
             return ParsedResponse(response_type="continue", raw_response="")
 
-        blocks, error = self._scan_protocol(response)
+        blocks, error, outside_content = self._scan_protocol(response)
         if error:
             return ParsedResponse(
                 response_type="protocol_error",
                 raw_response=response,
                 protocol_error=error,
             )
+
+        outside_text = (outside_content or "").strip()
+        protocol_warning = self.CONTENT_OUTSIDE_WARNING if outside_text else None
 
         final_blocks = [block for block in blocks if block["name"] == "STOP_REASON"]
         final_pos = final_blocks[0]["start"] if final_blocks else -1
@@ -605,6 +614,9 @@ class ProtocolManager:
             )
 
         reply_contents = [block["content"] for block in reply_blocks if block["content"]]
+        # 协议块外非空文本按 REPLY 展示（不阻断 ACTION）
+        if outside_text:
+            reply_contents = [outside_text] + reply_contents
         reply_content = "\n\n".join(reply_contents) if reply_contents else None
 
         if action_blocks:
@@ -630,6 +642,7 @@ class ProtocolManager:
                 action=parsed_block.first_action,
                 action_block=parsed_block,
                 raw_response=response,
+                protocol_warning=protocol_warning,
             )
 
         if has_final:
@@ -643,6 +656,7 @@ class ProtocolManager:
                 reply_content=display_content,
                 final_content=final_content,
                 raw_response=response,
+                protocol_warning=protocol_warning,
             )
 
         return ParsedResponse(
@@ -650,6 +664,7 @@ class ProtocolManager:
             prefix_text=reply_content,
             reply_content=reply_content,
             raw_response=response,
+            protocol_warning=protocol_warning,
         )
 
     def _action_name_to_mode(self, name: str) -> ActionMode:
@@ -680,6 +695,13 @@ class ProtocolManager:
 
     def format_parse_error(self, error_message: str) -> str:
         return self.result_formatter.format_parse_error(error_message)
+
+
+    def append_protocol_warning(self, result_text: str, warning: Optional[str] = None) -> str:
+        """Append a soft protocol warning to a RESULT payload returned to the LLM."""
+        if not warning:
+            return result_text
+        return f"{result_text}\n\n[协议警告] {warning}"
 
     def format_protocol_error(self, error: ProtocolError) -> str:
         return self.result_formatter.format_protocol_error(error.code, error.message)

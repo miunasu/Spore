@@ -65,14 +65,10 @@ const extractStopReasonContent = (content: string): string | null => {
 };
 
 // 提取消息的显示内容（处理新协议 @SPORE: 标记）
+// 结束轮优先级：有 REPLY 只显示 REPLY；仅有 STOP_REASON 时显示 STOP_REASON
 const extractDisplayContent = (content: string): string => {
   if (!content) return '';
 
-  const stopReason = extractStopReasonContent(content);
-  if (stopReason) {
-    return stopReason;
-  }
-  
   const lines = content.split('\n');
   const replyStart = '@SPORE:REPLY_START';
   const replyEnd = '@SPORE:REPLY_END';
@@ -110,17 +106,24 @@ const extractDisplayContent = (content: string): string => {
     replySegments.push(currentSegment.join('\n').trim());
   }
 
+  // 有 REPLY 块时优先只展示 REPLY（同时存在 STOP_REASON 时不显示原因文本）
   if (hasReplyBlock) {
     return replySegments.filter(Boolean).join('\n\n');
   }
 
-  // 没有 REPLY 块，过滤掉所有协议标记
+  // 无 REPLY 时，展示 STOP_REASON 内容
+  const stopReason = extractStopReasonContent(content);
+  if (stopReason) {
+    return stopReason;
+  }
+
+  // 没有 REPLY/STOP_REASON，过滤掉所有协议标记
   const filteredLines: string[] = [];
   let inProtocolBlock = false;
-  
+
   for (const line of lines) {
     const trimmed = line.trim();
-    
+
     if (/^@SPORE:(TODO|ACTION_SINGLE|ACTION_SEQUENCE|ACTION_PARALLEL)_START$/.test(trimmed)) {
       inProtocolBlock = true;
       continue;
@@ -137,14 +140,14 @@ const extractDisplayContent = (content: string): string => {
       }
       continue;
     }
-    
+
     if (inProtocolBlock) {
       continue;
     }
-    
+
     filteredLines.push(line);
   }
-  
+
   return filteredLines.join('\n').trim();
 };
 

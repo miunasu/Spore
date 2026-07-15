@@ -47,28 +47,22 @@ def is_hidden_protocol_line(stripped: str) -> bool:
 def extract_user_visible_content(reply: str) -> str:
     """
     从 AI 回复中提取用户可见的内容，去除协议标记
-    
+
     协议标记包括：
     - @SPORE:REPLY_START ... @SPORE:REPLY_END (提取其中的内容作为用户可见内容)
     - @SPORE:TODO_START ... @SPORE:TODO_END
     - @SPORE:ACTION_SINGLE/SEQUENCE/PARALLEL_START ... END
     - ### RULE_REMINDER
-    - @SPORE:STOP_REASON=<自然语言原因>（终止原因按 REPLY 逻辑展示）
+    - @SPORE:STOP_REASON=<自然语言原因>
     - @SPORE:CONTENT_END
+
+    结束轮展示优先级：
+    1. 存在 REPLY 块时，只展示 REPLY 内容（忽略 STOP_REASON）
+    2. 没有 REPLY、只有 STOP_REASON 时，展示 STOP_REASON 内容
+    3. 都没有时，过滤协议标记后展示剩余文本
     """
     if not reply:
         return ""
-
-    # 终止回复：STOP_REASON 的自然语言原因直接作为用户可见内容
-    try:
-        from base.text_protocol import extract_stop_reason_blocks
-        stop_blocks, stop_err = extract_stop_reason_blocks(reply)
-        if not stop_err and stop_blocks:
-            reason = (stop_blocks[0].get("content") or "").strip()
-            if reason:
-                return reason
-    except Exception:
-        pass
 
     visible_lines = []
     in_protocol_block = False
@@ -95,8 +89,20 @@ def extract_user_visible_content(reply: str) -> str:
     if current_segment is not None:
         reply_segments.append("\n".join(current_segment).strip())
 
+    # 有 REPLY 块时优先只展示 REPLY（结束轮同时带 STOP_REASON 时不显示原因文本）
     if has_reply_block:
         return "\n\n".join(seg for seg in reply_segments if seg)
+
+    # 无 REPLY 时，STOP_REASON 的自然语言原因作为用户可见内容
+    try:
+        from base.text_protocol import extract_stop_reason_blocks
+        stop_blocks, stop_err = extract_stop_reason_blocks(reply)
+        if not stop_err and stop_blocks:
+            reason = (stop_blocks[0].get("content") or "").strip()
+            if reason:
+                return reason
+    except Exception:
+        pass
 
     for line in lines:
         stripped = line.strip()
@@ -118,7 +124,7 @@ def extract_user_visible_content(reply: str) -> str:
             continue
 
         visible_lines.append(line)
-    
+
     return '\n'.join(visible_lines).strip()
 
 

@@ -299,8 +299,12 @@ if exist "%TAURI_DIR%\target\release\Spore.exe" (
     echo [WARN] Spore.exe not found
 )
 
-REM Copy NSIS installer
+REM Copy NSIS installer (current version only; drop stale Spore_*_x64-setup.exe)
 set "BUNDLE_DIR=%TAURI_DIR%\target\release\bundle\nsis"
+if exist "%RELEASE_DIR%\Spore_*_x64-setup.exe" (
+    echo Cleaning old installers in release directory...
+    del /f /q "%RELEASE_DIR%\Spore_*_x64-setup.exe" >nul 2>nul
+)
 if exist "%BUNDLE_DIR%" (
     echo Copying NSIS installer...
     for %%f in ("%BUNDLE_DIR%\*.exe") do (

@@ -84,8 +84,8 @@
         "title": "Spore",
         "width": 1400,
         "height": 900,
-        "minWidth": 1000,
-        "minHeight": 600,
+        "minWidth": 400,
+        "minHeight": 400,
         "decorations": false,
         "transparent": true
       }

@@ -2,7 +2,7 @@
  * 自定义标题栏组件
  * 与深色主题融合，支持窗口拖拽和控制按钮
  */
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import sporeIcon from '@icons/32x32.png';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -12,6 +12,7 @@ export const TitleBar: React.FC = () => {
   const isDragging = useRef(false);
   const lastClickTime = useRef(0);
   const { theme, toggleTheme } = useSettingsStore();
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
 
   const handleMinimize = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -35,6 +36,18 @@ export const TitleBar: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     toggleTheme();
+  };
+
+  const handleToggleAlwaysOnTop = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const next = !alwaysOnTop;
+    try {
+      await appWindow.setAlwaysOnTop(next);
+      setAlwaysOnTop(next);
+    } catch (err) {
+      console.warn('Failed to set always on top:', err);
+    }
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -96,6 +109,21 @@ export const TitleBar: React.FC = () => {
 
       {/* 右侧 - 窗口控制按钮 */}
       <div className="flex items-center -mr-3">
+        <button
+          onClick={handleToggleAlwaysOnTop}
+          className={`w-10 h-8 flex items-center justify-center transition-colors ${
+            alwaysOnTop
+              ? 'bg-spore-highlight/30 text-spore-highlight hover:bg-spore-highlight/40'
+              : 'hover:bg-spore-accent/50 text-spore-muted'
+          }`}
+          title={alwaysOnTop ? '取消窗口置顶' : '窗口置顶'}
+          aria-pressed={alwaysOnTop}
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z" />
+          </svg>
+        </button>
+
         <button
           onClick={handleToggleTheme}
           className="w-10 h-8 flex items-center justify-center hover:bg-spore-accent/50 transition-colors"

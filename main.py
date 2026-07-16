@@ -143,37 +143,35 @@ def main() -> int:
         # 使用processed_input或原始user_input作为实际输入
         actual_input = processed_input if processed_input else user_input
 
-        # CLI mode 命令只更新 state，这里同步本轮实际工具集。
-        if state.context_mode != "auto":
-            new_tools = get_tools_for_mode(state.context_mode)
-            if new_tools != current_tools:
-                current_tools = new_tools
-                tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tools if name in TOOL_DEFINITIONS}
-                system_prompt = protocol_manager.inject_protocol(
-                    base_prompt,
-                    tool_definitions,
-                )
-                conv_loop.system_prompt = system_prompt
-                conv_loop.tool_names = current_tools
-                print(f"[系统] 已切换到 {state.context_mode} 模式的工具集")
-        
-        # 如果是auto模式，先判断应该使用哪种模式
+        # Sync tools from session mode + tool policy (session-level overrides)
+        from base.tool_policy import (
+            effective_mode_name,
+            filter_tool_definitions,
+            get_session_mode_policy,
+            resolve_enabled_tool_names,
+        )
+
+        selected_mode = None
         if state.context_mode == "auto":
             selected_mode = select_context_mode(actual_input)
+            state.selected_auto_mode = selected_mode
             print(f"[系统] 自动选择模式: {selected_mode}")
-            
-            # 如果模式发生变化，重新加载工具集和系统提示
-            new_tools = get_tools_for_mode(selected_mode)
-            if new_tools != current_tools:
-                current_tools = new_tools
-                tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tools if name in TOOL_DEFINITIONS}
-                system_prompt = protocol_manager.inject_protocol(
-                    base_prompt,
-                    tool_definitions,
-                )
-                conv_loop.system_prompt = system_prompt
-                conv_loop.tool_names = current_tools
-                print(f"[系统] 已切换到 {selected_mode} 模式的工具集")
+        else:
+            state.selected_auto_mode = None
+
+        eff_mode = effective_mode_name(state.context_mode, selected_mode)
+        mode_policy = get_session_mode_policy(getattr(state, "tool_policies", None), eff_mode)
+        new_tools = resolve_enabled_tool_names(eff_mode, mode_policy)
+        if new_tools != current_tools:
+            current_tools = new_tools
+            tool_definitions = filter_tool_definitions(eff_mode, mode_policy)
+            system_prompt = protocol_manager.inject_protocol(
+                base_prompt,
+                tool_definitions,
+            )
+            conv_loop.system_prompt = system_prompt
+            conv_loop.tool_names = current_tools
+            print(f"[系统] 已切换到 {eff_mode} 模式的工具集 (policy applied)")
         
         # 如果连续 3 次 LLM 没有使用 ACTION，在用户输入后注入工具列表和技能列表提醒
         if getattr(conv_loop, '_no_action_count', 0) >= 3:

@@ -555,13 +555,48 @@ def set_context_mode(req: SetModeRequest) -> Dict[str, Any]:
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
     
-    # 设置目标会话的模式
-    state, _ = _get_target_state(session_manager, req.conversation_id)
+    # 设置目标会话的模式，并同步工具集（含会话级 tool policy）
+    state, resolved_id = _get_target_state(session_manager, req.conversation_id)
     state.context_mode = req.mode
-    
+    if req.mode != "auto":
+        state.selected_auto_mode = None
+
+    from base.tool_policy import (
+        effective_mode_name,
+        filter_tool_definitions,
+        get_session_mode_policy,
+        resolve_enabled_tool_names,
+    )
+    from base.prompt_loader import load_system_prompt
+    from base.text_protocol import ProtocolManager
+    from base.session_context import conversation_context
+    from ..core import get_conv_loop_manager
+
+    conv_loop_manager = get_conv_loop_manager()
+    eff_mode = effective_mode_name(req.mode, getattr(state, "selected_auto_mode", None))
+    mode_policy = get_session_mode_policy(getattr(state, "tool_policies", None), eff_mode)
+    current_tools = resolve_enabled_tool_names(eff_mode, mode_policy)
+    tool_definitions = filter_tool_definitions(eff_mode, mode_policy)
+
+    if conv_loop_manager:
+        with conversation_context(resolved_id):
+            base_prompt = load_system_prompt() or ""
+        system_prompt = ProtocolManager().inject_protocol(base_prompt, tool_definitions)
+        if resolved_id in getattr(conv_loop_manager, "_loops", {}):
+            loop = conv_loop_manager._loops[resolved_id]
+            loop.tool_names = current_tools
+            loop.system_prompt = system_prompt
+        else:
+            conv_loop_manager.get_loop(
+                session_id=resolved_id,
+                system_prompt=system_prompt,
+                tool_names=current_tools,
+            )
+
     return {
         "success": True,
         "mode": req.mode,
         "description": get_mode_description(req.mode),
-        "message": f"当前会话模式已切换到: {req.mode}"
+        "tool_names": current_tools,
+        "message": f"当前会话模式已切换到: {req.mode}",
     }

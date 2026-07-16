@@ -472,3 +472,192 @@ def set_command_intercept(request: SettingsUpdateRequest) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Session tool policy (granular tool / sub-tool enablement)
+# ---------------------------------------------------------------------------
+
+class ToolPolicyGetRequest(BaseModel):
+    conversation_id: Optional[str] = None
+    policy_mode: Optional[str] = None  # strong_context | long_context (for auto sessions)
+
+
+class ToolPolicyUpdateRequest(BaseModel):
+    conversation_id: Optional[str] = None
+    policy_mode: str  # strong_context | long_context
+    policy: Dict[str, Any]
+
+
+
+def _sync_session_loop_tools(state, sid: Optional[str]) -> None:
+    """Refresh ConversationLoop tool_names/system_prompt from session mode + policy."""
+    if not sid:
+        return
+    from base.tool_policy import (
+        effective_mode_name,
+        filter_tool_definitions,
+        get_session_mode_policy,
+        resolve_enabled_tool_names,
+    )
+    from base.prompt_loader import load_system_prompt
+    from base.text_protocol import ProtocolManager
+    from base.session_context import conversation_context
+    from ..core import get_conv_loop_manager
+
+    conv_loop_manager = get_conv_loop_manager()
+    if not conv_loop_manager:
+        return
+
+    eff = effective_mode_name(
+        getattr(state, "context_mode", "strong_context"),
+        getattr(state, "selected_auto_mode", None),
+    )
+    mode_policy = get_session_mode_policy(getattr(state, "tool_policies", None), eff)
+    current_tools = resolve_enabled_tool_names(eff, mode_policy)
+    tool_definitions = filter_tool_definitions(eff, mode_policy)
+
+    with conversation_context(sid):
+        base_prompt = load_system_prompt() or ""
+    system_prompt = ProtocolManager().inject_protocol(base_prompt, tool_definitions)
+
+    if sid in getattr(conv_loop_manager, "_loops", {}):
+        loop = conv_loop_manager._loops[sid]
+        loop.tool_names = current_tools
+        loop.system_prompt = system_prompt
+
+
+def _resolve_session_state(conversation_id: Optional[str]):
+    from ..core import get_session_manager
+    session_manager = get_session_manager()
+    if not session_manager:
+        return None, None, "后端未初始化"
+    if conversation_id:
+        state = session_manager.get_session(conversation_id)
+        if not state:
+            return None, None, f"会话不存在: {conversation_id}"
+        return state, conversation_id, None
+    return session_manager.current, session_manager.current_session_id, None
+
+
+@router.get("/tools/catalog")
+def get_tools_catalog(mode: Optional[str] = None) -> Dict[str, Any]:
+    """Return tool catalog for a mode baseline (no session overrides)."""
+    try:
+        from base.tool_policy import catalog_for_mode, default_mode_policy, effective_mode_name
+        m = effective_mode_name(mode or "strong_context")
+        return {
+            "success": True,
+            "mode": m,
+            "catalog": catalog_for_mode(m),
+            "default_policy": default_mode_policy(m),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/tools/policy")
+def get_tool_policy(
+    conversation_id: Optional[str] = None,
+    policy_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Get session tool policy view for the current (or specified) mode."""
+    try:
+        from base.tool_policy import build_tool_policy_view
+
+        state, sid, err = _resolve_session_state(conversation_id)
+        if err:
+            return {"success": False, "error": err}
+
+        view = build_tool_policy_view(
+            context_mode=getattr(state, "context_mode", "strong_context"),
+            tool_policies=getattr(state, "tool_policies", None),
+            selected_auto_mode=policy_mode or getattr(state, "selected_auto_mode", None),
+        )
+        return {
+            "success": True,
+            "conversation_id": sid,
+            **view,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/tools/policy")
+def update_tool_policy(request: ToolPolicyUpdateRequest) -> Dict[str, Any]:
+    """Update session-level tool policy for one mode baseline and sync loop tools."""
+    try:
+        from base.tool_policy import (
+            build_tool_policy_view,
+            set_session_mode_policy,
+        )
+
+        if request.policy_mode not in ("strong_context", "long_context"):
+            return {"success": False, "error": f"无效 policy_mode: {request.policy_mode}"}
+
+        state, sid, err = _resolve_session_state(request.conversation_id)
+        if err:
+            return {"success": False, "error": err}
+
+        state.tool_policies = set_session_mode_policy(
+            getattr(state, "tool_policies", None),
+            request.policy_mode,
+            request.policy or {},
+        )
+
+        # Refresh loop tools/prompt for current effective mode (policy may affect it)
+        _sync_session_loop_tools(state, sid)
+
+        view = build_tool_policy_view(
+            context_mode=getattr(state, "context_mode", "strong_context"),
+            tool_policies=getattr(state, "tool_policies", None),
+            selected_auto_mode=request.policy_mode,
+        )
+        return {
+            "success": True,
+            "conversation_id": sid,
+            "message": f"会话工具策略已更新 ({request.policy_mode})",
+            **view,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/tools/policy/reset")
+def reset_tool_policy(
+    conversation_id: Optional[str] = None,
+    policy_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Reset session tool policy (one mode or all modes) to defaults (all enabled)."""
+    try:
+        from base.tool_policy import build_tool_policy_view, default_mode_policy, effective_mode_name
+
+        state, sid, err = _resolve_session_state(conversation_id)
+        if err:
+            return {"success": False, "error": err}
+
+        policies = dict(getattr(state, "tool_policies", None) or {})
+        if policy_mode in ("strong_context", "long_context"):
+            policies[policy_mode] = default_mode_policy(policy_mode)
+        else:
+            policies = {
+                "strong_context": default_mode_policy("strong_context"),
+                "long_context": default_mode_policy("long_context"),
+            }
+        state.tool_policies = policies
+
+        _sync_session_loop_tools(state, sid)
+
+        view = build_tool_policy_view(
+            context_mode=getattr(state, "context_mode", "strong_context"),
+            tool_policies=state.tool_policies,
+            selected_auto_mode=policy_mode or getattr(state, "selected_auto_mode", None),
+        )
+        return {
+            "success": True,
+            "conversation_id": sid,
+            "message": "工具策略已重置为默认（全部启用）",
+            **view,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}

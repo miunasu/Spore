@@ -285,6 +285,8 @@ class CLICommandHandler:
             new_mode = parts[1].lower()
             if new_mode in ["strong_context", "long_context", "auto"]:
                 self.state.context_mode = new_mode
+                if new_mode != "auto":
+                    self.state.selected_auto_mode = None
                 print(f"[模式已切换] {new_mode}")
                 print(f"[说明] {get_mode_description(new_mode)}")
                 print("[提示] 新模式将在下一次对话时生效")

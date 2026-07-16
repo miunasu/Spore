@@ -224,21 +224,28 @@ def run_single_round(
         target_state.interrupt_epoch if expected_epoch is None else expected_epoch
     )
 
-    message_text = message or ""
+    # Resolve tools via mode baseline + session tool policy
+    from base.tool_policy import (
+        effective_mode_name,
+        filter_tool_definitions,
+        get_session_mode_policy,
+        resolve_enabled_tool_names,
+    )
 
-    # 根据会话的模式确定工具集
+    selected_mode = None
     if target_state.context_mode == "auto" and message_text.strip():
         selected_mode = select_context_mode(message_text)
-        current_tools = get_tools_for_mode(selected_mode)
+        target_state.selected_auto_mode = selected_mode
+    elif target_state.context_mode == "auto":
+        selected_mode = getattr(target_state, "selected_auto_mode", None) or "strong_context"
     else:
-        current_tools = get_tools_for_mode(target_state.context_mode)
+        target_state.selected_auto_mode = None
 
-    # 准备系统提示和工具定义
-    tool_definitions = {
-        name: TOOL_DEFINITIONS[name]
-        for name in current_tools
-        if name in TOOL_DEFINITIONS
-    }
+    eff_mode = effective_mode_name(target_state.context_mode, selected_mode)
+    mode_policy = get_session_mode_policy(getattr(target_state, "tool_policies", None), eff_mode)
+    current_tools = resolve_enabled_tool_names(eff_mode, mode_policy)
+    tool_definitions = filter_tool_definitions(eff_mode, mode_policy)
+
     with conversation_context(conversation_id):
         base_prompt = load_system_prompt() or ""
     protocol_manager = ProtocolManager()
@@ -247,12 +254,15 @@ def run_single_round(
         tool_definitions,
     )
 
-    # 获取或创建该会话的 ConversationLoop 实例
+    # Get or create this session's ConversationLoop
     conv_loop = conv_loop_manager.get_loop(
         session_id=conversation_id,
         system_prompt=system_prompt,
-        tool_names=current_tools
+        tool_names=current_tools,
     )
+    # Keep loop fields in sync; runtime resolution prefers state policy
+    conv_loop.tool_names = current_tools
+    conv_loop.system_prompt = system_prompt
 
     with conv_loop.execution_lock:
         if target_state.interrupt_epoch != request_epoch:

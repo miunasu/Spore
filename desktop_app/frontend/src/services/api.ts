@@ -631,6 +631,83 @@ export const settingsApi = {
       `/api/settings/profiles/${encodeURIComponent(profileId)}`,
       { method: 'DELETE' }
     ),
+
+  // Session tool policy (granular tool / sub-tool switches)
+  getToolCatalog: (mode?: string) => {
+    const q = mode ? `?mode=${encodeURIComponent(mode)}` : '';
+    return request<{
+      success: boolean;
+      mode?: string;
+      catalog?: Array<{
+        id: string;
+        label: string;
+        description: string;
+        subs: Array<{ id: string; label: string; description: string }> | null;
+        sub_key?: string;
+      }>;
+      default_policy?: Record<string, any>;
+      error?: string;
+    }>(`/api/settings/tools/catalog${q}`);
+  },
+
+  getToolPolicy: (conversationId?: string, policyMode?: string) => {
+    const params = new URLSearchParams();
+    if (conversationId) params.set('conversation_id', conversationId);
+    if (policyMode) params.set('policy_mode', policyMode);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return request<{
+      success: boolean;
+      conversation_id?: string;
+      context_mode?: string;
+      policy_mode?: string;
+      available_policy_modes?: Array<{ value: string; label: string }>;
+      catalog?: Array<{
+        id: string;
+        label: string;
+        description: string;
+        subs: Array<{ id: string; label: string; description: string }> | null;
+        sub_key?: string;
+      }>;
+      policy?: Record<string, any>;
+      enabled_tools?: string[];
+      error?: string;
+    }>(`/api/settings/tools/policy${q}`);
+  },
+
+  updateToolPolicy: (payload: {
+    conversation_id?: string;
+    policy_mode: string;
+    policy: Record<string, any>;
+  }) =>
+    request<{
+      success: boolean;
+      conversation_id?: string;
+      context_mode?: string;
+      policy_mode?: string;
+      catalog?: Array<any>;
+      policy?: Record<string, any>;
+      enabled_tools?: string[];
+      message?: string;
+      error?: string;
+    }>('/api/settings/tools/policy', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  resetToolPolicy: (conversationId?: string, policyMode?: string) => {
+    const params = new URLSearchParams();
+    if (conversationId) params.set('conversation_id', conversationId);
+    if (policyMode) params.set('policy_mode', policyMode);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return request<{
+      success: boolean;
+      policy?: Record<string, any>;
+      enabled_tools?: string[];
+      message?: string;
+      error?: string;
+    }>(`/api/settings/tools/policy/reset${q}`, { method: 'POST' });
+  },
+
 };
 
 // Health check

@@ -72,16 +72,36 @@ class ConversationLoop:
         """动态获取当前会话状态"""
         return self.session_manager.current
 
-    def _get_current_tool_names(self) -> list:
-        """Return the active main-agent tool names without falling back to all tools."""
-        if self.tool_names:
-            return self.tool_names
-
-        from .agent_types import get_tools_for_mode
+    def _resolve_effective_mode(self) -> str:
+        """Resolve concrete tool baseline mode for this session."""
+        from .tool_policy import effective_mode_name
 
         context_mode = getattr(self.state, "context_mode", "strong_context")
-        effective_mode = "strong_context" if context_mode == "auto" else context_mode
-        return get_tools_for_mode(effective_mode)
+        # selected_auto_mode is set by desktop/CLI when context_mode == auto
+        selected = getattr(self.state, "selected_auto_mode", None) or getattr(self, "_selected_auto_mode", None)
+        return effective_mode_name(context_mode, selected)
+
+    def _get_session_tool_policy(self):
+        """Normalized tool policy for the effective mode."""
+        from .tool_policy import get_session_mode_policy
+
+        mode = self._resolve_effective_mode()
+        policies = getattr(self.state, "tool_policies", None) or {}
+        return mode, get_session_mode_policy(policies, mode)
+
+    def _get_current_tool_names(self) -> list:
+        """Return enabled top-level tools for the session mode + policy."""
+        from .tool_policy import resolve_enabled_tool_names
+
+        mode, policy = self._get_session_tool_policy()
+        return resolve_enabled_tool_names(mode, policy)
+
+    def _get_current_tool_definitions(self) -> dict:
+        """Return filtered TOOL_DEFINITIONS (including sub-tool enums)."""
+        from .tool_policy import filter_tool_definitions
+
+        mode, policy = self._get_session_tool_policy()
+        return filter_tool_definitions(mode, policy)
 
     def _conversation_id_for_context(self) -> Optional[str]:
         return getattr(self, "session_id", None) or get_current_conversation_id()
@@ -444,8 +464,8 @@ class ConversationLoop:
                 self.state.messages[-1]["content"] += f"\n\n{reminder}"
 
         if base_prompt:
-            # 使用指定的工具子集注入协议
-            tool_definitions = {name: TOOL_DEFINITIONS[name] for name in current_tool_names if name in TOOL_DEFINITIONS}
+            # Use filtered tool definitions (mode baseline + session policy, sub-tools)
+            tool_definitions = self._get_current_tool_definitions()
             current_system_prompt = self.protocol_manager.inject_protocol(
                 base_prompt,
                 tool_definitions,
@@ -517,6 +537,33 @@ class ConversationLoop:
         """Execute one parsed tool call and return a structured status."""
         tool_name = action.tool_name
         args = action.parameters
+
+        # Session/mode tool policy guard (top-level + sub-tools)
+        try:
+            from .tool_policy import check_action_allowed
+            mode, policy = self._get_session_tool_policy()
+            denied = check_action_allowed(tool_name, args or {}, mode, policy)
+            if denied:
+                log_tool_error(
+                    tool_name,
+                    denied,
+                    args,
+                    context={"mode": mode, "policy_denied": True},
+                )
+                return {
+                    "status": "error",
+                    "tool_name": tool_name,
+                    "arguments": args,
+                    "error": denied,
+                }
+        except Exception as policy_err:
+            return {
+                "status": "error",
+                "tool_name": tool_name,
+                "arguments": args,
+                "error": f"Tool policy check failed: {policy_err}",
+            }
+
         handler = TOOL_HANDLERS.get(tool_name)
 
         if handler is None:

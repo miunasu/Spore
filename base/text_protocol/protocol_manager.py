@@ -185,7 +185,7 @@ PROTOCOL_TEMPLATE = """
 
 你必须使用 Spore 文本 DSL 协议回复。协议块标识符必须独占一行。
 
-当前没有任何隐藏工具可直接调用；所有工具调用都必须使用 ACTION 协议块（ACTION_SINGLE/ACTION_SEQUENCE/ACTION_PARALLEL）输出，由用户侧系统执行。
+当前没有任何隐藏工具可直接调用；所有工具调用都必须使用 ACTION 协议块（{action_block_names_slash}）输出，由用户侧系统执行。
 所有输出内容必须被包裹在协议块内，协议块外不得出现任何非空内容。
 
 
@@ -406,8 +406,15 @@ class ProtocolManager:
             visible_tool_definitions.pop("multi_agent_dispatch", None)
 
         tool_docs = self.tool_doc_generator.generate(visible_tool_definitions)
+        if show_parallel:
+            action_block_names = "ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL"
+            action_block_names_slash = "ACTION_SINGLE/ACTION_SEQUENCE/ACTION_PARALLEL"
+        else:
+            action_block_names = "ACTION_SINGLE 或 ACTION_SEQUENCE"
+            action_block_names_slash = "ACTION_SINGLE/ACTION_SEQUENCE"
         return PROTOCOL_TEMPLATE.format(
-            action_block_names="ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL" if show_parallel else "ACTION_SINGLE 或 ACTION_SEQUENCE",
+            action_block_names=action_block_names,
+            action_block_names_slash=action_block_names_slash,
             parallel_action_docs=PARALLEL_ACTION_DOCS if show_parallel else "",
             tool_docs=tool_docs,
         )

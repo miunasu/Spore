@@ -161,6 +161,12 @@ def apply_runtime_config() -> Dict[str, Any]:
 
     applied_mode = new_config.context_mode
     effective_mode = "strong_context" if applied_mode == "auto" else applied_mode
+    from base.tool_policy import (
+        filter_tool_definitions,
+        get_session_mode_policy,
+        resolve_enabled_tool_names,
+    )
+    # Runtime config applies mode default; per-session policies stay on each state
     current_tools = get_tools_for_mode(effective_mode)
     tool_definitions = {
         name: TOOL_DEFINITIONS[name]
@@ -178,11 +184,17 @@ def apply_runtime_config() -> Dict[str, Any]:
             if _conv_loop_manager and session_id in _conv_loop_manager._loops:
                 with conversation_context(session_id):
                     base_prompt = load_system_prompt() or ""
-                system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
+                session_policy = get_session_mode_policy(
+                    getattr(session_state, "tool_policies", None) if session_state else None,
+                    effective_mode,
+                )
+                session_tools = resolve_enabled_tool_names(effective_mode, session_policy)
+                session_defs = filter_tool_definitions(effective_mode, session_policy)
+                system_prompt = protocol_manager.inject_protocol(base_prompt, session_defs)
                 loop = _conv_loop_manager._loops[session_id]
                 loop.config = new_config
                 loop.system_prompt = system_prompt
-                loop.tool_names = current_tools
+                loop.tool_names = session_tools
 
     if _conv_loop:
         _conv_loop.config = new_config

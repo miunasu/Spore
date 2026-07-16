@@ -46,6 +46,12 @@ class ConversationState:
         
         # TODO列表（每个会话独立）
         self.todos: List[Dict] = []
+        
+        # Session-level tool enable/disable policy, keyed by mode
+        # { "strong_context": { "file": {"read": True, ...}, ... }, "long_context": {...} }
+        self.tool_policies: Dict[str, Dict] = {}
+        # When context_mode is auto, last ModeSelector result for tool resolution
+        self.selected_auto_mode: Optional[str] = None
     
     def add_user_message(self, content: str) -> None:
         """添加用户消息"""

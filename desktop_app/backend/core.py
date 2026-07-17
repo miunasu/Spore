@@ -59,6 +59,16 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     
     # 4. 初始化多会话管理器
     _state = MultiSessionManager()
+
+    # 4b. 注册会话状态查找，供子 Agent / 工具策略按 conversation_id 解析策略
+    from base.tool_policy import set_session_state_lookup
+    set_session_state_lookup(
+        lambda conversation_id: (
+            _state.get_session(conversation_id)
+            if (_state is not None and conversation_id)
+            else (_state.current if _state is not None else None)
+        )
+    )
     
     # 5. 初始化 TODO 管理器（依赖会话管理器）
     from base.todo_manager import initialize_todo_manager
@@ -163,7 +173,7 @@ def apply_runtime_config() -> Dict[str, Any]:
     effective_mode = "strong_context" if applied_mode == "auto" else applied_mode
     from base.tool_policy import (
         filter_tool_definitions,
-        get_session_mode_policy,
+        resolve_mode_policy,
         resolve_enabled_tool_names,
     )
     # Runtime config applies mode default; per-session policies stay on each state
@@ -184,9 +194,9 @@ def apply_runtime_config() -> Dict[str, Any]:
             if _conv_loop_manager and session_id in _conv_loop_manager._loops:
                 with conversation_context(session_id):
                     base_prompt = load_system_prompt() or ""
-                session_policy = get_session_mode_policy(
-                    getattr(session_state, "tool_policies", None) if session_state else None,
+                session_policy = resolve_mode_policy(
                     effective_mode,
+                    getattr(session_state, "tool_policies", None) if session_state else None,
                 )
                 session_tools = resolve_enabled_tool_names(effective_mode, session_policy)
                 session_defs = filter_tool_definitions(effective_mode, session_policy)
@@ -200,8 +210,15 @@ def apply_runtime_config() -> Dict[str, Any]:
         _conv_loop.config = new_config
         with conversation_context("default"):
             base_prompt = load_system_prompt() or ""
-        _conv_loop.system_prompt = protocol_manager.inject_protocol(base_prompt, tool_definitions)
-        _conv_loop.tool_names = current_tools
+        default_state = _state.current if _state else None
+        default_policy = resolve_mode_policy(
+            effective_mode,
+            getattr(default_state, "tool_policies", None) if default_state else None,
+        )
+        default_tools = resolve_enabled_tool_names(effective_mode, default_policy)
+        default_defs = filter_tool_definitions(effective_mode, default_policy)
+        _conv_loop.system_prompt = protocol_manager.inject_protocol(base_prompt, default_defs)
+        _conv_loop.tool_names = default_tools
 
     if _cli_handler and _state:
         _cli_handler.state = _state.current

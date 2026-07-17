@@ -144,9 +144,21 @@ class SubAgentThread(threading.Thread):
         self.working_dir = working_dir  # 工作目录
         self.skill = skill  # 指定使用的skill
         self.parent_conversation_id = parent_conversation_id
-        
-        # 构建工具定义字典（用于文本协议）
-        self.tool_definitions = {name: TOOL_DEFINITIONS[name] for name in agent_type.tools_list if name in TOOL_DEFINITIONS}
+
+        # 继承父会话/全局工具策略：过滤子 Agent 可见工具与子能力
+        from .tool_policy import (
+            filter_tool_definitions,
+            resolve_conversation_tool_policy,
+            resolve_enabled_tool_names,
+        )
+        self._policy_mode, self._policy = resolve_conversation_tool_policy(parent_conversation_id)
+        parent_enabled = set(resolve_enabled_tool_names(self._policy_mode, self._policy))
+        filtered_defs = filter_tool_definitions(self._policy_mode, self._policy)
+        agent_tool_names = [
+            name for name in agent_type.tools_list
+            if name in TOOL_DEFINITIONS and name in parent_enabled and name in filtered_defs
+        ]
+        self.tool_definitions = {name: filtered_defs[name] for name in agent_tool_names}
         
         # 初始化文本协议管理器
         self.protocol_manager = ProtocolManager()
@@ -649,6 +661,41 @@ class SubAgentThread(threading.Thread):
             f"调用工具: {tool_name}\n参数:\n{args_str}",
             "INFO"
         )
+
+        # 父会话/全局工具策略硬拦截（与主 Agent 一致）
+        try:
+            from .tool_policy import check_action_allowed
+            denied = check_action_allowed(
+                tool_name,
+                args or {},
+                getattr(self, "_policy_mode", "strong_context"),
+                getattr(self, "_policy", None),
+            )
+            if denied:
+                log_tool_error(
+                    tool_name,
+                    denied,
+                    args,
+                    context={"policy_denied": True, "sub_agent": True},
+                )
+                return {
+                    "status": "error",
+                    "tool_name": tool_name,
+                    "arguments": args,
+                    "error": denied,
+                }
+        except Exception as policy_err:
+            return {
+                "status": "error",
+                "tool_name": tool_name,
+                "arguments": args,
+                "error": f"工具策略校验失败: {policy_err}",
+            }
+
+        if tool_name not in self.tool_definitions:
+            err = f"子 Agent 当前策略未启用工具: {tool_name}"
+            log_tool_error(tool_name, err, args, context={"sub_agent": True})
+            return {"status": "error", "tool_name": tool_name, "arguments": args, "error": err}
 
         handler = TOOL_HANDLERS.get(tool_name)
         if handler is None:

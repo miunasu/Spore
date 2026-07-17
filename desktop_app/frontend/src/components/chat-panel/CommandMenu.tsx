@@ -681,6 +681,15 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [toolPolicySaving, setToolPolicySaving] = useState(false);
   const [toolPolicyError, setToolPolicyError] = useState<string | null>(null);
   const [toolPolicyDirty, setToolPolicyDirty] = useState(false);
+  const [toolPolicyScope, setToolPolicyScope] = useState<'session' | 'global'>('session');
+  // Conversation the current tools-tab editor snapshot belongs to (session scope save target).
+  const [toolPolicyConversationId, setToolPolicyConversationId] = useState<string | null>(null);
+  const [toolPolicyScopes, setToolPolicyScopes] = useState<
+    Array<{ value: string; label: string; description?: string }>
+  >([
+    { value: 'session', label: '仅当前会话', description: '每个会话独立配置工具开关' },
+    { value: 'global', label: '全局', description: '所有会话共用同一套工具开关' },
+  ]);
   
   const { newConversation, activeConversationId } = useChatStore();
   const {
@@ -800,6 +809,17 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     setToolCatalog(response.catalog || []);
     setToolPolicy(response.policy || {});
     setToolEnabledList(response.enabled_tools || []);
+    if (response.scope === 'global' || response.scope === 'session') {
+      setToolPolicyScope(response.scope);
+    }
+    if (Array.isArray(response.available_scopes) && response.available_scopes.length) {
+      setToolPolicyScopes(response.available_scopes);
+    }
+    if (typeof response.conversation_id === 'string' && response.conversation_id) {
+      setToolPolicyConversationId(response.conversation_id);
+    } else if (activeConversationId) {
+      setToolPolicyConversationId(activeConversationId);
+    }
     setToolPolicyDirty(false);
   };
 
@@ -887,7 +907,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     setToolPolicyError(null);
     try {
       const response = await settingsApi.updateToolPolicy({
-        conversation_id: activeConversationId || undefined,
+        conversation_id: toolPolicyConversationId || activeConversationId || undefined,
         policy_mode: toolPolicyMode,
         policy: toolPolicy,
       });
@@ -908,7 +928,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     setToolPolicyError(null);
     try {
       const response = await settingsApi.resetToolPolicy(
-        activeConversationId || undefined,
+        toolPolicyConversationId || activeConversationId || undefined,
         toolPolicyMode
       );
       if (!response.success) {
@@ -923,6 +943,56 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       setToolPolicySaving(false);
     }
   };
+
+  const changeToolPolicyScope = async (scope: 'session' | 'global') => {
+    if (scope === toolPolicyScope) return;
+    if (toolPolicyDirty) {
+      const ok = window.confirm('当前有未保存的工具开关修改，切换作用域将丢弃它们，是否继续？');
+      if (!ok) return;
+    }
+    setToolPolicySaving(true);
+    setToolPolicyError(null);
+    try {
+      const response = await settingsApi.setToolPolicyScope({
+        scope,
+        conversation_id: activeConversationId || undefined,
+      });
+      if (!response.success) {
+        setToolPolicyError(response.error || '切换作用域失败');
+        return;
+      }
+      applyToolPolicyResponse(response);
+    } catch {
+      setToolPolicyError('切换作用域失败');
+    } finally {
+      setToolPolicySaving(false);
+    }
+  };
+
+  // 会话切换时，若正在编辑工具策略则刷新当前作用域下的配置
+  useEffect(() => {
+    if (!(showSettings && settingsTab === 'tools')) {
+      return;
+    }
+    // Global policy is shared across sessions; keep local edits unless user navigates away from tools tab.
+    if (toolPolicyScope === 'global') {
+      if (activeConversationId) {
+        setToolPolicyConversationId(activeConversationId);
+      }
+      return;
+    }
+    if (toolPolicyDirty) {
+      const ok = window.confirm(
+        '当前有未保存的工具开关修改，切换会话将丢弃它们，是否继续？'
+      );
+      if (!ok) {
+        // Keep editing the previous conversation's snapshot; save still targets toolPolicyConversationId.
+        return;
+      }
+    }
+    loadToolPolicy(toolPolicyMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeConversationId]);
 
   const openSettings = () => {
     setShowSettings(true);
@@ -1406,10 +1476,8 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                 <div className="space-y-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
-                      <div className="text-sm text-spore-text font-medium">会话工具策略</div>
-                      <div className="text-xs text-spore-muted">
-                        仅作用于当前会话。关闭后，工具说明 / 协议注入 / 执行校验都会剔除对应能力。
-                      </div>
+                      <div className="text-sm text-spore-text font-medium">工具策略</div>
+                      <div className="text-xs text-spore-muted">关闭后：工具说明 / 协议注入 / 执行校验都会剔除对应能力。作用域可在「仅当前会话」与「全局」之间切换。</div>
                       <div className="text-xs text-spore-muted">
                         当前会话模式: <span className="text-spore-highlight">{toolContextMode}</span>
                         {" · "}
@@ -1435,12 +1503,46 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                     </div>
                   </div>
 
-                  {true && (
+                  <div className="space-y-2">
+                    <div className="text-xs text-spore-muted">作用域</div>
+                    <div className="flex items-center gap-2">
+                      {toolPolicyScopes.map((s) => (
+                        <button
+                          key={s.value}
+                          onClick={() => changeToolPolicyScope(s.value as 'session' | 'global')}
+                          disabled={toolPolicyLoading || toolPolicySaving}
+                          title={s.description || s.label}
+                          className={`px-3 py-1.5 rounded-lg text-xs border transition-colors disabled:opacity-50 ${
+                            toolPolicyScope === s.value
+                              ? 'bg-spore-highlight/20 text-spore-highlight border-spore-highlight/60'
+                              : 'bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text hover:bg-spore-accent/50'
+                          }`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="text-[11px] text-spore-muted">
+                      {toolPolicyScope === 'global'
+                        ? '全局：所有会话共用 tool_policy.json 中的开关配置'
+                        : '仅当前会话：只影响当前对话，其它会话保持各自配置'}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs text-spore-muted">编辑的模式基线</div>
                     <div className="flex items-center gap-2">
                       {(["strong_context", "long_context"] as const).map((m) => (
                         <button
                           key={m}
                           onClick={() => {
+                            if (m === toolPolicyMode) return;
+                            if (toolPolicyDirty) {
+                              const ok = window.confirm(
+                                '当前有未保存的工具开关修改，切换模式基线将丢弃它们，是否继续？'
+                              );
+                              if (!ok) return;
+                            }
                             setToolPolicyMode(m);
                             loadToolPolicy(m);
                           }}
@@ -1454,7 +1556,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                         </button>
                       ))}
                     </div>
-                  )}
+                  </div>
 
                   {toolPolicyError && (
                     <div className="text-xs text-spore-error">{toolPolicyError}</div>

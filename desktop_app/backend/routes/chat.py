@@ -207,6 +207,9 @@ def run_single_round(
             "error": error,
         }
 
+    # Parameter is `message`; body uses message_text for optional/empty-safe access.
+    message_text = message or ""
+
     # 确保会话存在
     if conversation_id not in session_manager.list_sessions():
         session_manager.create_session(conversation_id)
@@ -224,12 +227,12 @@ def run_single_round(
         target_state.interrupt_epoch if expected_epoch is None else expected_epoch
     )
 
-    # Resolve tools via mode baseline + session tool policy
+    # Resolve tools via mode baseline + tool policy (session or global scope)
     from base.tool_policy import (
         effective_mode_name,
         filter_tool_definitions,
-        get_session_mode_policy,
         resolve_enabled_tool_names,
+        resolve_mode_policy,
     )
 
     selected_mode = None
@@ -242,7 +245,7 @@ def run_single_round(
         target_state.selected_auto_mode = None
 
     eff_mode = effective_mode_name(target_state.context_mode, selected_mode)
-    mode_policy = get_session_mode_policy(getattr(target_state, "tool_policies", None), eff_mode)
+    mode_policy = resolve_mode_policy(eff_mode, getattr(target_state, "tool_policies", None))
     current_tools = resolve_enabled_tool_names(eff_mode, mode_policy)
     tool_definitions = filter_tool_definitions(eff_mode, mode_policy)
 

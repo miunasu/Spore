@@ -57,6 +57,7 @@ temp/
 history/
 output/
 .spore_config_profiles.json
+tool_policy.json
 
 # 测试
 .pytest_cache/

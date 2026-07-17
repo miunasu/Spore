@@ -660,6 +660,8 @@ export const settingsApi = {
       conversation_id?: string;
       context_mode?: string;
       policy_mode?: string;
+      scope?: 'session' | 'global';
+      available_scopes?: Array<{ value: string; label: string; description?: string }>;
       available_policy_modes?: Array<{ value: string; label: string }>;
       catalog?: Array<{
         id: string;
@@ -670,6 +672,7 @@ export const settingsApi = {
       }>;
       policy?: Record<string, any>;
       enabled_tools?: string[];
+      message?: string;
       error?: string;
     }>(`/api/settings/tools/policy${q}`);
   },
@@ -684,12 +687,37 @@ export const settingsApi = {
       conversation_id?: string;
       context_mode?: string;
       policy_mode?: string;
+      scope?: 'session' | 'global';
+      available_scopes?: Array<{ value: string; label: string; description?: string }>;
       catalog?: Array<any>;
       policy?: Record<string, any>;
       enabled_tools?: string[];
+      synced_sessions?: number;
       message?: string;
       error?: string;
     }>('/api/settings/tools/policy', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  setToolPolicyScope: (payload: {
+    scope: 'session' | 'global';
+    conversation_id?: string;
+  }) =>
+    request<{
+      success: boolean;
+      scope?: 'session' | 'global';
+      conversation_id?: string;
+      context_mode?: string;
+      policy_mode?: string;
+      available_scopes?: Array<{ value: string; label: string; description?: string }>;
+      catalog?: Array<any>;
+      policy?: Record<string, any>;
+      enabled_tools?: string[];
+      synced_sessions?: number;
+      message?: string;
+      error?: string;
+    }>('/api/settings/tools/policy/scope', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -701,6 +729,12 @@ export const settingsApi = {
     const q = params.toString() ? `?${params.toString()}` : '';
     return request<{
       success: boolean;
+      conversation_id?: string;
+      context_mode?: string;
+      policy_mode?: string;
+      scope?: 'session' | 'global';
+      available_scopes?: Array<{ value: string; label: string; description?: string }>;
+      catalog?: Array<any>;
       policy?: Record<string, any>;
       enabled_tools?: string[];
       message?: string;

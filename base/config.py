@@ -341,6 +341,11 @@ class Config:
         # long_context: 长上下文处理模式（使用不同的工具集）
         # auto: 自动选择模式（由LLM判断使用哪种模式）
         self.context_mode: str = os.getenv("CONTEXT_MODE", "strong_context").lower().strip() or "strong_context"
+
+        # Tool policy scope: session (per conversation) | global (tool_policy.json for all)
+        # Runtime UI can still override via tool_policy.json "scope" field.
+        _tps = os.getenv("TOOL_POLICY_SCOPE", "session").lower().strip() or "session"
+        self.tool_policy_scope: str = _tps if _tps in ("session", "global") else "session"
         
     def validate(self) -> bool:
         """

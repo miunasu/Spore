@@ -69,8 +69,15 @@ class ConversationLoop:
     
     @property
     def state(self):
-        """动态获取当前会话状态"""
-        return self.session_manager.current
+        """动态获取当前会话状态。
+
+        Desktop: session_manager is MultiSessionManager (.current).
+        CLI: first arg may be a bare ConversationState (no .current).
+        """
+        sm = self.session_manager
+        if hasattr(sm, "current"):
+            return sm.current
+        return sm
 
     def _resolve_effective_mode(self) -> str:
         """Resolve concrete tool baseline mode for this session."""
@@ -82,12 +89,12 @@ class ConversationLoop:
         return effective_mode_name(context_mode, selected)
 
     def _get_session_tool_policy(self):
-        """Normalized tool policy for the effective mode."""
-        from .tool_policy import get_session_mode_policy
+        """Normalized tool policy for the effective mode (honors global/session scope)."""
+        from .tool_policy import resolve_mode_policy
 
         mode = self._resolve_effective_mode()
         policies = getattr(self.state, "tool_policies", None) or {}
-        return mode, get_session_mode_policy(policies, mode)
+        return mode, resolve_mode_policy(mode, policies)
 
     def _get_current_tool_names(self) -> list:
         """Return enabled top-level tools for the session mode + policy."""

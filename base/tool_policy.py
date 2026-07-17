@@ -1,5 +1,10 @@
 """
-Tool policy: mode baselines + session-level enable/disable for tools and sub-tools.
+Tool policy: mode baselines + enable/disable for tools and sub-tools.
+
+Scope:
+  - session: per-conversation policies stored on ConversationState.tool_policies
+  - global: shared policies persisted in tool_policy.json for all sessions
+
 
 Sub-tools (enum-level):
   - file: read / write / delete
@@ -11,6 +16,9 @@ Leaf tools (no subs): skill_query, execute_command, Grep
 from __future__ import annotations
 
 import copy
+import json
+import threading
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .agent_types import get_tools_for_mode, LONG_CONTEXT_TOOLS, STRONG_CONTEXT_TOOLS
@@ -146,9 +154,15 @@ def normalize_mode_policy(mode: str, raw: Optional[Dict[str, Any]] = None) -> To
                 result[tool_name] = {k: True for k in base_val}
             elif isinstance(value, dict):
                 merged = dict(base_val)
+                # Case-insensitive merge for catalog sub ids (file/edit/web_browser lower;
+                # multi_agent_dispatch PascalCase).
+                lower_map = {str(k).lower(): k for k in merged}
                 for sub_id, enabled in value.items():
-                    if sub_id in merged:
-                        merged[sub_id] = bool(enabled)
+                    key = str(sub_id)
+                    if key in merged:
+                        merged[key] = bool(enabled)
+                    elif key.lower() in lower_map:
+                        merged[lower_map[key.lower()]] = bool(enabled)
                 result[tool_name] = merged
             # else keep default
         else:
@@ -257,7 +271,7 @@ def _annotate_enabled_subs(
     note = "、".join(labels) if labels else "无"
     func = definition.get("function") or {}
     desc = (func.get("description") or "").rstrip()
-    marker = "【当前会话启用的子能力】"
+    marker = "【当前策略启用的子能力】"
     if marker in desc:
         head = desc.split(marker)[0].rstrip()
         desc = head
@@ -327,6 +341,30 @@ def filter_tool_definitions(
     return result
 
 
+def _normalize_sub_value(tool_name: str, raw: Any) -> Optional[str]:
+    """Normalize sub-tool id to catalog form for policy comparison."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+
+    # file / edit / web_browser catalog ids are lowercase
+    if tool_name in ("file", "edit", "web_browser"):
+        return text.lower()
+
+    # multi_agent agent types are PascalCase; match case-insensitively to catalog
+    if tool_name == "multi_agent_dispatch":
+        meta = TOOL_CATALOG.get(tool_name) or {}
+        for sub in meta.get("subs") or []:
+            sid = sub.get("id")
+            if isinstance(sid, str) and sid.lower() == text.lower():
+                return sid
+        return text
+
+    return text
+
+
 def _extract_sub_value(tool_name: str, params: Dict[str, Any]) -> Optional[str]:
     key = SUBTOOL_KEY_BY_TOOL.get(tool_name)
     if not key:
@@ -336,11 +374,12 @@ def _extract_sub_value(tool_name: str, params: Dict[str, Any]) -> Optional[str]:
         return None
     raw = params.get(key)
     if raw is None and tool_name == "edit":
-        # default edit type is single
+        # Match handle_edit default type="single"
         return "single"
     if raw is None and tool_name == "file":
-        return None
-    return str(raw) if raw is not None else None
+        # Match handle_file default type="read" so disabled-read cannot be bypassed
+        return "read"
+    return _normalize_sub_value(tool_name, raw)
 
 
 def check_action_allowed(
@@ -355,13 +394,14 @@ def check_action_allowed(
     mode = effective_mode_name(mode)
     pol = normalize_mode_policy(mode, policy)
     params = params or {}
+    scope_label = "全局策略" if get_policy_scope() == "global" else "当前会话策略"
 
     baseline = get_tools_for_mode(mode)
     if tool_name not in baseline:
         return f"当前模式 ({mode}) 不提供工具: {tool_name}"
 
     if not is_tool_enabled(pol, tool_name):
-        return f"工具已在当前会话禁用: {tool_name}"
+        return f"工具已在{scope_label}中禁用: {tool_name}"
 
     # multi_agent_dispatch: validate each task's agent_type
     if tool_name == "multi_agent_dispatch":
@@ -382,9 +422,10 @@ def check_action_allowed(
             agent_type = task.get("agent_type")
             if agent_type is None:
                 continue
-            if str(agent_type) not in allowed:
+            normalized = _normalize_sub_value(tool_name, agent_type)
+            if normalized not in allowed:
                 return (
-                    f"子 Agent 类型已禁用: {agent_type} "
+                    f"子 Agent 类型已在{scope_label}中禁用: {agent_type} "
                     f"(可用: {', '.join(sorted(allowed)) or '无'})"
                 )
         return None
@@ -401,7 +442,7 @@ def check_action_allowed(
     allowed = enabled_subtools(pol, tool_name) or []
     if sub_val not in allowed:
         return (
-            f"工具子能力已禁用: {tool_name}.{sub_val} "
+            f"工具子能力已在{scope_label}中禁用: {tool_name}.{sub_val} "
             f"(可用: {', '.join(allowed) or '无'})"
         )
     return None
@@ -427,6 +468,7 @@ def build_tool_policy_view(
     context_mode: str,
     tool_policies: Optional[SessionToolPolicies],
     selected_auto_mode: Optional[str] = None,
+    scope: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Full payload for settings UI / API.
@@ -436,14 +478,32 @@ def build_tool_policy_view(
     """
     context_mode = (context_mode or "strong_context").strip().lower()
     if context_mode == "auto":
-        policy_mode = selected_auto_mode if selected_auto_mode in ("strong_context", "long_context") else "strong_context"
+        policy_mode = (
+            selected_auto_mode
+            if selected_auto_mode in ("strong_context", "long_context")
+            else "strong_context"
+        )
     else:
         policy_mode = effective_mode_name(context_mode)
 
-    policy = get_session_mode_policy(tool_policies, policy_mode)
+    sc = normalize_scope(scope)
+    policy = resolve_mode_policy(policy_mode, tool_policies, scope=sc)
     return {
         "context_mode": context_mode,
         "policy_mode": policy_mode,
+        "scope": sc,
+        "available_scopes": [
+            {
+                "value": "session",
+                "label": "仅当前会话",
+                "description": "每个会话独立配置工具开关，互不影响",
+            },
+            {
+                "value": "global",
+                "label": "全局",
+                "description": "所有会话共用同一套工具开关（写入 tool_policy.json）",
+            },
+        ],
         "available_policy_modes": [
             {"value": "strong_context", "label": "强上下文"},
             {"value": "long_context", "label": "长上下文"},
@@ -465,3 +525,209 @@ def set_session_mode_policy(
     result: SessionToolPolicies = dict(tool_policies or {})
     result[mode] = normalized
     return result
+
+
+# ---------------------------------------------------------------------------
+# Scope + global persistence (tool_policy.json)
+# ---------------------------------------------------------------------------
+
+VALID_SCOPES = ("session", "global")
+_STORE_LOCK = threading.RLock()
+_cached_store: Optional[Dict[str, Any]] = None
+
+
+def _project_root() -> Path:
+    try:
+        from .config import _PROJECT_ROOT
+        return Path(_PROJECT_ROOT)
+    except Exception:
+        return Path.cwd()
+
+
+def policy_store_path() -> Path:
+    """Shared global policy file next to .env / project root."""
+    return _project_root() / "tool_policy.json"
+
+
+def normalize_scope(scope: Optional[str] = None) -> str:
+    if scope in VALID_SCOPES:
+        return scope  # type: ignore[return-value]
+    return get_policy_scope()
+
+
+def _default_store() -> Dict[str, Any]:
+    scope = "session"
+    try:
+        from .config import get_config
+        cfg_scope = getattr(get_config(), "tool_policy_scope", "session")
+        if isinstance(cfg_scope, str) and cfg_scope.strip().lower() in VALID_SCOPES:
+            scope = cfg_scope.strip().lower()
+    except Exception:
+        pass
+    return {
+        "version": 1,
+        "scope": scope,
+        "modes": {
+            "strong_context": default_mode_policy("strong_context"),
+            "long_context": default_mode_policy("long_context"),
+        },
+    }
+
+
+def load_policy_store(force_reload: bool = False) -> Dict[str, Any]:
+    """Load global store (scope + per-mode policies). Cached in-process."""
+    global _cached_store
+    with _STORE_LOCK:
+        if _cached_store is not None and not force_reload:
+            return copy.deepcopy(_cached_store)
+
+        store = _default_store()
+        path = policy_store_path()
+        if path.is_file():
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                if isinstance(raw, dict):
+                    if raw.get("scope") in VALID_SCOPES:
+                        store["scope"] = raw["scope"]
+                    modes = raw.get("modes") or {}
+                    if isinstance(modes, dict):
+                        for m in ("strong_context", "long_context"):
+                            if m in modes and isinstance(modes[m], dict):
+                                store["modes"][m] = normalize_mode_policy(m, modes[m])
+            except Exception:
+                pass
+
+        _cached_store = copy.deepcopy(store)
+        return copy.deepcopy(store)
+
+
+def save_policy_store(store: Dict[str, Any]) -> Dict[str, Any]:
+    """Atomically persist global store and refresh cache."""
+    global _cached_store
+    with _STORE_LOCK:
+        scope = store.get("scope") if store.get("scope") in VALID_SCOPES else "session"
+        modes_in = store.get("modes") or {}
+        normalized = {
+            "version": 1,
+            "scope": scope,
+            "modes": {
+                "strong_context": normalize_mode_policy(
+                    "strong_context",
+                    modes_in.get("strong_context") if isinstance(modes_in, dict) else None,
+                ),
+                "long_context": normalize_mode_policy(
+                    "long_context",
+                    modes_in.get("long_context") if isinstance(modes_in, dict) else None,
+                ),
+            },
+        }
+        path = policy_store_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(normalized, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        tmp.replace(path)
+        _cached_store = copy.deepcopy(normalized)
+        return copy.deepcopy(normalized)
+
+
+def get_policy_scope() -> str:
+    return load_policy_store().get("scope", "session")
+
+
+def set_policy_scope(scope: str) -> str:
+    """Set global/session scope. Does not rewrite mode policies."""
+    if scope not in VALID_SCOPES:
+        raise ValueError(f"invalid scope: {scope}")
+    store = load_policy_store()
+    store["scope"] = scope
+    save_policy_store(store)
+    return scope
+
+
+def get_global_mode_policy(mode: str) -> ToolModePolicy:
+    mode = effective_mode_name(mode)
+    store = load_policy_store()
+    modes = store.get("modes") or {}
+    return normalize_mode_policy(mode, modes.get(mode) if isinstance(modes, dict) else None)
+
+
+def set_global_mode_policy(mode: str, policy: Dict[str, Any]) -> ToolModePolicy:
+    mode = effective_mode_name(mode)
+    store = load_policy_store()
+    modes = dict(store.get("modes") or {})
+    modes[mode] = normalize_mode_policy(mode, policy)
+    store["modes"] = modes
+    save_policy_store(store)
+    return modes[mode]
+
+
+def reset_global_mode_policy(mode: Optional[str] = None) -> Dict[str, ToolModePolicy]:
+    """Reset one mode or all modes in the global store to full-open defaults."""
+    store = load_policy_store()
+    modes = dict(store.get("modes") or {})
+    if mode in ("strong_context", "long_context"):
+        modes[mode] = default_mode_policy(mode)
+    else:
+        modes = {
+            "strong_context": default_mode_policy("strong_context"),
+            "long_context": default_mode_policy("long_context"),
+        }
+    store["modes"] = modes
+    save_policy_store(store)
+    return modes
+
+
+def resolve_mode_policy(
+    mode: str,
+    session_tool_policies: Optional[SessionToolPolicies] = None,
+    scope: Optional[str] = None,
+) -> ToolModePolicy:
+    """Pick session or global policy for a mode based on scope setting."""
+    mode = effective_mode_name(mode)
+    sc = normalize_scope(scope)
+    if sc == "global":
+        return get_global_mode_policy(mode)
+    return get_session_mode_policy(session_tool_policies, mode)
+
+
+# Optional lookup: conversation_id -> ConversationState-like object
+_session_state_lookup = None  # type: ignore
+
+
+def set_session_state_lookup(lookup) -> None:
+    """Register session state resolver used by sub-agents / shared runtime helpers."""
+    global _session_state_lookup
+    _session_state_lookup = lookup
+
+
+def resolve_conversation_tool_policy(
+    conversation_id: Optional[str] = None,
+) -> Tuple[str, ToolModePolicy]:
+    """
+    Resolve (effective_mode, policy) for a conversation.
+
+    Uses registered session lookup when available; otherwise falls back to
+    global/default policy with strong_context mode.
+
+    Lookup is attempted even when conversation_id is None so single-session
+    CLI runtimes can still return their sole ConversationState.
+    """
+    state = None
+    if _session_state_lookup is not None:
+        try:
+            state = _session_state_lookup(conversation_id)
+        except Exception:
+            state = None
+
+    mode = effective_mode_name(
+        getattr(state, "context_mode", None) or "strong_context",
+        getattr(state, "selected_auto_mode", None),
+    )
+    policy = resolve_mode_policy(
+        mode,
+        getattr(state, "tool_policies", None) if state is not None else None,
+    )
+    return mode, policy

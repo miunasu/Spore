@@ -489,16 +489,21 @@ class ToolPolicyUpdateRequest(BaseModel):
     policy: Dict[str, Any]
 
 
+class ToolPolicyScopeRequest(BaseModel):
+    scope: str  # session | global
+    conversation_id: Optional[str] = None
+
+
 
 def _sync_session_loop_tools(state, sid: Optional[str]) -> None:
-    """Refresh ConversationLoop tool_names/system_prompt from session mode + policy."""
+    """Refresh ConversationLoop tool_names/system_prompt from mode + effective policy scope."""
     if not sid:
         return
     from base.tool_policy import (
         effective_mode_name,
         filter_tool_definitions,
-        get_session_mode_policy,
         resolve_enabled_tool_names,
+        resolve_mode_policy,
     )
     from base.prompt_loader import load_system_prompt
     from base.text_protocol import ProtocolManager
@@ -513,7 +518,7 @@ def _sync_session_loop_tools(state, sid: Optional[str]) -> None:
         getattr(state, "context_mode", "strong_context"),
         getattr(state, "selected_auto_mode", None),
     )
-    mode_policy = get_session_mode_policy(getattr(state, "tool_policies", None), eff)
+    mode_policy = resolve_mode_policy(eff, getattr(state, "tool_policies", None))
     current_tools = resolve_enabled_tool_names(eff, mode_policy)
     tool_definitions = filter_tool_definitions(eff, mode_policy)
 
@@ -525,6 +530,24 @@ def _sync_session_loop_tools(state, sid: Optional[str]) -> None:
         loop = conv_loop_manager._loops[sid]
         loop.tool_names = current_tools
         loop.system_prompt = system_prompt
+
+
+def _sync_all_session_loop_tools() -> int:
+    """Refresh tools/prompt for every live conversation loop (used after global policy changes)."""
+    from ..core import get_session_manager, get_conv_loop_manager
+
+    session_manager = get_session_manager()
+    conv_loop_manager = get_conv_loop_manager()
+    if not session_manager or not conv_loop_manager:
+        return 0
+    count = 0
+    for sid in list(getattr(conv_loop_manager, "_loops", {}).keys()):
+        state = session_manager.get_session(sid)
+        if state is None:
+            continue
+        _sync_session_loop_tools(state, sid)
+        count += 1
+    return count
 
 
 def _resolve_session_state(conversation_id: Optional[str]):
@@ -561,9 +584,9 @@ def get_tool_policy(
     conversation_id: Optional[str] = None,
     policy_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Get session tool policy view for the current (or specified) mode."""
+    """Get effective tool policy view for the current scope (session or global)."""
     try:
-        from base.tool_policy import build_tool_policy_view
+        from base.tool_policy import build_tool_policy_view, get_policy_scope
 
         state, sid, err = _resolve_session_state(conversation_id)
         if err:
@@ -573,6 +596,7 @@ def get_tool_policy(
             context_mode=getattr(state, "context_mode", "strong_context"),
             tool_policies=getattr(state, "tool_policies", None),
             selected_auto_mode=policy_mode or getattr(state, "selected_auto_mode", None),
+            scope=get_policy_scope(),
         )
         return {
             "success": True,
@@ -585,10 +609,12 @@ def get_tool_policy(
 
 @router.post("/tools/policy")
 def update_tool_policy(request: ToolPolicyUpdateRequest) -> Dict[str, Any]:
-    """Update session-level tool policy for one mode baseline and sync loop tools."""
+    """Update tool policy for one mode baseline under the current scope."""
     try:
         from base.tool_policy import (
             build_tool_policy_view,
+            get_policy_scope,
+            set_global_mode_policy,
             set_session_mode_policy,
         )
 
@@ -599,24 +625,78 @@ def update_tool_policy(request: ToolPolicyUpdateRequest) -> Dict[str, Any]:
         if err:
             return {"success": False, "error": err}
 
-        state.tool_policies = set_session_mode_policy(
-            getattr(state, "tool_policies", None),
-            request.policy_mode,
-            request.policy or {},
-        )
-
-        # Refresh loop tools/prompt for current effective mode (policy may affect it)
-        _sync_session_loop_tools(state, sid)
+        scope = get_policy_scope()
+        synced = 0
+        if scope == "global":
+            set_global_mode_policy(request.policy_mode, request.policy or {})
+            synced = _sync_all_session_loop_tools()
+            message = f"全局工具策略已更新 ({request.policy_mode})，已同步 {synced} 个会话"
+        else:
+            state.tool_policies = set_session_mode_policy(
+                getattr(state, "tool_policies", None),
+                request.policy_mode,
+                request.policy or {},
+            )
+            _sync_session_loop_tools(state, sid)
+            message = f"会话工具策略已更新 ({request.policy_mode})"
 
         view = build_tool_policy_view(
             context_mode=getattr(state, "context_mode", "strong_context"),
             tool_policies=getattr(state, "tool_policies", None),
             selected_auto_mode=request.policy_mode,
+            scope=scope,
         )
         return {
             "success": True,
             "conversation_id": sid,
-            "message": f"会话工具策略已更新 ({request.policy_mode})",
+            "synced_sessions": synced,
+            "message": message,
+            **view,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/tools/policy/scope")
+def update_tool_policy_scope(request: ToolPolicyScopeRequest) -> Dict[str, Any]:
+    """Switch tool policy scope between session and global, then refresh loops."""
+    try:
+        from base.tool_policy import (
+            VALID_SCOPES,
+            build_tool_policy_view,
+            set_policy_scope,
+        )
+
+        scope = (request.scope or "").strip().lower()
+        if scope not in VALID_SCOPES:
+            return {"success": False, "error": f"无效 scope: {request.scope}，可选: session / global"}
+
+        set_policy_scope(scope)
+        synced = _sync_all_session_loop_tools()
+
+        state, sid, err = _resolve_session_state(request.conversation_id)
+        if err:
+            # scope already saved; still report success with limited payload
+            return {
+                "success": True,
+                "scope": scope,
+                "synced_sessions": synced,
+                "message": f"工具策略作用域已切换为: {scope}",
+            }
+
+        view = build_tool_policy_view(
+            context_mode=getattr(state, "context_mode", "strong_context"),
+            tool_policies=getattr(state, "tool_policies", None),
+            selected_auto_mode=getattr(state, "selected_auto_mode", None),
+            scope=scope,
+        )
+        return {
+            "success": True,
+            "conversation_id": sid,
+            "synced_sessions": synced,
+            "message": (
+                f"工具策略作用域已切换为「{'全局' if scope == 'global' else '仅当前会话'}」"
+            ),
             **view,
         }
     except Exception as e:
@@ -628,35 +708,47 @@ def reset_tool_policy(
     conversation_id: Optional[str] = None,
     policy_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Reset session tool policy (one mode or all modes) to defaults (all enabled)."""
+    """Reset tool policy (one mode or all) to defaults under the current scope."""
     try:
-        from base.tool_policy import build_tool_policy_view, default_mode_policy, effective_mode_name
+        from base.tool_policy import (
+            build_tool_policy_view,
+            default_mode_policy,
+            get_policy_scope,
+            reset_global_mode_policy,
+        )
 
         state, sid, err = _resolve_session_state(conversation_id)
         if err:
             return {"success": False, "error": err}
 
-        policies = dict(getattr(state, "tool_policies", None) or {})
-        if policy_mode in ("strong_context", "long_context"):
-            policies[policy_mode] = default_mode_policy(policy_mode)
+        scope = get_policy_scope()
+        if scope == "global":
+            reset_global_mode_policy(policy_mode if policy_mode in ("strong_context", "long_context") else None)
+            synced = _sync_all_session_loop_tools()
+            message = f"全局工具策略已重置为默认（全部启用），已同步 {synced} 个会话"
         else:
-            policies = {
-                "strong_context": default_mode_policy("strong_context"),
-                "long_context": default_mode_policy("long_context"),
-            }
-        state.tool_policies = policies
-
-        _sync_session_loop_tools(state, sid)
+            policies = dict(getattr(state, "tool_policies", None) or {})
+            if policy_mode in ("strong_context", "long_context"):
+                policies[policy_mode] = default_mode_policy(policy_mode)
+            else:
+                policies = {
+                    "strong_context": default_mode_policy("strong_context"),
+                    "long_context": default_mode_policy("long_context"),
+                }
+            state.tool_policies = policies
+            _sync_session_loop_tools(state, sid)
+            message = "会话工具策略已重置为默认（全部启用）"
 
         view = build_tool_policy_view(
             context_mode=getattr(state, "context_mode", "strong_context"),
-            tool_policies=state.tool_policies,
+            tool_policies=getattr(state, "tool_policies", None),
             selected_auto_mode=policy_mode or getattr(state, "selected_auto_mode", None),
+            scope=scope,
         )
         return {
             "success": True,
             "conversation_id": sid,
-            "message": "工具策略已重置为默认（全部启用）",
+            "message": message,
             **view,
         }
     except Exception as e:

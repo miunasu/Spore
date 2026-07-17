@@ -564,8 +564,8 @@ def set_context_mode(req: SetModeRequest) -> Dict[str, Any]:
     from base.tool_policy import (
         effective_mode_name,
         filter_tool_definitions,
-        get_session_mode_policy,
         resolve_enabled_tool_names,
+        resolve_mode_policy,
     )
     from base.prompt_loader import load_system_prompt
     from base.text_protocol import ProtocolManager
@@ -574,7 +574,7 @@ def set_context_mode(req: SetModeRequest) -> Dict[str, Any]:
 
     conv_loop_manager = get_conv_loop_manager()
     eff_mode = effective_mode_name(req.mode, getattr(state, "selected_auto_mode", None))
-    mode_policy = get_session_mode_policy(getattr(state, "tool_policies", None), eff_mode)
+    mode_policy = resolve_mode_policy(eff_mode, getattr(state, "tool_policies", None))
     current_tools = resolve_enabled_tool_names(eff_mode, mode_policy)
     tool_definitions = filter_tool_definitions(eff_mode, mode_policy)
 

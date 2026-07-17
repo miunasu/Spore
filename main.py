@@ -65,6 +65,10 @@ def main() -> int:
     
     # 初始化状态管理器
     state = ConversationState()
+
+    # 注册 CLI 单会话状态查找，供子 Agent 继承工具策略
+    from base.tool_policy import set_session_state_lookup
+    set_session_state_lookup(lambda _conversation_id: state)
     
     # 初始化 characters 系统（如果配置了默认角色）
     if config.default_character:
@@ -143,12 +147,12 @@ def main() -> int:
         # 使用processed_input或原始user_input作为实际输入
         actual_input = processed_input if processed_input else user_input
 
-        # Sync tools from session mode + tool policy (session-level overrides)
+        # Sync tools from mode + tool policy (honors session/global scope)
         from base.tool_policy import (
             effective_mode_name,
             filter_tool_definitions,
-            get_session_mode_policy,
             resolve_enabled_tool_names,
+            resolve_mode_policy,
         )
 
         selected_mode = None
@@ -160,7 +164,7 @@ def main() -> int:
             state.selected_auto_mode = None
 
         eff_mode = effective_mode_name(state.context_mode, selected_mode)
-        mode_policy = get_session_mode_policy(getattr(state, "tool_policies", None), eff_mode)
+        mode_policy = resolve_mode_policy(eff_mode, getattr(state, "tool_policies", None))
         new_tools = resolve_enabled_tool_names(eff_mode, mode_policy)
         if new_tools != current_tools:
             current_tools = new_tools

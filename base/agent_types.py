@@ -32,6 +32,7 @@ LONG_CONTEXT_TOOLS = [
     "Grep",
     "web_browser",
     "multi_agent_dispatch",
+    "check_subagent_status",
 ]
 
 # 向后兼容：默认使用强上下文模式

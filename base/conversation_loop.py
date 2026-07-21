@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from .state_manager import ConversationState
-from .tools import TOOL_HANDLERS, TOOL_DEFINITIONS
+from .tools import CURRENT_ACTION_BLOCK_MODE, TOOL_HANDLERS, TOOL_DEFINITIONS
 from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock, is_standalone_marker, has_stop_reason_marker, is_stop_reason_line
 from .utils import (
     json_query, 
@@ -743,17 +743,39 @@ class ConversationLoop:
         assistant_content = full_reply or (prefix_text + "\n\n" + action_block.raw_text if prefix_text else action_block.raw_text)
         self.state.messages.append({"role": "assistant", "content": assistant_content})
 
+        def _execute_in_block_mode(action: ParsedAction) -> Dict[str, Any]:
+            token = CURRENT_ACTION_BLOCK_MODE.set(action_block.mode)
+            try:
+                return self._execute_single_action(action)
+            finally:
+                CURRENT_ACTION_BLOCK_MODE.reset(token)
+
         should_break = False
         if action_block.mode == "single":
-            execution = self._execute_single_action(action_block.first_action)
+            execution = _execute_in_block_mode(action_block.first_action)
             result_text = self._format_single_execution_result(execution)
             should_break = execution.get("status") == "interrupted"
+            if (
+                execution.get("status") == "success"
+                and execution.get("tool_name") == "multi_agent_dispatch"
+            ):
+                try:
+                    dispatch_payload = json.loads(execution.get("result") or "")
+                except (TypeError, ValueError):
+                    dispatch_payload = None
+                if (
+                    isinstance(dispatch_payload, dict)
+                    and dispatch_payload.get("dispatch_mode") == "async"
+                ):
+                    # 派发 RESULT 已写入历史后直接结束当前任务，不再额外请求一轮 LLM。
+                    should_break = True
+                    self.state.last_answer = ""
 
         elif action_block.mode == "sequence":
             results = []
             stopped_at = None
             for action in action_block.actions:
-                execution = self._execute_single_action(action)
+                execution = _execute_in_block_mode(action)
                 step_result = {
                     "step": action.step_index,
                     "tool_name": action.tool_name,
@@ -784,7 +806,7 @@ class ConversationLoop:
                 futures = []
                 for action in action_block.actions:
                     ctx = contextvars.copy_context()
-                    futures.append((executor.submit(ctx.run, self._execute_single_action, action), action))
+                    futures.append((executor.submit(ctx.run, _execute_in_block_mode, action), action))
                 for future, action in futures:
                     execution = future.result()
                     task_id = action.task_id or action.tool_name

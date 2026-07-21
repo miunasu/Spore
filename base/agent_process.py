@@ -12,7 +12,7 @@ import logging
 import json
 import contextvars
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Any, Optional
+from typing import Callable, Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,20 +57,28 @@ def get_current_agent_manager():
 
 
 # 按会话注册的Agent管理器（用于会话级中断，避免误伤其他会话的子Agent）
-_agent_managers_by_conversation: Dict[str, "AgentProcessManager"] = {}
+# 异步派发模式下同一会话可并存多批在途派发，因此登记为列表
+_agent_managers_by_conversation: Dict[str, List["AgentProcessManager"]] = {}
 _conversation_registry_lock = threading.Lock()
 
 
 def register_conversation_agent_manager(conversation_id: str, manager) -> None:
-    """将Agent管理器登记到其所属会话（同会话后启动的派发覆盖前一个）"""
+    """将Agent管理器登记到其所属会话（同会话允许并存多批派发）"""
     with _conversation_registry_lock:
-        _agent_managers_by_conversation[conversation_id] = manager
+        managers = _agent_managers_by_conversation.setdefault(conversation_id, [])
+        if manager not in managers:
+            managers.append(manager)
 
 
 def unregister_conversation_agent_manager(conversation_id: str, manager) -> None:
-    """注销会话的Agent管理器（仅当登记的仍是该实例时）"""
+    """注销会话名下的指定Agent管理器实例"""
     with _conversation_registry_lock:
-        if _agent_managers_by_conversation.get(conversation_id) is manager:
+        managers = _agent_managers_by_conversation.get(conversation_id)
+        if not managers:
+            return
+        if manager in managers:
+            managers.remove(manager)
+        if not managers:
             _agent_managers_by_conversation.pop(conversation_id, None)
 
 
@@ -85,10 +93,14 @@ def terminate_conversation_agents(conversation_id: str) -> bool:
         bool: 该会话是否存在登记的Agent管理器
     """
     with _conversation_registry_lock:
-        manager = _agent_managers_by_conversation.pop(conversation_id, None)
-    if manager is None:
+        managers = _agent_managers_by_conversation.pop(conversation_id, [])
+    if not managers:
         return False
-    manager.terminate_own_agents()
+    for manager in managers:
+        try:
+            manager.terminate_own_agents()
+        except Exception as e:
+            log_error("AGENT_TERMINATE_ERROR", f"终止会话 {conversation_id} 的子Agent失败", e)
     return True
 
 
@@ -112,11 +124,12 @@ class SubAgentThread(threading.Thread):
         max_iterations: int = 100,
         working_dir: Optional[str] = None,
         skill: Optional[str] = None,
-        parent_conversation_id: Optional[str] = None
+        parent_conversation_id: Optional[str] = None,
+        on_complete: Optional[Callable[[str, SubAgentDatabase], None]] = None
     ):
         """
         初始化子Agent线程
-        
+
         Args:
             agent_id: Agent唯一标识
             task: 任务内容
@@ -128,6 +141,8 @@ class SubAgentThread(threading.Thread):
             max_iterations: 最大迭代次数
             working_dir: 工作目录（绝对路径）
             skill: 指定使用的skill名称
+            on_complete: 终态回调 (agent_id, database)，在线程退出前于任意终态
+                （COMPLETED/ERROR/INTERRUPTED）触发一次
         """
         super().__init__(name=f"SubAgent-{agent_id}", daemon=True)
         
@@ -144,6 +159,7 @@ class SubAgentThread(threading.Thread):
         self.working_dir = working_dir  # 工作目录
         self.skill = skill  # 指定使用的skill
         self.parent_conversation_id = parent_conversation_id
+        self.on_complete = on_complete  # 终态回调（异步派发通知用）
 
         # 继承父会话/全局工具策略：过滤子 Agent 可见工具与子能力
         from .tool_policy import (
@@ -615,6 +631,13 @@ class SubAgentThread(threading.Thread):
                 self.close_terminal(delay=2)
             else:
                 self.close_terminal(delay=0)
+
+            # 终态回调：无论 COMPLETED/ERROR/INTERRUPTED 都恰好触发一次
+            if self.on_complete:
+                try:
+                    self.on_complete(self.agent_id, self.database)
+                except Exception as e:
+                    log_error("SUBAGENT_COMPLETE_HOOK_ERROR", f"SubAgent {self.agent_id} 完成回调执行失败", e)
     
     def _check_and_log_tool_result_error(self, tool_name: str, tool_result: str, args: dict) -> None:
         """
@@ -864,6 +887,9 @@ class AgentProcessManager:
 
         # 所属会话 ID（派发时从会话上下文捕获，用于会话级中断）
         self.conversation_id: Optional[str] = None
+
+        # 子Agent终态回调（异步派发模式用；必须在 dispatch_tasks 之前设置）
+        self.completion_callback: Optional[Callable[[str, SubAgentDatabase], None]] = None
     
     def dispatch_tasks(self, tasks: List[AgentTask]) -> str:
         """
@@ -917,7 +943,8 @@ class AgentProcessManager:
                     monitor_queue=self.monitor_queue,
                     working_dir=task.working_dir,
                     skill=task.skill,  # 传递指定skill
-                    parent_conversation_id=get_current_conversation_id()
+                    parent_conversation_id=get_current_conversation_id(),
+                    on_complete=self.completion_callback
                 )
                 self.sub_agents[task.task_id] = agent_thread
         

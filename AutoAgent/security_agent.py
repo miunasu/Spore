@@ -16,6 +16,10 @@
    直接中断当前会话（后端 bump epoch + 终止子 Agent），emit security_malicious
    通知用户，并记入安全审计日志。
 
+4. 熔断后处置建议（仅 full）：熔断后二次调用安全 Agent（security_remediation），
+   生成排查/修复建议与自动修复任务描述，emit security_remediation 推前端弹窗，
+   由用户选择"手动处理"或"自动修复"（新建会话把安全上下文交给 Spore 处置）。
+
 意图分析是异步旁路（后台线程 + 缓存 + 块级批量认领 + 信号量并发限流），
 仅桌面模式（有 emit 回调）有意义；CLI 模式 emit=None 直接跳过。
 """
@@ -327,7 +331,120 @@ def _analyze_intent_batch(commands: List[str]) -> Dict[int, Dict[str, Any]]:
 
 
 # ===========================================================================
-# 三、恶意处置（full）—— 中断会话 + 通知 + 审计
+# 三、熔断后处置建议（full）—— 二次调用安全 Agent 生成排查/修复建议
+# ===========================================================================
+
+def _fallback_remediation(command: str, reason: str) -> Dict[str, Any]:
+    """LLM 不可用/解析失败时的通用处置建议。"""
+    return {
+        "summary": "检测到恶意命令并已中断会话（AI 建议生成失败，以下为通用处置建议）",
+        "impact": f"该命令在研判完成前已执行，可能造成的影响：{reason or '未知'}",
+        "manual_steps": [
+            "检查任务管理器中是否有陌生进程仍在运行，有则结束",
+            "检查计划任务、自启动项是否被写入陌生条目",
+            "如命令涉及账号或凭据，立即修改相关密码",
+            "打开「备份回滚」面板，检查本轮会话改动过的文件并按需恢复",
+            "查看 .spore/security_audit.jsonl 审计日志了解完整经过",
+        ],
+        "auto_fix_task": "",
+        "ai_generated": False,
+    }
+
+
+def security_remediation(command: str, intent: str, malicious_reason: str) -> Dict[str, Any]:
+    """
+    为已熔断的恶意命令生成处置建议。
+
+    Returns:
+        建议 dict：summary、impact、manual_steps(list)、auto_fix_task、ai_generated
+    """
+    if _ipc_manager is None:
+        return _fallback_remediation(command, malicious_reason)
+
+    config = get_config()
+    system_prompt = load_agent_type_prompt("security_remediation")
+    if not system_prompt:
+        return _fallback_remediation(command, malicious_reason)
+
+    user_content = (
+        f"已执行的恶意命令:\n```\n{command}\n```\n"
+        f"命令意图: {intent}\n"
+        f"恶意原因: {malicious_reason}"
+    )
+    try:
+        request_id = _ipc_manager.send_chat_request(
+            messages=[{"role": "user", "content": user_content}],
+            model=config.resolve_agent_llm("security")["model"],
+            system=system_prompt,
+            agent_profile="security",
+            tool_calls=False,
+        )
+        timeout = getattr(config, "security_intent_timeout", 45)
+        response = _ipc_manager.get_chat_response(request_id=request_id, timeout=timeout)
+        if response is None or response.get("status") != "success":
+            return _fallback_remediation(command, malicious_reason)
+
+        content = ((response.get("data") or {}).get("content", "") or "").strip()
+        data = _extract_json(content, array=False)
+        if not isinstance(data, dict):
+            return _fallback_remediation(command, malicious_reason)
+
+        raw_steps = data.get("manual_steps")
+        steps = (
+            [str(s).strip() for s in raw_steps if str(s).strip()]
+            if isinstance(raw_steps, list) else []
+        )
+        report = {
+            "summary": _clean_text(str(data.get("summary", ""))),
+            "impact": _clean_text(str(data.get("impact", ""))),
+            "manual_steps": steps,
+            "auto_fix_task": str(data.get("auto_fix_task", "") or "").strip(),
+            "ai_generated": True,
+        }
+        if not report["summary"] and not steps:
+            return _fallback_remediation(command, malicious_reason)
+        log_info("SECURITY_AGENT", f"处置建议生成完成: {report['summary'][:80]}")
+        return report
+    except Exception as e:
+        log_error("SECURITY_AGENT_ERROR", "处置建议生成异常", e,
+                  context={"command_preview": command[:120]})
+        return _fallback_remediation(command, malicious_reason)
+
+
+def build_auto_fix_prompt(
+    command: str, intent: str, malicious_reason: str, remediation: Dict[str, Any]
+) -> str:
+    """组装"自动修复"新会话的用户输入：安全 Agent 的完整上下文 + 修复任务。"""
+    lines = [
+        "【安全事件自动修复任务】",
+        "Spore 安全 Agent 在另一个会话中检测到一条恶意命令。该命令在研判完成前已被执行，"
+        "该会话已被熔断。请你作为修复 Agent 排查影响并处置。",
+        "",
+        f"恶意命令（已执行，排查时不得重新执行）:\n{command}",
+        f"命令意图: {intent}",
+        f"恶意原因: {malicious_reason}",
+    ]
+    if remediation.get("summary"):
+        lines += ["", f"事件概述: {remediation['summary']}"]
+    if remediation.get("impact"):
+        lines.append(f"可能影响: {remediation['impact']}")
+    steps = remediation.get("manual_steps") or []
+    if steps:
+        lines += ["", "安全 Agent 给出的处置建议:"]
+        lines += [f"{i}. {step}" for i, step in enumerate(steps, 1)]
+    if remediation.get("auto_fix_task"):
+        lines += ["", f"修复任务要求: {remediation['auto_fix_task']}"]
+    lines += [
+        "",
+        "要求：先排查该命令实际造成的影响（进程、文件、计划任务、自启动项、网络外联、凭据），"
+        "再执行必要的清理与回滚，最后输出一份处置结果报告。"
+        "再次强调：绝对不要重新执行上述恶意命令。",
+    ]
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# 四、恶意处置（full）—— 中断会话 + 通知 + 审计 + 处置建议弹窗
 # ===========================================================================
 def _handle_intent_result(
     emit: Callable[[str, Dict[str, Any]], None],
@@ -389,6 +506,46 @@ def _handle_intent_result(
     except Exception as e:
         log_error("SECURITY_AGENT_EMIT_ERROR", "推送恶意命令通知失败", e)
 
+    # 二次调用安全 Agent：熔断后生成处置建议并推前端弹窗。
+    # 独立 daemon 线程（不占研判信号量）：缓存命中路径下本函数可能跑在
+    # 工具执行线程上，建议生成是一次完整 LLM 调用，不能阻塞在这里。
+    intent_text = result["intent"]
+
+    def _remediation_worker():
+        import os
+        remediation = security_remediation(command, intent_text, reason)
+        payload = {
+            "command": command[:500],
+            "intent": intent_text,
+            "malicious_reason": reason,
+            "interrupted": interrupted,
+            "summary": remediation.get("summary", ""),
+            "impact": remediation.get("impact", ""),
+            "manual_steps": remediation.get("manual_steps", []),
+            "auto_fix_prompt": build_auto_fix_prompt(
+                command, intent_text, reason, remediation
+            ),
+            "ai_generated": remediation.get("ai_generated", False),
+        }
+        # 处置建议在会话循环终止后才产出，轮次 emitter 已还原（会丢事件），
+        # 桌面模式改用 WS 直投（按 session_id 路由）；非桌面回退到 emit。
+        sent = False
+        if os.environ.get("SPORE_DESKTOP_MODE") == "1" and session_id:
+            try:
+                from desktop_app.backend.security_interrupt import emit_security_task_event
+                sent = emit_security_task_event(session_id, "security_remediation", payload)
+            except Exception as e:
+                log_error("SECURITY_AGENT_EMIT_ERROR", "直投处置建议失败", e)
+        if not sent:
+            try:
+                emit("security_remediation", payload)
+            except Exception as e:
+                log_error("SECURITY_AGENT_EMIT_ERROR", "推送处置建议失败", e)
+
+    threading.Thread(
+        target=_remediation_worker, daemon=True, name="security_remediation"
+    ).start()
+
 
 def analyze_commands_async(
     commands: List[str],
@@ -400,7 +557,7 @@ def analyze_commands_async(
     块级批量意图研判：一个 ACTION 块内的多条 shell 命令合并为一次
     LLM 研判，结果仍按条推送（事件名 command_intent）。
 
-    - 命中高危关键词的命令不参与（走 basic 风险评估域，互斥）
+    full 模式全权交给安全 Agent：块内所有 shell 命令都参与研判，不做关键词预筛。
     - 缓存命中的命令立即推送（恶意条目命中同样触发中断+通知）
     - 参与批量的命令同步认领，执行期 guard 的单条分析自动跳过
     """
@@ -410,15 +567,12 @@ def analyze_commands_async(
     if getattr(config, "security_agent_mode", "full") != "full":
         return
 
-    from base.security_guard import match_high_risk, normalize_command
-    guard_active = getattr(config, "security_agent_mode", "full") != "off"
+    from base.security_guard import normalize_command
 
     items: List[Tuple[str, str]] = []  # (command, normalized)
     seen: set = set()
     for command in commands:
         if not command or not isinstance(command, str) or not command.strip():
-            continue
-        if guard_active and match_high_risk(command) is not None:
             continue
         normalized = normalize_command(command)
         if normalized in seen:

@@ -12,6 +12,7 @@ import {
 } from '../services/api';
 import { useLogStore } from './logStore';
 import { useTodoStore } from './todoStore';
+import { useSecurityStore } from './securityStore';
 
 // 前端日志辅助函数
 const frontendLog = (message: string) => {
@@ -257,14 +258,17 @@ const fetchSessionMessages = async (
   const historyResponse = await chatApi.history(true, sessionId);
 
   const allMessages = historyResponse.messages.filter((msg) => (
-    msg.role === 'user' || msg.role === 'assistant'
+    msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system'
   ));
 
   const messages = allMessages
     .map((msg, index) => {
+      const isSystemNotice =
+        msg.role === 'system'
+        || (msg.role === 'user' && msg.content?.trim().startsWith('[系统通知]'));
       const baseMessage = {
         id: index.toString(),
-        role: msg.role as 'user' | 'assistant',
+        role: (isSystemNotice ? 'system' : msg.role) as 'user' | 'assistant' | 'system',
         timestamp: Date.now(),
       };
 
@@ -367,6 +371,9 @@ interface ChatStore {
   // API 操作
   sendMessage: (content: string) => Promise<void>;
   interrupt: () => Promise<void>;
+
+  // 安全熔断自动修复：新建会话，把安全 Agent 上下文作为用户输入交给 Spore 处置
+  startSecurityAutoFix: (autoFixPrompt: string) => Promise<void>;
 
   // 任务事件流（阶段②：前端纯浏览，渲染由 WS task_event 驱动）
   handleTaskEvent: (event: WSTaskEvent) => void;
@@ -809,6 +816,74 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
     },
 
+    // 安全熔断自动修复：新建会话 + 把安全 Agent 上下文作为用户输入提交任务
+    startSecurityAutoFix: async (autoFixPrompt) => {
+      if (!autoFixPrompt || !autoFixPrompt.trim()) return;
+
+      const time = new Date().toLocaleTimeString('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const newConv = createConversation(`安全修复 ${time}`);
+      newConv.backendPort = MAIN_PORT;
+      newConv.backendStatus = 'running';
+      const conversationId = newConv.id;
+
+      // 先建标签页并切换（GUI 同步），后端会话随 createSession 建立
+      set((state) => ({
+        conversations: [...state.conversations, newConv],
+        activeConversationId: conversationId,
+        inputValue: '',
+      }));
+
+      try {
+        const chatApi = createChatApi(MAIN_PORT);
+        await chatApi.createSession(conversationId);
+      } catch (e) {
+        // /api/task/submit 对不存在的会话会自动创建，创建失败不阻断修复流程
+        frontendLog(`[错误] 创建修复会话失败（提交任务时将自动创建）: ${e}`);
+      }
+
+      // 新会话无并发任务/中断屏障，直接走任务提交
+      const submissionId = generateSubmissionId();
+      activeTasksByConversation[conversationId] = { submissionId };
+      bumpTaskStateVersion(conversationId);
+
+      get().addMessage(conversationId, {
+        id: Date.now().toString(),
+        role: 'user',
+        content: autoFixPrompt,
+        timestamp: Date.now(),
+      });
+      get().setGenerating(conversationId, true);
+
+      try {
+        const taskApi = createTaskApi(MAIN_PORT);
+        const response = await taskApi.submit(
+          conversationId,
+          submissionId,
+          autoFixPrompt
+        );
+        if (!response.success) {
+          throw new Error(response.error || '未知错误');
+        }
+        const identity = activeTasksByConversation[conversationId];
+        if (identity?.submissionId === submissionId) {
+          identity.taskId = response.task_id;
+        }
+        frontendLog(`[安全] 已创建自动修复会话并提交处置任务`);
+      } catch (e) {
+        if (
+          activeTasksByConversation[conversationId]?.submissionId === submissionId
+        ) {
+          delete activeTasksByConversation[conversationId];
+          bumpTaskStateVersion(conversationId);
+          get().setGenerating(conversationId, false);
+        }
+        frontendLog(`[错误] 自动修复任务提交失败: ${e}`);
+      }
+    },
+
     // 处理 WS task_event（后端广播、无路由：必须按 session_id 过滤到对应会话）
     handleTaskEvent: (event) => {
       const sessionId = event.session_id;
@@ -901,6 +976,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
           command,
         });
         frontendLog(`[安全] 检测到恶意命令，已中断本轮会话: ${command}`);
+        // 登记安全事件 → 弹出熔断弹窗（处置建议由 security_remediation 事件补充）
+        useSecurityStore.getState().addIncident({
+          sessionId,
+          command,
+          intent,
+          maliciousReason: reason,
+          interrupted: event.data.interrupted !== false,
+        });
         // 会话末尾追加一条本地提示（命令已执行无法撤销 + 会话已中断）。
         // 注意：此消息不在后端 history 中，切会话重拉快照后会消失（审计日志有据可查）。
         get().addMessage(sessionId, {
@@ -910,9 +993,61 @@ export const useChatStore = create<ChatStore>((set, get) => {
             `🚨 安全 Agent 检测到恶意命令，已中断本轮会话。\n` +
             `命令：${command}\n` +
             `原因：${reason || '未提供'}\n` +
-            `注意：该命令在研判完成前已执行，无法自动撤销，请自行检查系统。`,
+            `注意：该命令在研判完成前已执行，无法自动撤销。安全 Agent 正在生成处置建议…`,
           timestamp: Date.now(),
         });
+        return;
+      }
+
+      // 安全 Agent：熔断后的处置建议（二次研判产出）。同为异步旁路事件，
+      // 在 active 门之前处理；挂载到熔断弹窗供用户选择手动/自动修复。
+      if (event.event === 'security_remediation') {
+        const command = event.data.command || '';
+        useSecurityStore.getState().attachAdvice(sessionId, command, {
+          summary: event.data.summary || '',
+          impact: event.data.impact || '',
+          manualSteps: event.data.manual_steps || [],
+          autoFixPrompt: event.data.auto_fix_prompt || '',
+          aiGenerated: event.data.ai_generated === true,
+        });
+        frontendLog(`[安全] 恶意命令处置建议已生成`);
+        return;
+      }
+
+      // 后端自发的子Agent完成通知没有本地 submission identity；先收养任务，
+      // 后续 round_reply/task_finished 即可沿用普通任务事件通路。
+      if (
+        event.event === 'task_started'
+        && event.data.source === 'agent_notification'
+      ) {
+        if (isDiscardedSubmission(sessionId, event.submission_id)) return;
+        const currentIdentity = activeTasksByConversation[sessionId];
+        if (
+          currentIdentity
+          && currentIdentity.submissionId !== event.submission_id
+        ) {
+          return;
+        }
+        const isNewNotificationTask = !currentIdentity;
+        activeTasksByConversation[sessionId] = {
+          submissionId: event.submission_id,
+          taskId: event.task_id,
+        };
+        bumpTaskStateVersion(sessionId);
+        setActivity(null);
+        pendingIntentsBySession[sessionId] = [];
+        get().setGenerating(sessionId, true);
+
+        const notice = event.data.notice;
+        if (notice && isNewNotificationTask) {
+          const taskNames = notice.agents.map((agent) => agent.task_id).join('、');
+          get().addMessage(sessionId, {
+            id: `subagent_notice_${event.task_id}`,
+            role: 'system',
+            content: `子Agent ${taskNames} 已完成 (${notice.done}/${notice.total})`,
+            timestamp: Date.now(),
+          });
+        }
         return;
       }
 
@@ -1169,15 +1304,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
           
           // 先过滤消息，保留所有消息用于构建上下文
           const allMessages = historyResponse.messages.filter((msg) => {
-            // 只保留 user 和 assistant 消息
-            return msg.role === 'user' || msg.role === 'assistant';
+            // 保留用户、assistant 与系统通知消息
+            return msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system';
           });
 
           const messages: Message[] = allMessages
             .map((msg, index) => {
+              const isSystemNotice =
+                msg.role === 'system'
+                || (msg.role === 'user' && msg.content?.trim().startsWith('[系统通知]'));
               const baseMessage = {
                 id: index.toString(),
-                role: msg.role as 'user' | 'assistant',
+                role: (isSystemNotice ? 'system' : msg.role) as 'user' | 'assistant' | 'system',
                 timestamp: Date.now(),
               };
 

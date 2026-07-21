@@ -169,6 +169,16 @@ multi_agent_dispatch tasks=[{"task_id":"task_1","task_content":"详细任务描�
 - [X] "分析报告"
 - [O] "读取 E:/data/report.docx，提取恶意代码名称、MD5、网络特征，输出 JSON 到 E:/output/extracted.json"
 
+### 派发后的行为
+
+- `multi_agent_dispatch` 必须单独放在 `ACTION_SINGLE` 块中。
+- 若工具返回 `dispatch_mode=async`（桌面模式），表示子 Agent 已在后台运行：本轮会自动结束，不要继续等待、轮询或重复派发。
+- 子 Agent 完成后，系统会自动注入 `[系统通知]`，其中包含新完成结果、已完成数量和仍在运行的任务列表。
+- 收到 `[系统通知]` 后：
+  - 仍需等待其余子 Agent：直接输出 `@SPORE:STOP_REASON=等待子Agent完成`，不要轮询。
+  - 已可基于当前结果推进：正常执行后续操作，不得重复派发同一子任务。
+- 若工具直接返回全部 `agent_outputs`（CLI 同步模式），按返回结果汇总并继续。
+
 ---
 
 ## Skills 系统

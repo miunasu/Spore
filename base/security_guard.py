@@ -1,18 +1,20 @@
 """
 安全守卫系统 (Security Guard)
 
-两阶段检测机制：
-1. 第一阶段：关键词匹配（本地快速检测）——识别系统服务、注册表、
-   防火墙、驱动、磁盘、安全软件等高危操作。
-2. 第二阶段：AI 风险评估——仅命中高危策略的命令才发送给
-   Security Agent（AutoAgent/security_agent.py）做深度分析。
+分模式工作（config.security_agent_mode）：
 
-根据风险等级与用户配置（strict / balanced / permissive）决定：
-- 自动放行（低风险）
-- 快速确认（中风险）
-- 强制详细确认（高风险）
+- basic（关键词研判）：
+  1. 第一阶段：关键词匹配（本地快速检测）——识别系统服务、注册表、
+     防火墙、驱动、磁盘、安全软件等高危操作。
+  2. 第二阶段：AI 风险评估——仅命中高危策略的命令才发送给
+     Security Agent（AutoAgent/security_agent.py）做深度分析。
+  根据风险等级与用户配置（strict / balanced / permissive）决定：
+  自动放行（低风险）/ 快速确认（中风险）/ 强制详细确认（高风险）。
 
-未命中高危策略的普通命令交给安全 Agent 异步研判意图+恶意（full 模式，不阻塞）。
+- full（全权交给安全 Agent）：不做关键词预筛，每条命令都交给安全 Agent
+  异步研判语义意图 + 风险 + 恶意（不阻塞执行）；安全 Agent 自主判定，
+  确定为恶意即熔断会话并弹出处置建议。关键词规则在此模式不参与决策。
+
 所有经确认的高风险操作记录到 .spore/security_audit.jsonl，含回滚命令。
 """
 import json
@@ -343,9 +345,13 @@ def guard_shell_command(
 
     返回 None 表示放行；返回字符串表示阻止（该字符串作为错误信息返回给 LLM）。
 
-    - 未命中高危策略：full 模式下交给安全 Agent 异步研判意图+恶意（不阻塞），放行
-    - 命中高危策略：调用安全 Agent 评估 -> 按风险等级和配置决定
-      自动放行 / 用户确认 / 阻止
+    分模式（config.security_agent_mode）：
+    - off  ：不研判，直接放行
+    - full ：全权交给安全 Agent —— 不做关键词预筛，每条命令都交给安全 Agent
+             异步研判语义意图 + 风险（不阻塞执行）；安全 Agent 自主判定，确定
+             为恶意即熔断会话（由 security_agent 侧触发 interrupt + 处置建议弹窗）
+    - basic：关键词研判 —— 命中高危关键词才做 AI 风险评估，按风险等级和配置
+             决定自动放行 / 用户确认 / 阻止
     """
     from .config import get_config
     config = get_config()
@@ -362,17 +368,25 @@ def guard_shell_command(
         except Exception:
             pass
 
-    guard_enabled = getattr(config, "security_guard_enabled", True)
-    matched = match_high_risk(command) if guard_enabled else None
+    mode = getattr(config, "security_agent_mode", "full")
 
-    if matched is None:
-        # 普通命令：full 模式下安全 Agent 异步研判意图+恶意（与风险评估域互斥）
+    if mode == "off":
+        return None
+
+    if mode == "full":
+        # 全权交给安全 Agent：不做关键词预筛，每条命令异步研判（语义意图 + 风险 + 恶意）。
+        # 不阻塞执行；安全 Agent 确定为恶意时自行熔断会话并弹出处置建议。
         try:
             from AutoAgent.security_agent import analyze_command_async
             analyze_command_async(command, emit, session_id=session_id,
                                   interrupt_epoch=interrupt_epoch)
         except Exception as e:
             log_error("SECURITY_AGENT_DISPATCH_ERROR", "安全 Agent 意图研判派发失败", e)
+        return None
+
+    # basic 模式：关键词研判 —— 未命中高危关键词直接放行
+    matched = match_high_risk(command)
+    if matched is None:
         return None
 
     category, description = matched

@@ -650,10 +650,10 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
         type: 'select',
         options: [
           { value: 'off', label: 'off（关闭）' },
-          { value: 'basic', label: 'basic（高危命令 AI 风险评估）' },
-          { value: 'full', label: 'full（basic + 普通命令意图与恶意研判）' },
+          { value: 'basic', label: 'basic（关键词研判）' },
+          { value: 'full', label: 'full（全权交给安全 Agent）' },
         ],
-        description: 'off 全关；basic 仅对命中高危关键词的命令做 AI 风险评估与确认；full 额外对普通命令做意图解析+恶意研判，判定恶意时自动中断本轮会话',
+        description: 'off 全关；basic 仅对命中高危关键词的命令做 AI 风险评估与确认；full 不做关键词预筛，每条命令都交安全 Agent 异步研判语义意图+风险+恶意，判定恶意时自动熔断会话并弹出处置建议',
         placeholder: '默认: full',
       },
       {

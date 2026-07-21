@@ -15,6 +15,14 @@ _conversation_id: ContextVar[Optional[str]] = ContextVar(
     "spore_conversation_id",
     default=None,
 )
+_task_source: ContextVar[Optional[str]] = ContextVar(
+    "spore_task_source",
+    default=None,
+)
+_task_epoch: ContextVar[Optional[int]] = ContextVar(
+    "spore_task_epoch",
+    default=None,
+)
 
 
 def get_current_conversation_id() -> Optional[str]:
@@ -30,6 +38,27 @@ def set_current_conversation_id(conversation_id: Optional[str]):
 def reset_current_conversation_id(token) -> None:
     """Reset the current context id using a token returned by set."""
     _conversation_id.reset(token)
+
+
+def get_current_task_source() -> Optional[str]:
+    """Return the source of the task currently driving the conversation loop."""
+    return _task_source.get()
+
+
+def get_current_task_epoch() -> Optional[int]:
+    """Return the interrupt epoch captured when the current task was accepted."""
+    return _task_epoch.get()
+
+
+@contextmanager
+def task_source_context(source: Optional[str], epoch: Optional[int] = None) -> Iterator[None]:
+    source_token = _task_source.set(source)
+    epoch_token = _task_epoch.set(epoch)
+    try:
+        yield
+    finally:
+        _task_epoch.reset(epoch_token)
+        _task_source.reset(source_token)
 
 
 @contextmanager

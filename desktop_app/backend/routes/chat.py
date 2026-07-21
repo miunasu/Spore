@@ -9,7 +9,14 @@ import copy
 from concurrent.futures import ThreadPoolExecutor
 import re
 
-from ..core import get_instances, switch_session, create_session, delete_session, get_session_manager
+from ..core import (
+    create_session,
+    delete_session,
+    get_instances,
+    get_session_manager,
+    reset_session_runtime,
+    switch_session,
+)
 from base.logger import log_info, log_error
 from base.agent_types import get_tools_for_mode
 from base.tools import TOOL_DEFINITIONS
@@ -17,7 +24,6 @@ from base.text_protocol import ProtocolManager
 from base.prompt_loader import load_system_prompt
 from base.utils import clear_last_todo_content
 from base.todo_manager import todo_write
-from base.agent_process import terminate_conversation_agents
 from AutoAgent import select_context_mode
 from base.session_context import conversation_context
 
@@ -407,9 +413,7 @@ async def send_message(req: ChatRequest):
 
 @router.post("/interrupt")
 def interrupt(req: InterruptRequest = InterruptRequest()):
-    """
-    中断当前请求 - 包括主 Agent 和所有子 Agent
-    """
+    """中断当前主Agent任务；后台异步子Agent继续运行。"""
     from ..core import get_conv_loop_manager
     session_manager = get_session_manager()
     conv_loop_manager = get_conv_loop_manager()
@@ -433,7 +437,6 @@ def interrupt(req: InterruptRequest = InterruptRequest()):
             if conv_loop_manager else None
         )
         request_cancelled = target_loop.cancel_current_request() if target_loop else False
-        agents_terminated = terminate_conversation_agents(conversation_id)
 
         return {
             "success": True,
@@ -442,7 +445,7 @@ def interrupt(req: InterruptRequest = InterruptRequest()):
             "submission_id": retired_task.get("submission_id") if retired_task else None,
             "interrupt_epoch": target_state.interrupt_epoch,
             "request_cancelled": request_cancelled,
-            "agents_terminated": agents_terminated,
+            "agents_terminated": False,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -476,13 +479,20 @@ def get_history(raw: bool = False, session_id: Optional[str] = None) -> Dict[str
     # 处理消息，提取用户可见内容
     clean_messages = []
     for msg in target_state.messages:
+        content = msg.get("content", "")
         if msg.get("role") == "assistant":
-            clean_content = extract_user_visible_content(msg.get("content", ""))
+            clean_content = extract_user_visible_content(content)
             if clean_content:  # 只添加有内容的消息
                 clean_messages.append({
                     "role": msg["role"],
                     "content": clean_content
                 })
+        elif msg.get("role") == "user" and content.lstrip().startswith("[系统通知]"):
+            first_line = content.strip().splitlines()[0]
+            clean_messages.append({
+                "role": "system",
+                "content": first_line.replace("[系统通知]", "", 1).strip(),
+            })
         else:
             clean_messages.append(msg)
     
@@ -503,7 +513,7 @@ def new_conversation(req: Optional[ConversationRequest] = None):
         if not target_state:
             target_state = session_manager.create_session(conversation_id)
 
-        target_state.clear_all()
+        reset_session_runtime(conversation_id)
         clear_last_todo_content()
         todo_write([], session_id=conversation_id)
 

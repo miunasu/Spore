@@ -290,6 +290,12 @@ class Config:
             self.multi_agent_join_interval: float = float(os.getenv("MULTI_AGENT_JOIN_INTERVAL", "2.0"))
         except ValueError:
             self.multi_agent_join_interval = 2.0
+
+        # 桌面端异步子Agent派发的整批最长运行时间（秒）；0 表示禁用 watchdog
+        try:
+            self.multi_agent_total_timeout: float = float(os.getenv("MULTI_AGENT_TOTAL_TIMEOUT", "3600"))
+        except ValueError:
+            self.multi_agent_total_timeout = 3600.0
         
         # ========== 工具执行配置 ==========
         # 工具执行超时时间（秒）
@@ -345,8 +351,9 @@ class Config:
         # ========== 安全 Agent 配置 ==========
         # 单一模式开关：
         #   off   : 完全关闭
-        #   basic : 命中 ps 高危关键词 -> AI 风险评估 -> 按容忍度确认（原安全守卫能力）
-        #   full  : basic + 对未命中关键词的普通命令做意图解析 + 恶意研判（异步）
+        #   basic : 关键词研判 —— 命中 ps 高危关键词 -> AI 风险评估 -> 按容忍度确认
+        #   full  : 全权交给安全 Agent —— 不做关键词预筛，每条命令都交安全 Agent
+        #           异步研判语义意图 + 风险 + 恶意（不阻塞），确定为恶意即熔断会话
         _sa_mode = os.getenv("SECURITY_AGENT_MODE", "full").lower().strip()
         if _sa_mode not in ("off", "basic", "full"):
             _sa_mode = "full"

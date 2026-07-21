@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 import re
 from pathlib import Path
 
-from ..core import get_session_manager
+from ..core import get_session_manager, reset_session_runtime
 from base.session_context import conversation_context
 
 router = APIRouter()
@@ -94,7 +94,7 @@ def clear_memory(req: Optional[ConversationCommandRequest] = None):
         
         conversation_id = req.conversation_id if req else None
         state, resolved_conversation_id = _get_target_state(session_manager, conversation_id)
-        state.clear_all()
+        reset_session_runtime(resolved_conversation_id)
         clear_last_todo_content()
         todo_write([], session_id=resolved_conversation_id)
 

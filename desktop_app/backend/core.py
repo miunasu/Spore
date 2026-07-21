@@ -47,7 +47,7 @@ def initialize_desktop_backend() -> Dict[str, Any]:
     import os
     os.environ['SPORE_DESKTOP_MODE'] = '1'
     logger = SporeLogger(start_monitor=False)
-    
+
     # 2. 加载配置（复用 base/config.py）
     _config = get_config()
     # Desktop 模式下不强制验证 API Key，允许用户后续配置
@@ -112,8 +112,15 @@ def initialize_desktop_backend() -> Dict[str, Any]:
         tool_names=initial_tools,
     )
     
+    # 全部核心实例初始化成功后再发布 Desktop 异步 hook，避免半初始化状态泄漏。
+    from base.tools import set_async_dispatch_hook, set_subagent_status_hook
+    from .agent_notification import get_progress, initialize as initialize_notifications, register_dispatch
+    initialize_notifications()
+    set_async_dispatch_hook(register_dispatch)
+    set_subagent_status_hook(get_progress)
+
     _initialized = True
-    
+
     return get_instances_dict()
 
 
@@ -252,11 +259,24 @@ def get_instances_dict() -> Dict[str, Any]:
 def shutdown_desktop_backend() -> None:
     """关闭桌面后端，清理资源"""
     global _ipc_manager, _initialized
-    
+
+    # 先阻止新派发并退役所有会话任务，再停止 IPC；避免同进程重启后跨实例注入。
+    from base.tools import set_async_dispatch_hook, set_subagent_status_hook
+    set_async_dispatch_hook(None)
+    set_subagent_status_hook(None)
+    if _state is not None:
+        for session_id in list(_state.list_sessions()):
+            try:
+                reset_session_runtime(session_id)
+            except Exception:
+                pass
+    from .agent_notification import shutdown as shutdown_notifications
+    shutdown_notifications()
+
     if _ipc_manager:
         _ipc_manager.stop_chat_process()
         _ipc_manager = None
-    
+
     _initialized = False
 
 
@@ -326,6 +346,36 @@ def create_session(session_id: str, switch_current: bool = False) -> Dict[str, A
     }
 
 
+def reset_session_runtime(session_id: str) -> bool:
+    """终止并清空会话当前 generation，供新对话与清记忆复用。"""
+    if not _initialized or _state is None:
+        return False
+
+    state = _state.get_session(session_id)
+    if state is None:
+        return False
+
+    from base.agent_process import terminate_conversation_agents
+    from .agent_notification import clear_session as clear_agent_notifications
+    from .routes.task import interrupt_session_task
+
+    # 先推进 epoch 形成持久 fence：旧任务即使与清理并发，也无法再登记或启动派发。
+    state.interrupt_epoch += 1
+    clear_agent_notifications(session_id)
+    terminate_conversation_agents(session_id)
+    interrupt_session_task(session_id)
+
+    loop = _conv_loop_manager._loops.get(session_id) if _conv_loop_manager else None
+    if loop:
+        loop.cancel_current_request()
+        # 旧 worker 在释放 execution_lock 前完成自己的 rollback；随后再清空，旧快照不能复活。
+        with loop.execution_lock:
+            state.clear_all()
+    else:
+        state.clear_all()
+    return True
+
+
 def delete_session(session_id: str) -> Dict[str, Any]:
     """
     删除会话
@@ -341,13 +391,12 @@ def delete_session(session_id: str) -> Dict[str, Any]:
     if not _initialized or _state is None:
         return {"success": False, "error": "后端未初始化"}
 
-    # 先终止该会话名下仍在运行的子Agent（会话级，不影响其他会话）
-    from base.agent_process import terminate_conversation_agents
-    from base.logger import log_error
+    # 会话删除复用同一重置事务，确保主任务、子Agent和旧通知全部失效。
     try:
-        terminate_conversation_agents(session_id)
+        reset_session_runtime(session_id)
     except Exception as e:
-        log_error("SESSION_AGENT_CLEANUP_ERROR", f"终止会话 {session_id} 的子Agent失败: {e}", e)
+        from base.logger import log_error
+        log_error("SESSION_AGENT_CLEANUP_ERROR", f"终止会话 {session_id} 的任务失败: {e}", e)
 
     success = _state.delete_session(session_id)
 

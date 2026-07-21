@@ -6,9 +6,34 @@
 方向推进。逻辑与 routes/chat.py 的 /interrupt 端点一致（bump epoch + 退役
 task + 取消在途请求 + 终止子 Agent），全部同步且各自持锁，可从 daemon 线程调用。
 """
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from base.logger import log_error, log_info
+
+
+def emit_security_task_event(session_id: str, event: str, data: Dict[str, Any]) -> bool:
+    """
+    直接经 WS 桥发一条 task_event（不经 ConversationLoop.event_emitter）。
+
+    熔断后的处置建议在会话循环终止之后才由二次研判产出，此时轮次的
+    event_emitter 已被还原（SessionConversationLoop 无常驻 emitter），
+    走常规 emit 会丢事件；前端对 command_intent/security_* 类事件仅按顶层
+    session_id 路由、不依赖 task_id/submission_id，故这里用合成信封直投。
+    """
+    try:
+        from .routes.task import _emit_task_event
+        _emit_task_event(
+            event=event,
+            session_id=session_id,
+            task_id="",
+            submission_id="",
+            round_num=0,
+            data=data,
+        )
+        return True
+    except Exception as e:
+        log_error("SECURITY_EVENT_EMIT_ERROR", f"直投安全事件失败: {event}", e)
+        return False
 
 
 def interrupt_session_for_malicious(
@@ -39,6 +64,10 @@ def interrupt_session_for_malicious(
             return False
 
         state.interrupt_epoch += 1
+        # 先作废通知 generation；若旧投递已进入注册临界区，clear_session 会等待它
+        # 完成，随后下面的 interrupt_session_task 必定能退役刚注册的通知任务。
+        from .agent_notification import clear_session
+        clear_session(session_id)
         interrupt_session_task(session_id)
 
         conv_loop_manager = get_conv_loop_manager()

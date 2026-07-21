@@ -9,6 +9,7 @@ import { useMiniModeStore } from './stores/miniModeStore';
 import { LogPanel } from './components/log-panel/LogPanel';
 import { ChatPanel } from './components/chat-panel/ChatPanel';
 import { SidePanel } from './components/side-panel/SidePanel';
+import { SecurityRemediationModal } from './components/chat-panel/SecurityRemediationModal';
 import { wsService } from './services/websocket';
 import { useLogStore } from './stores/logStore';
 import { useAgentStore } from './stores/agentStore';
@@ -186,6 +187,8 @@ function App() {
           />
         )}
       </div>
+      {/* 安全熔断弹窗：全局挂载，普通/Mini 模式均生效 */}
+      <SecurityRemediationModal />
     </div>
   );
 }

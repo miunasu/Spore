@@ -9,7 +9,7 @@ export interface CommandIntent {
 // 消息类型
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
   sent_messages?: Array<{role: string; content: string}>;  // 实际发送给LLM的消息（用于详细显示）
@@ -191,7 +191,8 @@ export type TaskEventName =
   | 'security_alert'
   | 'security_result'
   | 'command_intent'
-  | 'security_malicious';
+  | 'security_malicious'
+  | 'security_remediation';
 
 export interface WSTaskEvent {
   type: 'task_event';
@@ -204,6 +205,14 @@ export interface WSTaskEvent {
   data: {
     // task_started
     message?: string;
+    source?: 'user' | 'agent_notification' | string;
+    notice?: {
+      kind: 'subagent_completed';
+      agents: Array<{ task_id: string; status: string }>;
+      done: number;
+      total: number;
+      running: string[];
+    };
     // round_reply（字符串字段最多 8KB）
     content?: string;
     raw_response?: string;
@@ -236,6 +245,12 @@ export interface WSTaskEvent {
     is_malicious?: boolean;
     malicious_reason?: string;
     interrupted?: boolean;
+    // security_remediation 熔断后处置建议（安全 Agent 二次研判产出）
+    summary?: string;
+    impact?: string;
+    manual_steps?: string[];
+    auto_fix_prompt?: string;
+    ai_generated?: boolean;
   };
 }
 
@@ -252,6 +267,8 @@ export interface TaskInfo {
   task_id: string;
   submission_id: string;
   session_id: string;
+  source?: string;
+  notice?: WSTaskEvent['data']['notice'];
   status: TaskStatus;
   rounds: number;
   started_at: string;

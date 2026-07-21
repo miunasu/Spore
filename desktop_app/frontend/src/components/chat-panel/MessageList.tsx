@@ -64,7 +64,13 @@ export const MessageList: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-6">
-          {messages.map((message) => (
+          {messages.map((message) => message.role === 'system' ? (
+            <div key={message.id} className="flex justify-center animate-fade-in">
+              <div className="max-w-[85%] rounded-full border border-spore-border/60 bg-spore-card/60 px-4 py-2 text-xs text-spore-muted text-center">
+                {message.content}
+              </div>
+            </div>
+          ) : (
             <div
               key={message.id}
               className={`flex gap-4 animate-fade-in ${

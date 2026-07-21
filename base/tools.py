@@ -27,9 +27,29 @@
     - multi_agent_dispatch: 多Agent任务派发
 """
 
-from typing import Any, Dict, List, Optional
+from contextvars import ContextVar
+from typing import Any, Callable, Dict, List, Optional
 import json
 import re
+
+
+# Desktop 后端通过依赖注入启用异步派发；CLI 不注册，保持原阻塞语义。
+_async_dispatch_hook: Optional[Callable[..., Any]] = None
+_subagent_status_hook: Optional[Callable[[str], Dict[str, Any]]] = None
+CURRENT_ACTION_BLOCK_MODE: ContextVar[Optional[str]] = ContextVar(
+    "spore_action_block_mode",
+    default=None,
+)
+
+
+def set_async_dispatch_hook(hook: Optional[Callable[..., Any]]) -> None:
+    global _async_dispatch_hook
+    _async_dispatch_hook = hook
+
+
+def set_subagent_status_hook(hook: Optional[Callable[[str], Dict[str, Any]]]) -> None:
+    global _subagent_status_hook
+    _subagent_status_hook = hook
 
 
 def _coerce_path_list(raw: str) -> List[str]:
@@ -304,7 +324,7 @@ DuckDuckGo 支持以下搜索运算符，直接写在target搜索词中：
         "type": "function",
         "function": {
             "name": "multi_agent_dispatch",
-            "description": "并发派发多个任务给子Agent执行。每个任务由独立的子Agent线程处理，支持Coder等多种Agent类型。主Agent会等待所有子Agent完成或被用户中断。",
+            "description": "并发派发多个任务给子Agent执行。必须单独放在 ACTION_SINGLE 块中。桌面模式为异步派发：工具立即返回 dispatch_mode=async，本轮任务自动结束，子Agent完成时会通过[系统通知]告知结果与进度；CLI模式仍同步等待全部完成。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -345,6 +365,19 @@ DuckDuckGo 支持以下搜索运算符，直接写在target搜索词中：
                     }
                 },
                 "required": ["tasks"]
+            }
+        }
+    },
+
+    "check_subagent_status": {
+        "type": "function",
+        "function": {
+            "name": "check_subagent_status",
+            "description": "查询当前会话所有后台异步子Agent派发的实时进度。仅用于用户主动询问进度或需要在行动前确认状态；不要循环轮询。",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False
             }
         }
     },
@@ -561,89 +594,140 @@ def handle_web_browser(args: Dict[str, Any]) -> str:
     return safe_tool_execution("web_browser", lambda a: web_browser(**a), args)
 
 
+def handle_check_subagent_status(args: Dict[str, Any]) -> str:
+    """查询当前会话异步子Agent进度。"""
+    def _impl(_):
+        from .session_context import get_current_conversation_id
+        session_id = get_current_conversation_id()
+        if not session_id:
+            raise RuntimeError("当前没有绑定会话")
+        if _subagent_status_hook is None:
+            return {
+                "success": False,
+                "message": "当前运行模式未启用异步子Agent进度查询",
+            }
+        return _subagent_status_hook(session_id)
+
+    return safe_tool_execution("check_subagent_status", _impl, args, return_json=True)
+
+
 def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
-    """多Agent派发工具处理函数"""
+    """多Agent派发工具处理函数；Desktop 异步、CLI 同步。"""
     def _impl(a):
         from .agent_process import AgentProcessManager, get_ipc_manager
         from .agent_database import AgentTask
         from .agent_types import get_agent_type
-        from .interrupt_handler import get_interrupt_handler
-        
+        from .session_context import (
+            get_current_conversation_id,
+            get_current_task_epoch,
+            get_current_task_source,
+        )
+
+        if get_current_task_source() == "agent_notification":
+            raise RuntimeError("子Agent完成通知轮次不能再次派发子Agent")
+
         tasks_data = a.get("tasks", [])
-        # 处理字符串类型的tasks（LLM可能输出 tasks="[...]" 格式）
         if isinstance(tasks_data, str):
             try:
                 tasks_data = json.loads(tasks_data)
             except json.JSONDecodeError:
                 tasks_data = []
-        # 确保tasks是列表
         if not isinstance(tasks_data, list):
             tasks_data = []
         if not tasks_data:
             raise ValueError("tasks 参数缺失或为空")
-        
-        # 获取IPC管理器
-        ipc_manager = get_ipc_manager()
-        if ipc_manager is None:
-            ipc_manager = _ipc_manager
+
+        ipc_manager = get_ipc_manager() or _ipc_manager
         if ipc_manager is None:
             raise RuntimeError("IPC管理器未初始化")
-        
-        # 创建Agent管理器（每个子Agent会创建独立终端）
-        manager = AgentProcessManager(
-            ipc_manager=ipc_manager,
-            monitor_queue=None  # 不再使用全局队列
-        )
-        
-        # 获取中断处理器并安装
+
+        manager = AgentProcessManager(ipc_manager=ipc_manager, monitor_queue=None)
+        tasks = []
+        seen_task_ids = set()
+        for task_data in tasks_data:
+            working_dir = task_data.get("working_dir")
+            if working_dir:
+                from .utils.path_validator import normalize_path_for_pathlib
+                working_dir = normalize_path_for_pathlib(working_dir)
+            task_id = str(task_data.get("task_id", "")).strip()
+            if not task_id:
+                raise ValueError("每个子Agent任务都必须提供非空 task_id")
+            if task_id in seen_task_ids:
+                raise ValueError(f"子Agent task_id 重复: {task_id}")
+            seen_task_ids.add(task_id)
+            agent_type_name = task_data.get("agent_type", "Coder")
+            agent_type_config = get_agent_type(agent_type_name)
+            if agent_type_config is None:
+                raise ValueError(f"未知子Agent类型: {agent_type_name}")
+            tasks.append(AgentTask(
+                task_id=task_id,
+                task_content=task_data.get("task_content", ""),
+                agent_type_name=agent_type_name,
+                agent_type_config=agent_type_config,
+                working_dir=working_dir,
+                skill=task_data.get("skill"),
+            ))
+
+        session_id = get_current_conversation_id()
+        block_mode = CURRENT_ACTION_BLOCK_MODE.get()
+        async_mode = bool(_async_dispatch_hook and session_id and block_mode)
+        if async_mode:
+            if block_mode != "single":
+                raise ValueError(
+                    "桌面端异步 multi_agent_dispatch 必须单独放在 ACTION_SINGLE 块中，"
+                    "不能用于 ACTION_SEQUENCE 或 ACTION_PARALLEL"
+                )
+
+            registration = _async_dispatch_hook(
+                session_id,
+                manager,
+                tasks,
+                expected_epoch=get_current_task_epoch(),
+            )
+            dispatch_id, callback, start_dispatch, cancel_registration = registration
+            manager.completion_callback = callback
+            try:
+                start_dispatch()
+            except Exception:
+                cancel_registration()
+                raise
+
+            return {
+                "success": True,
+                "dispatch_mode": "async",
+                "dispatch_id": dispatch_id,
+                "total": len(tasks),
+                "dispatched": [
+                    {"task_id": task.task_id, "agent_type": task.agent_type_name}
+                    for task in tasks
+                ],
+                "message": (
+                    f"已异步派发 {len(tasks)} 个子Agent，它们将在后台运行。"
+                    "本轮对话将立即结束；每个子Agent完成时会收到包含结果摘要、"
+                    "已完成数量和仍在运行列表的[系统通知]。"
+                ),
+            }
+
+        # CLI / 非 Desktop 调用保持原同步阻塞语义及 Ctrl+C 处理。
+        from .interrupt_handler import get_interrupt_handler
         interrupt_handler = get_interrupt_handler()
         interrupt_handler.set_agent_manager(manager)
         interrupt_handler.set_ipc_manager(ipc_manager)
-        interrupt_handler.install()  # 安装信号处理器
-        
-        # 构建任务列表
-        tasks = []
-        for task_data in tasks_data:
-            # 修复 working_dir 路径
-            working_dir = task_data.get("working_dir")
-            if working_dir:
-                # 规范化工作目录路径
-                from .utils.path_validator import normalize_path_for_pathlib
-                working_dir = normalize_path_for_pathlib(working_dir)
-            
-            task = AgentTask(
-                task_id=task_data.get("task_id", ""),
-                task_content=task_data.get("task_content", ""),
-                agent_type_name=task_data.get("agent_type", "Coder"),
-                agent_type_config=get_agent_type(task_data.get("agent_type", "Coder")),
-                working_dir=working_dir,
-                skill=task_data.get("skill")  # 指定使用的skill（可选）
-            )
-            tasks.append(task)
-        
+        interrupt_handler.install()
         try:
-            # 派发任务
             manager.dispatch_tasks(tasks)
-            
-            # 等待完成
             result = manager.wait_for_completion()
-            
-            # Token 统计已由后端自动处理，无需手动累加
-            
-            # 检查是否被中断
+
             if interrupt_handler.is_interrupted():
-                # 收集中断状态
                 _, databases = interrupt_handler.handle_interrupt()
-                
-                # 收集每个Agent的输出
-                agent_outputs = {}
-                for agent_id, db in databases.items():
-                    agent_outputs[agent_id] = {
+                agent_outputs = {
+                    agent_id: {
                         "status": db.status.value,
                         "output": db.final_result or db.error_message or "",
-                        "tokens": db.total_tokens
+                        "tokens": db.total_tokens,
                     }
-                
+                    for agent_id, db in databases.items()
+                }
                 return {
                     "success": False,
                     "interrupted": True,
@@ -653,18 +737,17 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
                     "total_time": result.total_time,
                     "summary": result.get_summary(),
                     "agent_outputs": agent_outputs,
-                    "message": "子Agent执行被用户中断"
+                    "message": "子Agent执行被用户中断",
                 }
-            
-            # 收集每个Agent的输出
-            agent_outputs = {}
-            for agent_id, db in result.databases.items():
-                agent_outputs[agent_id] = {
+
+            agent_outputs = {
+                agent_id: {
                     "status": db.status.value,
                     "output": db.final_result or db.error_message or "",
-                    "tokens": db.total_tokens
+                    "tokens": db.total_tokens,
                 }
-            
+                for agent_id, db in result.databases.items()
+            }
             return {
                 "success": result.success,
                 "completed": result.completed_agents,
@@ -672,14 +755,16 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
                 "failed": result.failed_agents,
                 "total_time": result.total_time,
                 "summary": result.get_summary(),
-                "agent_outputs": agent_outputs
+                "agent_outputs": agent_outputs,
             }
         finally:
-            # 清理：卸载信号处理器，取消注册
             interrupt_handler.uninstall()
             interrupt_handler.set_agent_manager(None)
             interrupt_handler.reset()
-    
+            if manager.conversation_id:
+                from .agent_process import unregister_conversation_agent_manager
+                unregister_conversation_agent_manager(manager.conversation_id, manager)
+
     return safe_tool_execution("multi_agent_dispatch", _impl, args, return_json=True)
 
 
@@ -691,4 +776,5 @@ TOOL_HANDLERS: Dict[str, Any] = {
     "Grep": handle_grep,
     "web_browser": handle_web_browser,
     "multi_agent_dispatch": handle_multi_agent_dispatch,
+    "check_subagent_status": handle_check_subagent_status,
 }

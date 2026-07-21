@@ -41,6 +41,11 @@ class CLICommandHandler:
         print("B.continue ->继续最近保存的历史对话")
         print("C.mode ->查看或切换上下文处理模式，格式: mode [strong_context|long_context|auto]")
         print("D.char ->角色管理，格式: char [list|select <角色名>|remove]")
+        print("E.rollback ->文件级回滚，格式: rollback <文件路径> [--to <版本号>|--steps <N>]")
+        print("F.filehistory ->查看文件备份历史，格式: filehistory <文件路径>；不带参数列出所有被跟踪文件")
+        print("G.checkpoints ->列出当前会话的对话点快照")
+        print("H.rewind ->回滚到对话点（同时恢复文件+对话历史），格式: rewind [<checkpoint_id>|--turns <N>]")
+        print("I.whitelist ->安全守卫白名单，格式: whitelist [list|add <命令>]")
     
     def handle_command(
         self, 
@@ -140,7 +145,32 @@ class CLICommandHandler:
         if user_input.lower().startswith("char"):
             self._handle_char_command(user_input)
             return "", True
-        
+
+        # 文件级回滚
+        if user_input.lower().startswith("rollback"):
+            self._handle_rollback_command(user_input)
+            return "", True
+
+        # 文件备份历史
+        if user_input.lower().startswith("filehistory"):
+            self._handle_filehistory_command(user_input)
+            return "", True
+
+        # 对话点列表
+        if user_input.lower() == "checkpoints":
+            self._handle_checkpoints_command()
+            return "", True
+
+        # 对话点回滚
+        if user_input.lower().startswith("rewind"):
+            self._handle_rewind_command(user_input)
+            return "", True
+
+        # 安全守卫白名单
+        if user_input.lower().startswith("whitelist"):
+            self._handle_whitelist_command(user_input)
+            return "", True
+
         # 不是命令，返回原始输入
         return user_input, False
     
@@ -198,6 +228,9 @@ class CLICommandHandler:
             self.state.clear_all()
             clear_last_todo_content()
             todo_write([])
+            # 对话历史已清零，同步清空该会话的对话点快照
+            from .backup_manager import get_backup_manager
+            get_backup_manager().clear_checkpoints(self._current_session_id())
             print("[提示] 记忆已清除，所有状态已重置")
     
     def _handle_savemode_command(self) -> None:
@@ -346,14 +379,206 @@ class CLICommandHandler:
             if not current_characters:
                 print("[提示] 当前没有激活的角色")
                 return
-            
+
             character_name = current_characters[0]["name"]
             result = remove_character(character_name)
             if result.get("success"):
                 print(f"[成功] {result.get('message')}")
             else:
                 print(f"[错误] {result.get('error')}")
-        
+
         else:
             print(f"[错误] 未知命令: {command}")
             print("[提示] 使用 'char' 查看帮助")
+
+    def _current_session_id(self) -> str:
+        """CLI 模式下的会话 ID（与 conversation_loop 的 checkpoint 会话一致）"""
+        try:
+            from .session_context import get_current_conversation_id
+            return get_current_conversation_id() or "default"
+        except Exception:
+            return "default"
+
+    def _handle_rollback_command(self, user_input: str) -> None:
+        """处理文件级回滚: rollback <文件路径> [--to <版本号>|--steps <N>]"""
+        from .backup_manager import get_backup_manager
+
+        parts = user_input.strip().split()
+        if len(parts) < 2:
+            print("[用法] rollback <文件路径> [--to <版本号>|--steps <N>]")
+            print("       版本号 0 表示 baseline（首次备份前的原始内容）")
+            return
+
+        version_id = None
+        steps = None
+        path_parts = []
+        i = 1
+        while i < len(parts):
+            if parts[i] == "--to" and i + 1 < len(parts):
+                try:
+                    version_id = int(parts[i + 1])
+                except ValueError:
+                    print(f"[错误] 版本号需为整数: {parts[i + 1]}")
+                    return
+                i += 2
+            elif parts[i] == "--steps" and i + 1 < len(parts):
+                try:
+                    steps = int(parts[i + 1])
+                except ValueError:
+                    print(f"[错误] steps 需为整数: {parts[i + 1]}")
+                    return
+                i += 2
+            else:
+                path_parts.append(parts[i])
+                i += 1
+
+        if not path_parts:
+            print("[错误] 缺少文件路径")
+            return
+        file_path = " ".join(path_parts)
+
+        result = get_backup_manager().restore_file(file_path, version_id=version_id, steps=steps)
+        if result.get("ok"):
+            if result.get("deleted"):
+                print(f"[回滚成功] 文件已恢复到 v{result['restored_to_version']}（该版本文件不存在，已删除）")
+            else:
+                print(f"[回滚成功] {result['path']} -> v{result['restored_to_version']}")
+        else:
+            print(f"[错误] {result.get('error')}")
+
+    def _handle_filehistory_command(self, user_input: str) -> None:
+        """处理文件备份历史: filehistory [<文件路径>]"""
+        from .backup_manager import get_backup_manager
+
+        bm = get_backup_manager()
+        arg = user_input.strip()[len("filehistory"):].strip()
+
+        if not arg:
+            files = bm.list_tracked_files()
+            if not files:
+                print("[提示] 尚无被跟踪的文件备份")
+                return
+            print(f"\n[被跟踪的文件] 共 {len(files)} 个:")
+            for f in files:
+                print(f"  - {f}")
+            print("使用 'filehistory <文件路径>' 查看版本历史\n")
+            return
+
+        result = bm.get_history(arg)
+        if not result.get("ok"):
+            print(f"[错误] {result.get('error')}")
+            return
+
+        print(f"\n[备份历史] {result['path']}")
+        print(f"  baseline: {'有' if result['has_baseline'] else '无（文件由 Agent 创建）'}")
+        for v in result["versions"]:
+            deleted = "（删除）" if v["store"] == "delete" else ""
+            print(f"  v{v['id']:>3}  {v['ts']}  {v['op']:<16} {v['store']:<6} {v['size']} bytes {deleted}")
+        print("使用 'rollback <文件路径> --to <版本号>' 恢复到指定版本\n")
+
+    def _handle_checkpoints_command(self) -> None:
+        """列出当前会话的对话点快照"""
+        from .backup_manager import get_backup_manager
+
+        checkpoints = get_backup_manager().list_checkpoints(self._current_session_id())
+        if not checkpoints:
+            print("[提示] 当前会话没有对话点快照")
+            return
+
+        print(f"\n[对话点快照] 共 {len(checkpoints)} 个:")
+        for cp in checkpoints:
+            n_files = len(cp.get("files", {}))
+            print(f"  {cp['id']}  {cp['ts']}  消息数={cp['message_count']}  跟踪文件={n_files}")
+        print("使用 'rewind <checkpoint_id>' 回滚到指定对话点\n")
+
+    def _handle_rewind_command(self, user_input: str) -> None:
+        """处理对话点回滚: rewind [<checkpoint_id>|--turns <N>]"""
+        from .backup_manager import get_backup_manager
+
+        parts = user_input.strip().split()
+        checkpoint_id = None
+        steps = None
+        if len(parts) >= 3 and parts[1] == "--turns":
+            try:
+                steps = int(parts[2])
+            except ValueError:
+                print(f"[错误] turns 需为整数: {parts[2]}")
+                return
+        elif len(parts) >= 2:
+            checkpoint_id = parts[1]
+
+        confirm = input("确定要回滚吗？将同时恢复文件和对话历史 (y/n): ").strip().lower()
+        if confirm != "y":
+            print("[提示] 已取消")
+            return
+
+        result = get_backup_manager().rewind(
+            self._current_session_id(),
+            checkpoint_id=checkpoint_id,
+            steps=steps,
+        )
+        if not result.get("ok") and not (result.get("restored") or result.get("deleted")):
+            print(f"[错误] {result.get('error', '回滚失败')}")
+            if result.get("failed"):
+                for f in result["failed"]:
+                    print(f"  失败: {f['path']} - {f['error']}")
+            return
+
+        # 截断对话历史到 checkpoint 时的消息数
+        message_count = result["message_count"]
+        if len(self.state.messages) > message_count:
+            self.state.messages = self.state.messages[:message_count]
+        clear_last_todo_content()
+        todo_write([])
+
+        print(f"[回滚成功] 已回到对话点 {result['checkpoint']} ({result['ts']})")
+        print(f"  对话历史: 截断到 {message_count} 条消息")
+        if result.get("restored"):
+            print(f"  恢复文件: {len(result['restored'])} 个")
+            for p in result["restored"]:
+                print(f"    - {p}")
+        if result.get("deleted"):
+            print(f"  删除文件（回滚创建操作）: {len(result['deleted'])} 个")
+            for p in result["deleted"]:
+                print(f"    - {p}")
+        if result.get("skipped"):
+            print(f"  跳过（仅其它会话修改）: {len(result['skipped'])} 个")
+            for p in result["skipped"]:
+                print(f"    - {p}")
+        if result.get("failed"):
+            print(f"  失败: {len(result['failed'])} 个")
+            for f in result["failed"]:
+                print(f"    - {f['path']}: {f['error']}")
+
+    def _handle_whitelist_command(self, user_input: str) -> None:
+        """处理安全守卫白名单: whitelist [list|add <命令>]"""
+        from .security_guard import load_whitelist, add_to_whitelist
+
+        rest = user_input.strip()[len("whitelist"):].strip()
+        if not rest or rest.lower() == "list":
+            data = load_whitelist(force_reload=True)
+            commands = data.get("commands", [])
+            patterns = data.get("patterns", [])
+            if not commands and not patterns:
+                print("[提示] 白名单为空，使用 'whitelist add <命令>' 添加信任命令")
+                return
+            print("\n[安全守卫白名单]")
+            for c in commands:
+                print(f"  命令: {c}")
+            for p in patterns:
+                print(f"  正则: {p}")
+            print()
+            return
+
+        if rest.lower().startswith("add "):
+            command = rest[4:].strip()
+            if not command:
+                print("[错误] 缺少命令内容")
+                return
+            if add_to_whitelist(command):
+                print(f"[成功] 已加入白名单: {command}")
+            else:
+                print("[错误] 白名单保存失败")
+            return
+
+        print("[用法] whitelist [list|add <命令>]")

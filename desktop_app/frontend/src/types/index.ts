@@ -1,3 +1,11 @@
+// 安全 Agent 解析出的命令意图 + 恶意研判（持久化显示在对应的 assistant 消息里）
+export interface CommandIntent {
+  command: string;
+  intent: string;
+  is_malicious?: boolean;
+  malicious_reason?: string;
+}
+
 // 消息类型
 export interface Message {
   id: string;
@@ -6,6 +14,7 @@ export interface Message {
   timestamp: number;
   sent_messages?: Array<{role: string; content: string}>;  // 实际发送给LLM的消息（用于详细显示）
   raw_response?: string;  // LLM返回的原始响应（包含协议标记）
+  command_intents?: CommandIntent[];  // 该轮回复中命令的意图解释（辅助代理产出）
 }
 
 // 对话类型
@@ -176,7 +185,13 @@ export type TaskEventName =
   | 'tool_call'
   | 'tool_result'
   | 'todo_update'
-  | 'task_finished';
+  | 'task_finished'
+  // 安全 Agent 事件
+  | 'security_checking'
+  | 'security_alert'
+  | 'security_result'
+  | 'command_intent'
+  | 'security_malicious';
 
 export interface WSTaskEvent {
   type: 'task_event';
@@ -203,7 +218,33 @@ export interface WSTaskEvent {
     // task_finished
     rounds?: number;
     error?: string;
+    // 安全守卫 / 辅助代理
+    command?: string;
+    category?: string;
+    description?: string;
+    risk_level?: 'low' | 'medium' | 'high';
+    action?: string;
+    harm?: string;
+    reversible?: boolean | null;
+    rollback_command?: string | null;
+    recommendation?: string;
+    auto_allow?: boolean;
+    confirmed?: boolean;
+    intent?: string;
+    cached?: boolean;
+    // command_intent 恶意研判 / security_malicious
+    is_malicious?: boolean;
+    malicious_reason?: string;
+    interrupted?: boolean;
   };
+}
+
+// Agent 当前活动（安全 Agent 意图 / 风险扫描 / 恶意告警）—— 非阻塞的状态提示
+export interface AgentActivity {
+  kind: 'intent' | 'security_checking' | 'security_alert' | 'security_malicious';
+  text: string;
+  riskLevel?: 'low' | 'medium' | 'high';
+  command?: string;
 }
 
 // GET /api/task/status 返回的任务注册表条目

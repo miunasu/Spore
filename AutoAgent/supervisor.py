@@ -52,12 +52,13 @@ def supervisor(last_answer: str, current_answer: str) -> bool:
     
     system_prompt = load_system_prompt("prompt/supervisor_prompt.md")
     try:
-        # 通过 IPC 发送请求
+        # 通过 IPC 发送请求（颗粒化基座：AGENT_SUPERVISOR_* → SUB_AGENT_* → 主配置）
         _config = get_config()
         request_id = _ipc_manager.send_chat_request(
             messages=messages,
-            model=_config.get_model(),
+            model=_config.resolve_agent_llm("supervisor")["model"],
             system=system_prompt,
+            agent_profile="supervisor",
             tool_calls=False
         )
         

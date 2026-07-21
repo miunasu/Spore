@@ -5,12 +5,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { CommandMenu } from './CommandMenu';
 import { ConfirmBar } from './ConfirmBar';
+import { AgentActivityBar } from './AgentActivityBar';
 
 interface InputAreaProps {
-  // Props interface - currently empty but kept for future extensibility
+  /** mini 模式：隐藏底部提示文字，输入框更紧凑 */
+  mini?: boolean;
 }
 
-export const InputArea: React.FC<InputAreaProps> = () => {
+export const InputArea: React.FC<InputAreaProps> = ({ mini = false }) => {
   const { inputValue, setInputValue, sendMessage, interrupt } = useChatStore();
   const isGenerating = useChatStore((state) => state.isGenerating());
   const backendStatus = useChatStore(
@@ -51,7 +53,11 @@ export const InputArea: React.FC<InputAreaProps> = () => {
 
   return (
     <div>
-      {/* 确认栏 */}
+      {/* Agent 活动提示（非阻塞：命令意图 / 安全扫描）；
+          mini 模式下由 MiniModeView 常驻渲染，这里不重复 */}
+      {!mini && <AgentActivityBar />}
+
+      {/* 确认栏（阻塞：删除 / 高危操作确认） */}
       <ConfirmBar />
       
       <div className="flex items-end gap-2 bg-spore-card border border-spore-border/50 rounded-2xl shadow-card p-2 transition-all focus-within:border-spore-highlight/50 focus-within:shadow-glow">
@@ -79,7 +85,7 @@ export const InputArea: React.FC<InputAreaProps> = () => {
         {/* 右侧按钮组 - 水平并排 */}
         <div className="flex items-center gap-1 flex-shrink-0">
           {/* 命令菜单 - 三个点竖直图标 */}
-          <CommandMenu vertical />
+          <CommandMenu vertical mini={mini} />
           
           {/* 发送/停止按钮 */}
           {isGenerating ? (
@@ -107,12 +113,14 @@ export const InputArea: React.FC<InputAreaProps> = () => {
         </div>
       </div>
       
-      {/* 提示文字 */}
-      <div className="flex items-center justify-center text-xs text-spore-muted mt-2 px-1">
-        <span className="text-center">
-          Shift + Enter for new line · Enter to send
-        </span>
-      </div>
+      {/* 提示文字（mini 模式下省略） */}
+      {!mini && (
+        <div className="flex items-center justify-center text-xs text-spore-muted mt-2 px-1">
+          <span className="text-center">
+            Shift + Enter for new line · Enter to send
+          </span>
+        </div>
+      )}
     </div>
   );
 };

@@ -58,7 +58,11 @@ class ChatProcess:
         self.executor: Optional[ThreadPoolExecutor] = None
         self.active_requests: Dict[str, Future] = {}  # request_id -> Future
         self.active_requests_lock = threading.Lock()
-        
+
+        # AutoAgent 颗粒化基座：按 (sdk, api_key, api_url) 懒加载缓存客户端
+        self._profile_clients: Dict[tuple, Any] = {}
+        self._profile_clients_lock = threading.Lock()
+
         # 全局中断标志 - 所有线程共享
         self.global_cancel_flag = threading.Event()
         
@@ -141,23 +145,69 @@ class ChatProcess:
         model = request_data.get("model")
         system = request_data.get("system")
         use_sub_agent_config = request_data.get("use_sub_agent_config", False)
-        
-        # 根据是否使用子 agent 配置选择 SDK 和客户端
-        if use_sub_agent_config:
-            # 使用子 agent 配置
+        agent_profile = request_data.get("agent_profile")
+
+        # 优先级：颗粒化 profile 基座 > 子 Agent 基座 > 主 Agent 基座
+        overrides = None
+        if agent_profile:
+            resolved = self.config.resolve_agent_llm(agent_profile)
+            sdk = resolved["sdk"]
+            client = self._client_for(sdk, resolved["api_key"], resolved["api_url"])
+            # profile 配置的 model 优先；未配置时用调用方传入的 model 兜底
+            model = resolved["model"] or model
+            overrides = resolved  # 含高级参数（effort/thinking/responses）
+        elif use_sub_agent_config:
+            # 子 Agent 派发：沿用预初始化的子 Agent 客户端，
+            # 但高级参数按 sub_agent 层解析（SUB_AGENT_* → 主）
             sdk = self.sub_agent_llm_sdk
             client = self.sub_agent_client if sdk == "openai" else self.sub_agent_anthropic_client
+            overrides = self.config.resolve_agent_llm("sub_agent")
         else:
             # 使用主 agent 配置
             sdk = self.llm_sdk
             client = self.client if sdk == "openai" else self.anthropic_client
-        
+
         # 根据 SDK 类型选择不同的调用方式
         if sdk == "anthropic":
-            return self._do_anthropic_call(request_id, messages, model, system, client)
+            return self._do_anthropic_call(request_id, messages, model, system, client, overrides)
         else:
-            return self._do_openai_call(request_id, messages, model, system, client)
-    
+            return self._do_openai_call(request_id, messages, model, system, client, overrides)
+
+    # effort 类参数的显式关闭哨兵：配置 none/off 表示"该层明确不传此参数"，
+    # 与"留空 → 继承下层配置"区分开（例如主 Agent 开 effort、某个 AutoAgent 关掉）
+    _EFFORT_NONE_SENTINELS = ("none", "off")
+
+    def _adv(self, overrides: Optional[Dict[str, Any]], key: str, config_attr: str):
+        """取有效高级参数：overrides 命中（非 None）则用之，否则回退全局 config。"""
+        if overrides is not None:
+            val = overrides.get(key)
+            if val is not None:
+                return val
+        return getattr(self.config, config_attr, None)
+
+    def _adv_effort(self, overrides: Optional[Dict[str, Any]], key: str, config_attr: str):
+        """取 effort 类参数：在 _adv 基础上把显式关闭哨兵（none/off）消化为不传。"""
+        val = self._adv(overrides, key, config_attr)
+        if isinstance(val, str) and val.strip().lower() in self._EFFORT_NONE_SENTINELS:
+            return None
+        return val
+
+
+    def _client_for(self, sdk: str, api_key: str, api_url: Optional[str]):
+        """按 (sdk, api_key, api_url) 懒加载并缓存客户端，供颗粒化 Agent 基座复用。"""
+        cache_key = (sdk, api_key or "", api_url or "")
+        with self._profile_clients_lock:
+            cached = self._profile_clients.get(cache_key)
+            if cached is not None:
+                return cached
+            from .client import build_openai_client, build_anthropic_client
+            if sdk == "anthropic":
+                client = build_anthropic_client(api_key, api_url)
+            else:
+                client = build_openai_client(api_key, api_url)
+            self._profile_clients[cache_key] = client
+            return client
+
 
     @staticmethod
     def _extract_openai_responses_text(response: Any) -> str:
@@ -368,17 +418,18 @@ class ChatProcess:
 
 
     def _do_openai_call(
-        self, 
-        request_id: str, 
-        messages: list, 
-        model: str, 
+        self,
+        request_id: str,
+        messages: list,
+        model: str,
         system: Optional[str],
-        client: "OpenAI"
+        client: "OpenAI",
+        overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """使用 OpenAI SDK 调用 LLM（自动选择 Chat Completions 或 Responses API）"""
-        if self.config.use_responses_api:
-            return self._do_openai_responses_call(request_id, messages, model, system, client)
-        return self._do_openai_chat_call(request_id, messages, model, system, client)
+        if self._adv(overrides, "use_responses_api", "use_responses_api"):
+            return self._do_openai_responses_call(request_id, messages, model, system, client, overrides)
+        return self._do_openai_chat_call(request_id, messages, model, system, client, overrides)
 
     def _do_openai_chat_call(
         self,
@@ -386,7 +437,8 @@ class ChatProcess:
         messages: list,
         model: str,
         system: Optional[str],
-        client: "OpenAI"
+        client: "OpenAI",
+        overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """使用 OpenAI Chat Completions API"""
         # 构建最终消息列表
@@ -430,10 +482,11 @@ class ChatProcess:
                 "timeout": timeout,
             }
             
-            # 如果配置了 reasoning_effort，添加到请求中
-            if self.config.openai_reasoning_effort:
-                request_params["extra_body"] = {"reasoning_effort": self.config.openai_reasoning_effort}
-            
+            # 如果配置了 reasoning_effort，添加到请求中（none/off 表示明确不传）
+            eff = self._adv_effort(overrides, "reasoning_effort", "openai_reasoning_effort")
+            if eff:
+                request_params["extra_body"] = {"reasoning_effort": eff}
+
             completion = client.chat.completions.create(**request_params)
             
             if self.global_cancel_flag.is_set():
@@ -519,7 +572,8 @@ class ChatProcess:
         messages: list,
         model: str,
         system: Optional[str],
-        client: "OpenAI"
+        client: "OpenAI",
+        overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """使用 OpenAI Responses API（client.responses.create）"""
         # Responses API 使用 `input` 字段传消息，`instructions` 传 system prompt
@@ -556,9 +610,10 @@ class ChatProcess:
             if system and not self.config.system_as_user:
                 request_params["instructions"] = system
 
-            # 如果配置了 reasoning_effort，添加到请求中
-            if self.config.openai_reasoning_effort:
-                request_params["reasoning"] = {"effort": self.config.openai_reasoning_effort}
+            # 如果配置了 reasoning_effort，添加到请求中（none/off 表示明确不传）
+            eff = self._adv_effort(overrides, "reasoning_effort", "openai_reasoning_effort")
+            if eff:
+                request_params["reasoning"] = {"effort": eff}
 
             response = client.responses.create(**request_params)
 
@@ -634,12 +689,13 @@ class ChatProcess:
             return {"request_id": request_id, "status": "error", "data": str(exc)}
     
     def _do_anthropic_call(
-        self, 
-        request_id: str, 
-        messages: list, 
-        model: str, 
+        self,
+        request_id: str,
+        messages: list,
+        model: str,
         system: Optional[str],
-        client: "Anthropic"
+        client: "Anthropic",
+        overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """使用 Anthropic SDK 调用 LLM"""
         # Anthropic 消息格式转换
@@ -714,9 +770,10 @@ class ChatProcess:
             # Claude thinking / effort：
             # - 现代模型：thinking={"type":"adaptive"} + output_config={"effort":...}
             # - 旧模型手动扩展思考：thinking={"type":"enabled","budget_tokens":N}
-            thinking_mode = self.config.anthropic_thinking_mode
-            effort = self.config.anthropic_effort
-            budget_tokens = self.config.anthropic_thinking_budget_tokens
+            thinking_mode = self._adv(overrides, "thinking_mode", "anthropic_thinking_mode")
+            # none/off 哨兵 → 明确不传 effort（且不会触发 adaptive thinking 的自动推断）
+            effort = self._adv_effort(overrides, "effort", "anthropic_effort")
+            budget_tokens = self._adv(overrides, "thinking_budget_tokens", "anthropic_thinking_budget_tokens")
 
             if thinking_mode is None:
                 if effort:

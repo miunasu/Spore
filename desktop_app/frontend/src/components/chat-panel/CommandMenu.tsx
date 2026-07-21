@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { commandsApi, filesApi, settingsApi } from '../../services/api';
+import { commandsApi, filesApi, settingsApi, backupApi, ApiError } from '../../services/api';
 
 interface MenuItem {
   id: string;
@@ -15,6 +15,8 @@ interface MenuItem {
 
 interface CommandMenuProps {
   vertical?: boolean;
+  /** mini 模式：窗口窄小，菜单右对齐弹出并限制高度（可滚动） */
+  mini?: boolean;
 }
 
 // ENV 配置项定义
@@ -36,6 +38,31 @@ interface ConfigProfile {
   is_active: boolean;
   created_at: number;
   updated_at: number;
+}
+
+// 备份回滚：对话点快照
+interface CheckpointInfo {
+  id: string;
+  ts: string;
+  message_count: number;
+  llm_reply_count: number;
+  reply_preview?: string;
+  files: Record<string, number>;
+}
+
+// 备份回滚：文件版本历史
+interface FileBackupVersion {
+  id: number;
+  ts: string;
+  op: string;
+  store: string;
+  size: number;
+}
+
+interface FileBackupHistory {
+  path: string;
+  has_baseline: boolean;
+  versions: FileBackupVersion[];
 }
 
 const MAIN_SDK_PROFILE_KEYS = {
@@ -83,6 +110,21 @@ const COMMON_PROFILE_KEYS = [
 const ANTHROPIC_COMPAT_PROFILE_KEYS = [
   'CLEAN_AUTH_HEADER',
 ] as const;
+
+// AutoAgent 颗粒化基座的全部 env key（子 Agent + 4 个 AutoAgent，openai/anthropic 两套）
+// appendValue 会跳过空值，所以两套变体全列出是安全的
+const AGENT_BASE_PROFILE_KEYS = (() => {
+  const prefixes = ['SUB_AGENT', 'AGENT_SUPERVISOR', 'AGENT_MODE_SELECTOR', 'AGENT_SECURITY'];
+  const suffixes = [
+    'LLM_SDK',
+    'OPENAI_API_KEY', 'OPENAI_API_URL', 'OPENAI_MODEL',
+    'ANTHROPIC_API_KEY', 'ANTHROPIC_API_URL', 'ANTHROPIC_MODEL',
+    // 高级参数
+    'USE_RESPONSES_API', 'OPENAI_REASONING_EFFORT',
+    'ANTHROPIC_EFFORT', 'ANTHROPIC_THINKING_MODE', 'ANTHROPIC_THINKING_BUDGET_TOKENS',
+  ];
+  return prefixes.flatMap((p) => suffixes.map((s) => `${p}_${s}`));
+})();
 
 // ENV 配置分组
 // basic: 最小可用配置（能连上模型即可跑）
@@ -137,9 +179,6 @@ const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
       },
     ],
   },
-];
-
-const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
   {
     title: 'OpenAI 高级',
     items: [
@@ -205,27 +244,9 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
       },
     ],
   },
-  {
-    title: '子 Agent LLM',
-    items: [
-      {
-        key: 'SUB_AGENT_LLM_SDK',
-        label: '子 Agent SDK',
-        type: 'select',
-        options: [
-          { value: 'openai', label: 'OpenAI SDK' },
-          { value: 'anthropic', label: 'Anthropic SDK' },
-        ],
-        placeholder: '默认: 继承主 Agent',
-      },
-      { key: 'SUB_AGENT_OPENAI_API_KEY', label: '子 Agent OpenAI Key', type: 'text', placeholder: '默认: 继承主 Agent' },
-      { key: 'SUB_AGENT_OPENAI_API_URL', label: '子 Agent OpenAI URL', type: 'text', placeholder: '默认: 继承主 Agent' },
-      { key: 'SUB_AGENT_OPENAI_MODEL', label: '子 Agent OpenAI 模型', type: 'text', placeholder: '默认: 继承主 Agent' },
-      { key: 'SUB_AGENT_ANTHROPIC_API_KEY', label: '子 Agent Anthropic Key', type: 'text', placeholder: '默认: 继承主 Agent' },
-      { key: 'SUB_AGENT_ANTHROPIC_API_URL', label: '子 Agent Anthropic URL', type: 'text', placeholder: '默认: 继承主 Agent' },
-      { key: 'SUB_AGENT_ANTHROPIC_MODEL', label: '子 Agent Anthropic 模型', type: 'text', placeholder: '默认: 继承主 Agent' },
-    ],
-  },
+];
+
+const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
   {
     title: 'LLM 参数',
     items: [
@@ -583,7 +604,335 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
       },
     ],
   },
+  {
+    title: '备份恢复',
+    items: [
+      {
+        key: 'BACKUP_ENABLED',
+        label: '备份系统',
+        type: 'select',
+        options: [
+          { value: 'true', label: '开启（推荐）' },
+          { value: 'false', label: '关闭' },
+        ],
+        description: '总开关：文件写操作自动增量备份 + 每轮对话点快照，支持文件级/对话级回滚',
+        placeholder: '默认: true',
+      },
+      {
+        key: 'BACKUP_DIR',
+        label: '备份目录',
+        type: 'text',
+        description: '备份数据存储目录（相对项目根目录或绝对路径）；修改后需重启后端生效',
+        placeholder: '默认: .spore',
+      },
+      {
+        key: 'BACKUP_MAX_FILE_BYTES',
+        label: '单文件备份上限',
+        type: 'number',
+        description: '超过该大小（字节）的文件跳过备份，避免占用过多空间',
+        placeholder: '默认: 52428800（50MB）',
+      },
+      {
+        key: 'BACKUP_MAX_DELETE_FILES',
+        label: '删除目录备份上限',
+        type: 'number',
+        description: '删除目录时最多备份的文件数量',
+        placeholder: '默认: 200',
+      },
+    ],
+  },
+  {
+    title: '安全 Agent',
+    items: [
+      {
+        key: 'SECURITY_AGENT_MODE',
+        label: '安全 Agent 模式',
+        type: 'select',
+        options: [
+          { value: 'off', label: 'off（关闭）' },
+          { value: 'basic', label: 'basic（高危命令 AI 风险评估）' },
+          { value: 'full', label: 'full（basic + 普通命令意图与恶意研判）' },
+        ],
+        description: 'off 全关；basic 仅对命中高危关键词的命令做 AI 风险评估与确认；full 额外对普通命令做意图解析+恶意研判，判定恶意时自动中断本轮会话',
+        placeholder: '默认: full',
+      },
+      {
+        key: 'SECURITY_GUARD_MODE',
+        label: '风险容忍度',
+        type: 'select',
+        options: [
+          { value: 'strict', label: 'strict（命中即确认）' },
+          { value: 'balanced', label: 'balanced（低风险自动放行）' },
+          { value: 'permissive', label: 'permissive（低+中风险放行）' },
+        ],
+        description: 'strict 最谨慎；balanced 平衡；permissive 仅高风险才拦截',
+        placeholder: '默认: balanced',
+      },
+      {
+        key: 'SECURITY_LLM_TIMEOUT',
+        label: '风险评估超时',
+        type: 'number',
+        description: '高危命令 AI 风险评估的超时时间（秒）',
+        placeholder: '默认: 30',
+      },
+      {
+        key: 'SECURITY_INTENT_TIMEOUT',
+        label: '意图研判超时',
+        type: 'number',
+        description: 'full 模式下普通命令意图/恶意研判的超时时间（秒）',
+        placeholder: '默认: 45',
+      },
+    ],
+  },
 ];
+
+// 环境配置分组按语义拆到三个设置标签（LLM / Agent / 系统）
+const _advGroupsByTitle = (titles: string[]): EnvConfigGroup[] =>
+  ENV_ADVANCED_CONFIG_GROUPS.filter((g) => titles.includes(g.title));
+
+// LLM 标签的高级组（基础 SDK/API 组仍用 ENV_BASIC_CONFIG_GROUPS 单独渲染）
+const LLM_ADVANCED_GROUPS = _advGroupsByTitle(['LLM 参数', 'SDK 兼容性']);
+// Agent 标签的组（另有 Agent 基座颗粒化编辑器单独渲染）
+const AGENT_ENV_GROUPS = _advGroupsByTitle(['对话管理', '多 Agent 配置', '安全 Agent', '拦截开关']);
+// 系统标签的组（基础设施/环境）
+const SYSTEM_ENV_GROUPS = _advGroupsByTitle([
+  '工具配置', '日志配置', '路径配置', 'Chat 进程配置', 'Desktop 启动配置', '备份恢复',
+]);
+
+// 普通配置分组渲染（select/input），LLM 高级 / Agent / 系统三处共用
+const EnvGroupFields: React.FC<{
+  group: EnvConfigGroup;
+  envValues: Record<string, string>;
+  updateEnvValue: (key: string, value: string) => void;
+}> = ({ group, envValues, updateEnvValue }) => (
+  <div className="space-y-3">
+    <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
+      {group.title}
+    </h5>
+    <div className="space-y-3">
+      {group.items.map((item) => (
+        <div key={item.key} className="space-y-1">
+          <label className="flex items-center gap-2 text-xs text-spore-muted">
+            <span>{item.label}</span>
+            {item.description && (
+              <span className="text-spore-muted/60">({item.description})</span>
+            )}
+          </label>
+          {item.type === 'select' ? (
+            <select
+              value={envValues[item.key] || ''}
+              onChange={(e) => updateEnvValue(item.key, e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
+            >
+              <option value="">{item.placeholder || '未设置'}</option>
+              {item.options?.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={item.type === 'number' ? 'number' : 'text'}
+              value={envValues[item.key] || ''}
+              onChange={(e) => updateEnvValue(item.key, e.target.value)}
+              placeholder={item.placeholder}
+              className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono"
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// Agent 基座配置目标：子 Agent 是所有 AutoAgent 的默认基座，
+// 其余 4 个 AutoAgent 可各自覆盖（字段留空则回退到子 Agent → 主 Agent）
+type AgentBaseTarget = {
+  id: string;
+  label: string;
+  prefix: string; // env key 前缀
+  hint: string;
+};
+
+const AGENT_BASE_TARGETS: AgentBaseTarget[] = [
+  { id: 'sub_agent', label: '子 Agent（默认基座）', prefix: 'SUB_AGENT', hint: '所有子 Agent / AutoAgent 的默认基座；留空则继承主 Agent' },
+  { id: 'supervisor', label: 'Supervisor（循环检测）', prefix: 'AGENT_SUPERVISOR', hint: '检测对话是否结束；留空则继承子 Agent' },
+  { id: 'mode_selector', label: 'ModeSelector（模式选择）', prefix: 'AGENT_MODE_SELECTOR', hint: '自动选择上下文模式；留空则继承子 Agent' },
+  { id: 'security', label: 'Security（安全 Agent）', prefix: 'AGENT_SECURITY', hint: '高危命令风险评估 + 普通命令意图/恶意研判；推荐 Sonnet/GPT-4o-mini 级模型；留空则继承子 Agent' },
+];
+
+// 给定配置目标前缀，返回该目标的 env key 集合（基础 + 高级）
+const agentBaseKeys = (prefix: string) => ({
+  sdk: `${prefix}_LLM_SDK`,
+  openaiKey: `${prefix}_OPENAI_API_KEY`,
+  openaiUrl: `${prefix}_OPENAI_API_URL`,
+  openaiModel: `${prefix}_OPENAI_MODEL`,
+  anthropicKey: `${prefix}_ANTHROPIC_API_KEY`,
+  anthropicUrl: `${prefix}_ANTHROPIC_API_URL`,
+  anthropicModel: `${prefix}_ANTHROPIC_MODEL`,
+  // 高级参数
+  useResponsesApi: `${prefix}_USE_RESPONSES_API`,
+  openaiEffort: `${prefix}_OPENAI_REASONING_EFFORT`,
+  anthropicEffort: `${prefix}_ANTHROPIC_EFFORT`,
+  thinkingMode: `${prefix}_ANTHROPIC_THINKING_MODE`,
+  thinkingBudget: `${prefix}_ANTHROPIC_THINKING_BUDGET_TOKENS`,
+});
+
+// Agent 基座（颗粒化）编辑器：下拉切换配置目标，字段按有效 SDK 动态映射
+const AgentBaseEditor: React.FC<{
+  agentBaseTarget: string;
+  setAgentBaseTarget: (id: string) => void;
+  envValues: Record<string, string>;
+  updateEnvValue: (key: string, value: string) => void;
+}> = ({ agentBaseTarget, setAgentBaseTarget, envValues, updateEnvValue }) => {
+  const target =
+    AGENT_BASE_TARGETS.find((t) => t.id === agentBaseTarget) || AGENT_BASE_TARGETS[0];
+  const keys = agentBaseKeys(target.prefix);
+  const targetSdk = (envValues[keys.sdk] || '').toLowerCase();
+  const subSdk = (envValues['SUB_AGENT_LLM_SDK'] || '').toLowerCase();
+  const mainSdk = (envValues['LLM_SDK'] || '').toLowerCase() || 'openai';
+  // 有效 SDK：决定展示哪一套字段（该目标显式选择 → 子 Agent → 主 Agent）
+  const effectiveSdk = targetSdk || (target.id !== 'sub_agent' ? subSdk : '') || mainSdk;
+  const isAnthropic = effectiveSdk === 'anthropic';
+  const inheritHint = target.id === 'sub_agent' ? '默认: 继承主 Agent' : '默认: 继承子 Agent';
+  return (
+    <div className="space-y-3">
+      <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
+        Agent 基座（颗粒化）
+      </h5>
+      <p className="text-[11px] text-spore-muted/70 -mt-1">
+        每个目标拥有独立的基座 + 高级参数（effort/thinking），与主 Agent 互不影响；任一字段留空即继承上层基座。
+      </p>
+      {/* 配置目标下拉 */}
+      <div className="space-y-1">
+        <label className="text-xs text-spore-muted">配置目标</label>
+        <select
+          value={agentBaseTarget}
+          onChange={(e) => setAgentBaseTarget(e.target.value)}
+          className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-highlight/40 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/60"
+        >
+          {AGENT_BASE_TARGETS.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <p className="text-[11px] text-spore-muted/70">{target.hint}</p>
+      </div>
+      {/* SDK 选择 */}
+      <div className="space-y-1">
+        <label className="text-xs text-spore-muted">SDK 类型</label>
+        <select
+          value={envValues[keys.sdk] || ''}
+          onChange={(e) => updateEnvValue(keys.sdk, e.target.value)}
+          className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
+        >
+          <option value="">{inheritHint}</option>
+          <option value="openai">OpenAI SDK</option>
+          <option value="anthropic">Anthropic SDK</option>
+        </select>
+      </div>
+      {/* 按 SDK 动态显示 OpenAI / Anthropic 字段 */}
+      {[
+        { show: !isAnthropic, label: 'OpenAI Key', k: keys.openaiKey },
+        { show: !isAnthropic, label: 'OpenAI URL', k: keys.openaiUrl },
+        { show: !isAnthropic, label: 'OpenAI 模型', k: keys.openaiModel },
+        { show: isAnthropic, label: 'Anthropic Key', k: keys.anthropicKey },
+        { show: isAnthropic, label: 'Anthropic URL', k: keys.anthropicUrl },
+        { show: isAnthropic, label: 'Anthropic 模型', k: keys.anthropicModel },
+      ]
+        .filter((f) => f.show)
+        .map((f) => (
+          <div key={f.k} className="space-y-1">
+            <label className="text-xs text-spore-muted">{f.label}</label>
+            <input
+              type="text"
+              value={envValues[f.k] || ''}
+              onChange={(e) => updateEnvValue(f.k, e.target.value)}
+              placeholder={inheritHint}
+              className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono"
+            />
+          </div>
+        ))}
+      {/* 高级参数（按有效 SDK 展示；每个目标独立，留空继承上层） */}
+      <div className="space-y-3 pt-2 border-t border-spore-border/20">
+        <p className="text-[11px] text-spore-muted/70">
+          高级参数 · {isAnthropic ? 'Anthropic' : 'OpenAI'}（留空继承上层基座）
+        </p>
+        {!isAnthropic && (
+          <>
+            <div className="space-y-1">
+              <label className="text-xs text-spore-muted">使用 Responses API</label>
+              <select
+                value={envValues[keys.useResponsesApi] || ''}
+                onChange={(e) => updateEnvValue(keys.useResponsesApi, e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
+              >
+                <option value="">{inheritHint}</option>
+                <option value="true">是</option>
+                <option value="false">否</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-spore-muted">Reasoning Effort</label>
+              <select
+                value={envValues[keys.openaiEffort] || ''}
+                onChange={(e) => updateEnvValue(keys.openaiEffort, e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
+              >
+                <option value="">{inheritHint}</option>
+                <option value="none">none（明确不传此参数）</option>
+                {['low', 'medium', 'high', 'xhigh'].map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+        {isAnthropic && (
+          <>
+            <div className="space-y-1">
+              <label className="text-xs text-spore-muted">Thinking Effort</label>
+              <select
+                value={envValues[keys.anthropicEffort] || ''}
+                onChange={(e) => updateEnvValue(keys.anthropicEffort, e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
+              >
+                <option value="">{inheritHint}</option>
+                <option value="none">none（明确不传此参数）</option>
+                {['low', 'medium', 'high', 'xhigh', 'max'].map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-spore-muted">Thinking Mode</label>
+              <select
+                value={envValues[keys.thinkingMode] || ''}
+                onChange={(e) => updateEnvValue(keys.thinkingMode, e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
+              >
+                <option value="">{inheritHint}</option>
+                <option value="adaptive">adaptive（推荐）</option>
+                <option value="enabled">enabled（手动 budget）</option>
+                <option value="disabled">disabled</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-spore-muted">Thinking Budget Tokens</label>
+              <input
+                type="text"
+                value={envValues[keys.thinkingBudget] || ''}
+                onChange={(e) => updateEnvValue(keys.thinkingBudget, e.target.value)}
+                placeholder={inheritHint}
+                className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono"
+              />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
 
 // 解析 .env 内容为对象
 const parseEnvContent = (content: string): Record<string, string> => {
@@ -642,11 +991,13 @@ const updateEnvContent = (
   return newLines.join('\n');
 };
 
-export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) => {
+export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'general' | 'env' | 'tools'>('general');
+  const [settingsTab, setSettingsTab] = useState<'general' | 'llm' | 'agent' | 'system' | 'tools'>('general');
   const [showAdvancedEnv, setShowAdvancedEnv] = useState(false);
+  // Agent 基座配置：当前正在编辑的配置目标（子 Agent / 4 个 AutoAgent）
+  const [agentBaseTarget, setAgentBaseTarget] = useState<string>('sub_agent');
   const [envContent, setEnvContent] = useState('');
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
   const [envLoading, setEnvLoading] = useState(false);
@@ -662,6 +1013,16 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
   const [characters, setCharacters] = useState<Array<{ name: string; path: string }>>([]);
   const [currentCharacter, setCurrentCharacter] = useState<string>('');
   const [charactersLoading, setCharactersLoading] = useState(false);
+
+  // 备份回滚状态
+  const [showBackup, setShowBackup] = useState(false);
+  const [backupTab, setBackupTab] = useState<'checkpoints' | 'files'>('checkpoints');
+  const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([]);
+  const [trackedFiles, setTrackedFiles] = useState<string[]>([]);
+  const [fileHistory, setFileHistory] = useState<FileBackupHistory | null>(null);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
 
   // Session tool policy
   type ToolSubMeta = { id: string; label: string; description: string };
@@ -691,7 +1052,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     { value: 'global', label: '全局', description: '所有会话共用同一套工具开关' },
   ]);
   
-  const { newConversation, activeConversationId } = useChatStore();
+  const { newConversation, activeConversationId, loadHistory } = useChatStore();
   const {
     autoCleanShortLogs,
     autoCleanMinLines,
@@ -707,6 +1068,8 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       if (e.key === 'Escape') {
         if (modalContent) {
           setModalContent(null);
+        } else if (showBackup) {
+          setShowBackup(false);
         } else if (showSettings) {
           setShowSettings(false);
         } else if (isOpen) {
@@ -716,7 +1079,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, showSettings, modalContent]);
+  }, [isOpen, showSettings, showBackup, modalContent]);
 
   // 加载 .env 文件
   const loadEnvFile = async () => {
@@ -1002,6 +1365,138 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     loadToolPolicy();
   };
 
+  // ---------- 备份回滚 ----------
+  const extractApiError = (err: unknown, fallback: string): string => {
+    if (err instanceof ApiError) {
+      const detail = (err.data as { detail?: string } | null)?.detail;
+      if (detail) return detail;
+    }
+    return err instanceof Error ? err.message : fallback;
+  };
+
+  const loadCheckpoints = async () => {
+    setBackupLoading(true);
+    setBackupError(null);
+    try {
+      const res = await backupApi.listCheckpoints(activeConversationId || undefined);
+      // 后端按时间正序存储，展示时最新的在前
+      setCheckpoints((res.checkpoints || []).slice().reverse());
+    } catch (err) {
+      setBackupError(extractApiError(err, '加载对话点失败'));
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const loadTrackedFiles = async () => {
+    setBackupLoading(true);
+    setBackupError(null);
+    setFileHistory(null);
+    try {
+      const res = await backupApi.listTrackedFiles();
+      setTrackedFiles(res.files || []);
+    } catch (err) {
+      setBackupError(extractApiError(err, '加载备份文件列表失败'));
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const openBackup = () => {
+    setShowBackup(true);
+    setBackupTab('checkpoints');
+    setFileHistory(null);
+    loadCheckpoints();
+  };
+
+  const handleRewind = async (checkpointId: string) => {
+    const ok = window.confirm(
+      `回滚到对话点 ${checkpointId}？\n将同时恢复文件和对话历史，该对话点之后的修改会被撤销。`
+    );
+    if (!ok) return;
+    setBackupBusy(true);
+    setBackupError(null);
+    try {
+      const res = await backupApi.rewind({
+        conversation_id: activeConversationId || undefined,
+        checkpoint_id: checkpointId,
+      });
+      await loadHistory();
+      setShowBackup(false);
+      const lines = [
+        `已回到对话点 ${res.checkpoint} (${res.ts})`,
+        `对话历史: 截断到 ${res.message_count} 条消息`,
+      ];
+      if (res.restored.length) {
+        lines.push(`恢复文件 ${res.restored.length} 个:`, ...res.restored.map((p) => `  - ${p}`));
+      }
+      if (res.deleted.length) {
+        lines.push(
+          `删除文件（回滚创建操作）${res.deleted.length} 个:`,
+          ...res.deleted.map((p) => `  - ${p}`)
+        );
+      }
+      if (res.skipped.length) {
+        lines.push(
+          `跳过（仅其它会话修改）${res.skipped.length} 个:`,
+          ...res.skipped.map((p) => `  - ${p}`)
+        );
+      }
+      if (res.failed.length) {
+        lines.push(
+          `失败 ${res.failed.length} 个:`,
+          ...res.failed.map((f) => `  - ${f.path}: ${f.error}`)
+        );
+      }
+      setModalContent({
+        title: res.success ? '回滚成功' : '回滚部分成功',
+        content: lines.join('\n'),
+      });
+    } catch (err) {
+      setBackupError(extractApiError(err, '回滚失败'));
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const loadFileHistory = async (path: string) => {
+    setBackupLoading(true);
+    setBackupError(null);
+    try {
+      const res = await backupApi.getFileHistory(path);
+      setFileHistory({
+        path: res.path,
+        has_baseline: res.has_baseline,
+        versions: res.versions || [],
+      });
+    } catch (err) {
+      setBackupError(extractApiError(err, '加载文件历史失败'));
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const handleRestoreFile = async (path: string, versionId: number) => {
+    const label = versionId === 0 ? 'baseline（首次备份前的原始内容）' : `v${versionId}`;
+    if (!window.confirm(`将文件恢复到 ${label}？\n${path}`)) return;
+    setBackupBusy(true);
+    setBackupError(null);
+    try {
+      const res = await backupApi.restoreFile({ path, version_id: versionId });
+      await loadFileHistory(path);
+      setModalContent({
+        title: '恢复成功',
+        content: res.deleted
+          ? `${res.path}\n已恢复到 v${res.restored_to_version}（该版本文件不存在，已删除）`
+          : `${res.path}\n已恢复到 v${res.restored_to_version}`,
+      });
+    } catch (err) {
+      setBackupError(extractApiError(err, '恢复文件失败'));
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
   // 更新单个配置值
   const updateEnvValue = (key: string, value: string) => {
     setEnvValues((prev) => ({ ...prev, [key]: value }));
@@ -1030,6 +1525,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
     }
 
     COMMON_PROFILE_KEYS.forEach(appendValue);
+    AGENT_BASE_PROFILE_KEYS.forEach(appendValue);
 
     if (mainSdk === 'anthropic' || subAgentSdk === 'anthropic') {
       ANTHROPIC_COMPAT_PROFILE_KEYS.forEach(appendValue);
@@ -1244,6 +1740,14 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
         });
       },
     },
+    {
+      id: 'backup',
+      label: '备份回滚',
+      icon: 'M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3',
+      action: async () => {
+        openBackup();
+      },
+    },
         {
       id: 'intercept',
       label: '拦截开关',
@@ -1332,7 +1836,13 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
       {isOpen && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
-          <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-48 bg-spore-card border border-spore-border/50 rounded-xl shadow-elevated z-20 py-2 animate-fade-in">
+          <div
+            className={`absolute bottom-full mb-2 w-48 bg-spore-card border border-spore-border/50 rounded-xl shadow-elevated z-20 py-2 animate-fade-in ${
+              mini
+                ? 'right-0 max-h-[calc(100vh-96px)] overflow-y-auto'
+                : 'left-1/2 -translate-x-1/2'
+            }`}
+          >
             {menuItems.map((item) => (
               <button
                 key={item.id}
@@ -1397,10 +1907,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
             <div className="flex items-center justify-between px-5 py-4 border-b border-spore-border/30">
               <h3 className="font-semibold text-spore-text">设置</h3>
               <div className="flex items-center gap-2">
-                {settingsTab === 'env' && envError && (
+                {(settingsTab === 'llm' || settingsTab === 'agent' || settingsTab === 'system') && envError && (
                   <span className="text-xs text-spore-error">{envError}</span>
                 )}
-                {settingsTab === 'env' && (
+                {(settingsTab === 'llm' || settingsTab === 'agent' || settingsTab === 'system') && (
                   <>
                     <button
                       onClick={openEnvFile}
@@ -1451,14 +1961,34 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                 常规
               </button>
               <button
-                onClick={() => setSettingsTab('env')}
+                onClick={() => setSettingsTab('llm')}
                 className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  settingsTab === 'env'
+                  settingsTab === 'llm'
                     ? 'text-spore-highlight border-b-2 border-spore-highlight'
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                环境配置
+                LLM 设置
+              </button>
+              <button
+                onClick={() => setSettingsTab('agent')}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  settingsTab === 'agent'
+                    ? 'text-spore-highlight border-b-2 border-spore-highlight'
+                    : 'text-spore-muted hover:text-spore-text'
+                }`}
+              >
+                Agent 设置
+              </button>
+              <button
+                onClick={() => setSettingsTab('system')}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  settingsTab === 'system'
+                    ? 'text-spore-highlight border-b-2 border-spore-highlight'
+                    : 'text-spore-muted hover:text-spore-text'
+                }`}
+              >
+                系统
               </button>
               <button
                 onClick={() => { setSettingsTab('tools'); loadToolPolicy(toolPolicyMode); }}
@@ -1724,7 +2254,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                     )}
                   </div>
                 </div>
-              ) : (
+              ) : settingsTab === 'llm' ? (
                 <div className="space-y-6">
                   <div className="space-y-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-4">
                     <div className="flex items-center justify-between gap-3">
@@ -1786,9 +2316,11 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                         </div>
                         {ENV_BASIC_CONFIG_GROUPS.map((group) => {
                           const selectedSdk = (envValues['LLM_SDK'] || '').toLowerCase();
+                          const isOpenAiGroup = group.title.startsWith('OpenAI');
+                          const isAnthropicGroup = group.title.startsWith('Anthropic');
                           const isDisabled =
-                            (group.title === 'Anthropic API' && selectedSdk === 'openai') ||
-                            (group.title === 'OpenAI API' && selectedSdk === 'anthropic');
+                            (isAnthropicGroup && selectedSdk === 'openai') ||
+                            (isOpenAiGroup && selectedSdk === 'anthropic');
 
                           return (
                             <div key={group.title} className={`space-y-3 ${isDisabled ? 'opacity-40' : ''}`}>
@@ -1846,7 +2378,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                           <div className="text-left">
                             <div className="text-sm font-semibold text-spore-text">高级配置</div>
                             <div className="text-[11px] text-spore-muted">
-                              兼容性、子 Agent、超时、日志、路径、拦截等
+                              LLM 参数、SDK 兼容性
                             </div>
                           </div>
                           <svg
@@ -1860,60 +2392,244 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false }) =>
                         </button>
                         {showAdvancedEnv && (
                           <div className="space-y-6 p-4 border-t border-spore-border/30">
-                            {ENV_ADVANCED_CONFIG_GROUPS.map((group) => {
-                              const selectedSdk = (envValues['LLM_SDK'] || '').toLowerCase();
-                              const isDisabled =
-                                (group.title === 'Anthropic 高级' && selectedSdk === 'openai') ||
-                                (group.title === 'OpenAI 高级' && selectedSdk === 'anthropic');
-
-                              return (
-                                <div key={group.title} className={`space-y-3 ${isDisabled ? 'opacity-40' : ''}`}>
-                                  <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
-                                    {group.title}
-                                  </h5>
-                                  <div className="space-y-3">
-                                    {group.items.map((item) => (
-                                      <div key={item.key} className="space-y-1">
-                                        <label className="flex items-center gap-2 text-xs text-spore-muted">
-                                          <span>{item.label}</span>
-                                          {item.description && (
-                                            <span className="text-spore-muted/60">({item.description})</span>
-                                          )}
-                                        </label>
-                                        {item.type === 'select' ? (
-                                          <select
-                                            value={envValues[item.key] || ''}
-                                            onChange={(e) => updateEnvValue(item.key, e.target.value)}
-                                            disabled={isDisabled}
-                                            className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 ${isDisabled ? 'cursor-not-allowed' : ''}`}
-                                          >
-                                            <option value="">{item.placeholder || '未设置'}</option>
-                                            {item.options?.map((opt) => (
-                                              <option key={opt.value} value={opt.value}>
-                                                {opt.label}
-                                              </option>
-                                            ))}
-                                          </select>
-                                        ) : (
-                                          <input
-                                            type={item.type === 'number' ? 'number' : 'text'}
-                                            value={envValues[item.key] || ''}
-                                            onChange={(e) => updateEnvValue(item.key, e.target.value)}
-                                            placeholder={item.placeholder}
-                                            disabled={isDisabled}
-                                            className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono ${isDisabled ? 'cursor-not-allowed' : ''}`}
-                                          />
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                            {LLM_ADVANCED_GROUPS.map((group) => (
+                              <EnvGroupFields
+                                key={group.title}
+                                group={group}
+                                envValues={envValues}
+                                updateEnvValue={updateEnvValue}
+                              />
+                            ))}
                           </div>
                         )}
                       </div>
                     </>
+                  )}
+                </div>
+              ) : settingsTab === 'agent' ? (
+                <div className="space-y-6">
+                  <AgentBaseEditor
+                    agentBaseTarget={agentBaseTarget}
+                    setAgentBaseTarget={setAgentBaseTarget}
+                    envValues={envValues}
+                    updateEnvValue={updateEnvValue}
+                  />
+                  {AGENT_ENV_GROUPS.map((group) => (
+                    <EnvGroupFields
+                      key={group.title}
+                      group={group}
+                      envValues={envValues}
+                      updateEnvValue={updateEnvValue}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {SYSTEM_ENV_GROUPS.map((group) => (
+                    <EnvGroupFields
+                      key={group.title}
+                      group={group}
+                      envValues={envValues}
+                      updateEnvValue={updateEnvValue}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 备份回滚模态框 */}
+      {showBackup && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-spore-card border border-spore-border/50 rounded-2xl w-[640px] max-w-[90vw] max-h-[80vh] overflow-hidden shadow-elevated flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-spore-border/30">
+              <h3 className="font-semibold text-spore-text">备份回滚</h3>
+              <div className="flex items-center gap-2">
+                {backupError && (
+                  <span className="text-xs text-spore-error max-w-[280px] truncate" title={backupError}>
+                    {backupError}
+                  </span>
+                )}
+                <button
+                  onClick={() =>
+                    backupTab === 'checkpoints'
+                      ? loadCheckpoints()
+                      : fileHistory
+                        ? loadFileHistory(fileHistory.path)
+                        : loadTrackedFiles()
+                  }
+                  disabled={backupLoading || backupBusy}
+                  className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                >
+                  刷新
+                </button>
+                <button
+                  onClick={() => setShowBackup(false)}
+                  className="p-1.5 hover:bg-spore-accent rounded-lg transition-colors"
+                >
+                  <svg
+                    className="w-5 h-5 text-spore-muted"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            {/* 标签页 */}
+            <div className="flex border-b border-spore-border/30">
+              <button
+                onClick={() => {
+                  setBackupTab('checkpoints');
+                  loadCheckpoints();
+                }}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  backupTab === 'checkpoints'
+                    ? 'text-spore-highlight border-b-2 border-spore-highlight'
+                    : 'text-spore-muted hover:text-spore-text'
+                }`}
+              >
+                对话点
+              </button>
+              <button
+                onClick={() => {
+                  setBackupTab('files');
+                  loadTrackedFiles();
+                }}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${
+                  backupTab === 'files'
+                    ? 'text-spore-highlight border-b-2 border-spore-highlight'
+                    : 'text-spore-muted hover:text-spore-text'
+                }`}
+              >
+                文件备份
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              {backupLoading ? (
+                <div className="text-sm text-spore-muted py-8 text-center">加载中...</div>
+              ) : backupTab === 'checkpoints' ? (
+                <div className="space-y-3">
+                  <div className="text-xs text-spore-muted">
+                    只有当某条 LLM 回复实际修改了文件时才会产生对话点。回滚即回到这条回复之前：
+                    截断当前会话的对话历史，并把本会话在该点之后修改过的文件恢复到当时的版本；
+                    其它会话修改的文件不受影响。
+                  </div>
+                  {checkpoints.length === 0 ? (
+                    <div className="text-sm text-spore-muted text-center py-6">
+                      当前会话没有对话点快照
+                    </div>
+                  ) : (
+                    checkpoints.map((cp) => (
+                      <div
+                        key={cp.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm text-spore-text font-medium">
+                            {cp.id}
+                            <span className="ml-2 text-xs text-spore-muted font-normal">{cp.ts}</span>
+                          </div>
+                          <div
+                            className="text-xs text-spore-text/80 mt-1 line-clamp-2"
+                            title={cp.reply_preview || undefined}
+                          >
+                            {cp.reply_preview || '（工具执行轮，无文字回复）'}
+                          </div>
+                          <div className="text-xs text-spore-muted mt-0.5">
+                            消息数 {cp.message_count} · 跟踪文件 {Object.keys(cp.files || {}).length}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleRewind(cp.id)}
+                          disabled={backupBusy}
+                          className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0"
+                        >
+                          {backupBusy ? '回滚中...' : '回滚到此'}
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              ) : fileHistory ? (
+                <div className="space-y-3">
+                  <button
+                    onClick={() => setFileHistory(null)}
+                    className="text-xs text-spore-muted hover:text-spore-text transition-colors"
+                  >
+                    ← 返回文件列表
+                  </button>
+                  <div className="text-sm text-spore-text font-mono break-all">{fileHistory.path}</div>
+                  <div className="space-y-2">
+                    {fileHistory.has_baseline && (
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-3">
+                        <div className="min-w-0">
+                          <div className="text-sm text-spore-text font-medium">v0 · baseline</div>
+                          <div className="text-xs text-spore-muted mt-0.5">首次备份前的原始内容</div>
+                        </div>
+                        <button
+                          onClick={() => handleRestoreFile(fileHistory.path, 0)}
+                          disabled={backupBusy}
+                          className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0"
+                        >
+                          恢复
+                        </button>
+                      </div>
+                    )}
+                    {fileHistory.versions
+                      .slice()
+                      .reverse()
+                      .map((v) => (
+                        <div
+                          key={v.id}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm text-spore-text font-medium">
+                              v{v.id}
+                              <span className="ml-2 text-xs text-spore-muted font-normal">{v.ts}</span>
+                            </div>
+                            <div className="text-xs text-spore-muted mt-0.5">
+                              {v.op} · {v.store === 'delete' ? '删除' : `${v.size} bytes`}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRestoreFile(fileHistory.path, v.id)}
+                            disabled={backupBusy}
+                            className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0"
+                          >
+                            恢复
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="text-xs text-spore-muted">
+                    Agent 每次写文件前都会自动备份，点击文件查看版本历史并恢复到任意版本。
+                  </div>
+                  {trackedFiles.length === 0 ? (
+                    <div className="text-sm text-spore-muted text-center py-6">尚无被跟踪的文件备份</div>
+                  ) : (
+                    trackedFiles.map((f) => (
+                      <button
+                        key={f}
+                        onClick={() => loadFileHistory(f)}
+                        className="w-full text-left rounded-xl border border-spore-border/50 bg-spore-bg/40 hover:bg-spore-accent/30 p-3 text-sm text-spore-text font-mono break-all transition-colors"
+                      >
+                        {f}
+                      </button>
+                    ))
                   )}
                 </div>
               )}

@@ -10,11 +10,14 @@ IPC 由 base.ipc_manager.initialize_ipc_system() 统一初始化。
 
 from .supervisor import supervisor, end_check
 from .mode_selector import select_context_mode, get_mode_description
+from .security_agent import security_check, analyze_command_async, analyze_commands_async
 
 __all__ = [
     "supervisor",
-    "character_choose_agent",
     "end_check",
     "select_context_mode",
     "get_mode_description",
+    "security_check",
+    "analyze_command_async",
+    "analyze_commands_async",
 ]

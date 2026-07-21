@@ -113,6 +113,31 @@ class ConversationLoop:
     def _conversation_id_for_context(self) -> Optional[str]:
         return getattr(self, "session_id", None) or get_current_conversation_id()
 
+    @staticmethod
+    def _checkpoint_reply_preview(reply: str, parsed_reply: Optional[str]) -> str:
+        """
+        为对话点快照生成回复摘要：优先用解析出的 REPLY 文本；
+        纯 ACTION 轮取协议块之外的自然语言，全部为空则返回空串。
+        """
+        text = (parsed_reply or "").strip()
+        if not text:
+            parts = []
+            in_block = False
+            for line in (reply or "").splitlines():
+                s = line.strip()
+                if s.startswith("@SPORE:") and s.endswith("_START"):
+                    in_block = True
+                    continue
+                if s.startswith("@SPORE:") and s.endswith("_END"):
+                    in_block = False
+                    continue
+                if in_block or s.startswith("@SPORE:") or s.startswith("### RULE_REMINDER"):
+                    continue
+                if s:
+                    parts.append(s)
+            text = " ".join(parts)
+        return " ".join(text.split())[:200]
+
     def _emit_event(self, event: str, data: Dict[str, Any]) -> None:
         """通过注入的回调发出结构化事件；未注入时零行为，异常不影响主流程。"""
         emitter = getattr(self, "event_emitter", None)
@@ -582,6 +607,36 @@ class ConversationLoop:
             )
             return {"status": "error", "tool_name": tool_name, "arguments": args, "error": f"Tool not found: {tool_name}"}
 
+        # 安全守卫：execute_command 执行前做两阶段风险检测（阻塞式）
+        # 未命中高危策略的命令由守卫内部转交安全 Agent 异步研判意图+恶意
+        if tool_name == "execute_command":
+            try:
+                from .security_guard import guard_shell_command
+                session_id = self._conversation_id_for_context()
+                epoch = getattr(self.state, "interrupt_epoch", None)
+                denied_by_guard = guard_shell_command(
+                    args or {}, emit=self._emit_event,
+                    session_id=session_id, interrupt_epoch=epoch,
+                )
+            except Exception as guard_err:
+                log_error("SECURITY_GUARD_ERROR", f"安全守卫检测异常: {guard_err}", guard_err)
+                denied_by_guard = None
+            if denied_by_guard:
+                return {
+                    "status": "error",
+                    "tool_name": tool_name,
+                    "arguments": args,
+                    "error": denied_by_guard,
+                }
+
+        # 备份钩子：文件写操作前记录原始内容（操作后哈希对比，变化才备份）
+        backup_token = None
+        try:
+            from .backup_manager import get_backup_manager
+            backup_token = get_backup_manager().before_tool(tool_name, args or {})
+        except Exception as backup_err:
+            log_error("BACKUP_HOOK_ERROR", f"备份钩子(before)异常: {backup_err}", backup_err)
+
         try:
             no_timeout_tools = ["multi_agent_dispatch", "file"]
             timed_out = False
@@ -618,6 +673,14 @@ class ConversationLoop:
         except Exception as e:
             log_tool_error(tool_name, f"Tool execution failed: {str(e)}", args, e)
             return {"status": "error", "tool_name": tool_name, "arguments": args, "error": str(e)}
+        finally:
+            # 备份钩子：操作后对比哈希，内容变化才记录版本（含删除）
+            if backup_token is not None:
+                try:
+                    from .backup_manager import get_backup_manager
+                    get_backup_manager().after_tool(backup_token)
+                except Exception as backup_err:
+                    log_error("BACKUP_HOOK_ERROR", f"备份钩子(after)异常: {backup_err}", backup_err)
 
     def _format_single_execution_result(self, execution: Dict[str, Any]) -> str:
         status = execution.get("status")
@@ -641,6 +704,25 @@ class ConversationLoop:
             "mode": action_block.mode,
             "tool_names": [a.tool_name for a in action_block.actions],
         })
+
+        # 块级批量意图分析：块内多条 shell 命令合并为一次 LLM 研判（异步、不阻塞执行）。
+        # 单条命令仍走 guard 内的逐条分析路径；已认领的命令 guard 会自动跳过。
+        shell_commands = [
+            a.parameters.get("command") for a in action_block.actions
+            if a.tool_name == "execute_command"
+            and isinstance(a.parameters.get("command"), str)
+        ]
+        if len(shell_commands) >= 2:
+            try:
+                from AutoAgent.security_agent import analyze_commands_async
+                session_id = self._conversation_id_for_context()
+                epoch = getattr(self.state, "interrupt_epoch", None)
+                analyze_commands_async(
+                    shell_commands, self._emit_event,
+                    session_id=session_id, interrupt_epoch=epoch,
+                )
+            except Exception as e:
+                log_error("SECURITY_AGENT_DISPATCH_ERROR", "批量意图研判派发失败", e)
 
         last_todo_content = get_last_todo_content()
         if last_todo_content != "":
@@ -809,13 +891,13 @@ class ConversationLoop:
         """
         # 解析并更新 TODO（如果 LLM 回复中包含 TODO 协议块）
         self._update_todo_from_response(reply)
-        
+
         # 使用 ProtocolManager 解析响应
         parsed = self.protocol_manager.parse_response(reply)
-        
+
         # 特殊值，表示上次有 ACTION
         ACTION_STATE_MARKER = "__ACTION__"
-        
+
         if parsed.response_type == "action":
             if parsed.action_block is None:
                 result_text = self.protocol_manager.format_parse_error("ACTION 块解析失败")
@@ -830,12 +912,32 @@ class ConversationLoop:
             # 如果有 REPLY 内容，先显示
             if parsed.reply_content:
                 safe_print(f"{_config.current_agent_name}> {parsed.reply_content}")
-            return self.handle_action_block(
-                parsed.action_block,
-                parsed.prefix_text,
-                reply,
-                protocol_warning=parsed.protocol_warning,
-            )
+            # 对话点快照：登记本轮上下文（message_count 为回复追加前的消息数），
+            # 仅当 ACTION 实际改动了被跟踪文件时才提交为 checkpoint，
+            # rewind 该点即回到"这条回复之前"
+            from .backup_manager import get_backup_manager
+            checkpoint_session = self._conversation_id_for_context() or "default"
+            try:
+                get_backup_manager().begin_round(
+                    session_id=checkpoint_session,
+                    message_count=len(self.state.messages),
+                    llm_reply_count=self.state.llm_reply_count,
+                    reply_preview=self._checkpoint_reply_preview(reply, parsed.reply_content),
+                )
+            except Exception as checkpoint_err:
+                log_error("CHECKPOINT_ERROR", f"登记对话点快照失败: {checkpoint_err}", checkpoint_err)
+            try:
+                return self.handle_action_block(
+                    parsed.action_block,
+                    parsed.prefix_text,
+                    reply,
+                    protocol_warning=parsed.protocol_warning,
+                )
+            finally:
+                try:
+                    get_backup_manager().end_round(checkpoint_session)
+                except Exception:
+                    pass
         
         elif parsed.response_type == "protocol_error":
             result_text = self.protocol_manager.format_protocol_error(parsed.protocol_error)

@@ -252,10 +252,25 @@ def _migrate_legacy_autosaves_locked() -> None:
         _absorb("default", orphans)
 
 
+def _clear_session_checkpoints(session_key: str) -> None:
+    """短记忆淘汰/删除时联动清除该会话的对话点快照。
+
+    checkpoint 生命周期与会话短记忆绑定：会话还在最近 N 会话队列里
+    （或被转正保留）就保留快照，短记忆没了快照随之清除，无需独立清理机制。
+    """
+    try:
+        from .backup_manager import get_backup_manager
+
+        get_backup_manager().clear_checkpoints(session_key)
+    except Exception:
+        pass
+
+
 def _prune_autosaves_locked() -> None:
     """只保留最近更新的 AUTOSAVE_MAX_COUNT 个会话短记忆。
 
     仅清理 session_*.mem；用户重命名后的文件不受影响。
+    被淘汰会话的对话点快照一并清除。
     """
     managed = _managed_autosave_files_locked()
     if len(managed) <= AUTOSAVE_MAX_COUNT:
@@ -266,7 +281,10 @@ def _prune_autosaves_locked() -> None:
         try:
             os.remove(path)
         except OSError:
-            pass
+            continue
+        session_key = _session_id_from_autosave_name(os.path.basename(path))
+        if session_key:
+            _clear_session_checkpoints(session_key)
 
 
 def _prune_autosaves() -> None:

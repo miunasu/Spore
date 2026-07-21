@@ -313,6 +313,75 @@ export const createTaskApi = (port: number) => ({
     ),
 });
 
+// 创建针对特定端口的 Backup API（对话点回滚 / 文件级回滚）
+export const createBackupApi = (port: number) => ({
+  listCheckpoints: (conversationId?: string) =>
+    requestToPort<{
+      success: boolean;
+      conversation_id: string;
+      checkpoints: Array<{
+        id: string;
+        ts: string;
+        session_id: string;
+        message_count: number;
+        llm_reply_count: number;
+        reply_preview?: string;
+        files: Record<string, number>;
+      }>;
+    }>(
+      port,
+      `/api/backup/checkpoints${conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : ''}`
+    ),
+
+  rewind: (payload: {
+    conversation_id?: string;
+    checkpoint_id?: string;
+    steps?: number;
+  }) =>
+    requestToPort<{
+      success: boolean;
+      conversation_id: string;
+      checkpoint: string;
+      ts: string;
+      message_count: number;
+      restored: string[];
+      deleted: string[];
+      skipped: string[];
+      failed: Array<{ path: string; error: string }>;
+    }>(port, '/api/backup/rewind', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  listTrackedFiles: () =>
+    requestToPort<{ success: boolean; files: string[] }>(port, '/api/backup/files'),
+
+  getFileHistory: (path: string) =>
+    requestToPort<{
+      success: boolean;
+      path: string;
+      has_baseline: boolean;
+      versions: Array<{
+        id: number;
+        ts: string;
+        op: string;
+        store: string;
+        size: number;
+      }>;
+    }>(port, `/api/backup/files/history?path=${encodeURIComponent(path)}`),
+
+  restoreFile: (payload: { path: string; version_id?: number; steps?: number }) =>
+    requestToPort<{
+      success: boolean;
+      path: string;
+      restored_to_version: number;
+      deleted: boolean;
+    }>(port, '/api/backup/files/restore', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+});
+
 // 主后端 Chat API（默认端口）
 export const chatApi = createChatApi(8765);
 
@@ -321,6 +390,9 @@ export const taskApi = createTaskApi(8765);
 
 // 主后端 Commands API（默认端口）
 export const commandsApi = createCommandsApi(8765);
+
+// 主后端 Backup API（默认端口）
+export const backupApi = createBackupApi(8765);
 
 // Files API（只在主后端）
 export const filesApi = {

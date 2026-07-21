@@ -97,7 +97,11 @@ def clear_memory(req: Optional[ConversationCommandRequest] = None):
         state.clear_all()
         clear_last_todo_content()
         todo_write([], session_id=resolved_conversation_id)
-        
+
+        # 对话历史已清零，同步清空该会话的对话点快照
+        from base.backup_manager import get_backup_manager
+        get_backup_manager().clear_checkpoints(resolved_conversation_id)
+
         return {"success": True, "message": "记忆已清除"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -354,6 +358,17 @@ def delete_history_file(req: DeleteHistoryRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"History file does not exist: {req.filename}")
 
     target.unlink()
+
+    # 会话短记忆被删除时，联动清除该会话的对话点快照（checkpoint 与会话数据绑定）
+    from base.memory_manager import _session_id_from_autosave_name
+    session_key = _session_id_from_autosave_name(target.name)
+    if session_key:
+        try:
+            from base.backup_manager import get_backup_manager
+            get_backup_manager().clear_checkpoints(session_key)
+        except Exception:
+            pass
+
     return {"success": True, "filename": req.filename}
 
 

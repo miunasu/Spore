@@ -506,7 +506,11 @@ def new_conversation(req: Optional[ConversationRequest] = None):
         target_state.clear_all()
         clear_last_todo_content()
         todo_write([], session_id=conversation_id)
-        
+
+        # 新对话从零开始：清空该会话的对话点快照，避免跨对话累积导致 rewind 语义错乱
+        from base.backup_manager import get_backup_manager
+        get_backup_manager().clear_checkpoints(conversation_id)
+
         return {"success": True, "message": "已创建新对话"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

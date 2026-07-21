@@ -354,6 +354,9 @@ def delete_session(session_id: str) -> Dict[str, Any]:
     # 删除对应的 ConversationLoop 实例
     if success and _conv_loop_manager:
         _conv_loop_manager.remove_loop(session_id)
+    # 注意：不清除该会话的对话点快照。会话的短记忆（history/autosave/session_*.mem）
+    # 仍在最近 N 会话队列里、可被重新加载恢复，checkpoint 跟随短记忆的生命周期：
+    # 短记忆被队列淘汰或手动删除时才联动清除（见 memory_manager._prune_autosaves_locked）。
     
     # 如果删除的是当前会话，更新 CLI handler 引用
     if success:

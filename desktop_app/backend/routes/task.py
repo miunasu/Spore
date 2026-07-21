@@ -277,6 +277,14 @@ def _run_task_loop_body(task_id: str, session_id: str, message: str, total_timeo
     started = time.monotonic()
 
     def _emitter(event: str, data: Dict[str, Any]) -> None:
+        # 命令意图 / 恶意通知是异步旁路产物：研判可能晚于任务终态完成
+        # （恶意研判甚至会主动中断该任务），迟到的事件仍要送达前端，不受 active 门限制
+        if event in ("command_intent", "security_malicious"):
+            _emit_task_event(
+                event, session_id, task_id, submission_id,
+                entry["rounds"] + 1, data,
+            )
+            return
         _emit_active_task_event(
             event,
             session_id,

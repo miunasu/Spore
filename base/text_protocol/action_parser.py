@@ -415,7 +415,12 @@ class ActionParser:
                         try:
                             return json.loads(json_str), i + 1
                         except json.JSONDecodeError:
-                            return json_str, i + 1
+                            # Windows 单反斜杠路径会产生非法 JSON 转义（如 \S），
+                            # 全量转义后重试；仍失败才退回原始字符串
+                            try:
+                                return json.loads(json_str.replace("\\", "\\\\")), i + 1
+                            except json.JSONDecodeError:
+                                return json_str, i + 1
 
             i += 1
 

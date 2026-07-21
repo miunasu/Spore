@@ -196,33 +196,37 @@ class IPCManager:
         system: Optional[str] = None,
         request_id: Optional[str] = None,
         use_sub_agent_config: bool = False,
+        agent_profile: Optional[str] = None,
         **kwargs  # 兼容旧调用，忽略 tool_calls, tools 等参数
     ) -> str:
         """
         向 Chat 进程发送聊天请求（纯文本协议模式）
-        
+
         Args:
             messages: 消息列表
             model: 模型名称
             system: 系统提示
             request_id: 请求ID（可选，不提供则自动生成）
             use_sub_agent_config: 是否使用子 Agent 配置（默认 False）
-        
+            agent_profile: AutoAgent 颗粒化基座 profile（supervisor/mode_selector/
+                security/assistant），优先级高于 use_sub_agent_config
+
         Returns:
             request_id: 请求的唯一标识，用于获取响应
         """
         if not self.process_started:
             raise RuntimeError("Chat 进程未启动")
-        
+
         if request_id is None:
             request_id = str(uuid.uuid4())
-        
+
         request_data = {
             "request_id": request_id,
             "messages": messages,
             "model": model,
             "system": system,
-            "use_sub_agent_config": use_sub_agent_config
+            "use_sub_agent_config": use_sub_agent_config,
+            "agent_profile": agent_profile,
         }
         
         # 预先创建条件变量。若 interrupt 已先一步为该 ID 写入 tombstone，
@@ -367,6 +371,7 @@ class IPCManager:
             ("tools", "base.tools", "set_ipc_manager"),
             ("agent_process", "base.agent_process", "set_ipc_manager"),
             ("supervisor", "AutoAgent.supervisor", "set_ipc_manager"),
+            ("security_agent", "AutoAgent.security_agent", "set_ipc_manager"),
         ]
         
         for name, module_path, func_name in modules:

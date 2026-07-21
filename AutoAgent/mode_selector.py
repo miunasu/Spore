@@ -46,12 +46,13 @@ def select_context_mode(user_input: str) -> str:
         # 加载提示词
         system_prompt = load_system_prompt("prompt/model_prompt.md")
         
-        # 通过 IPC 发送请求
+        # 通过 IPC 发送请求（颗粒化基座：AGENT_MODE_SELECTOR_* → SUB_AGENT_* → 主配置）
         _config = get_config()
         request_id = _ipc_manager.send_chat_request(
             messages=messages,
-            model=_config.get_model(),
+            model=_config.resolve_agent_llm("mode_selector")["model"],
             system=system_prompt,
+            agent_profile="mode_selector",
             tool_calls=False
         )
         

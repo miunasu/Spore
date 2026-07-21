@@ -3,7 +3,7 @@
  * 每个对话对应一个独立的后端实例
  */
 import { create } from 'zustand';
-import type { Message, Conversation, HistoryFile, WSTaskEvent } from '../types';
+import type { Message, Conversation, HistoryFile, WSTaskEvent, AgentActivity, CommandIntent } from '../types';
 import {
   createChatApi,
   createCommandsApi,
@@ -196,6 +196,59 @@ const isDiscardedSubmission = (
   submissionId: string
 ): boolean => discardedSubmissions[conversationId]?.includes(submissionId) === true;
 
+// ---------------------------------------------------------------------------
+// 命令意图持久化（安全 Agent command_intent 事件）
+//
+// 意图事件与 round_reply 无固定先后：命令执行快于 LLM 分析时意图晚到，
+// 反之早到。归属规则统一为"包含该命令的最近一条 assistant 消息"：
+// - 早到：先入 pending 缓冲，round_reply 时按 raw_response 匹配挂载
+// - 晚到：直接反查已有消息挂载
+// intentLog 为会话级日志，切换会话/断线重连重拉历史快照后用它重新挂载。
+// ---------------------------------------------------------------------------
+const pendingIntentsBySession: Record<string, CommandIntent[] | undefined> = {};
+const intentLogBySession: Record<string, CommandIntent[] | undefined> = {};
+const INTENT_LOG_LIMIT = 200;
+
+const recordIntent = (conversationId: string, ci: CommandIntent): void => {
+  const log = intentLogBySession[conversationId] || [];
+  const existing = log.find((e) => e.command === ci.command);
+  if (existing) {
+    existing.intent = ci.intent;
+    existing.is_malicious = ci.is_malicious;
+    existing.malicious_reason = ci.malicious_reason;
+  } else {
+    log.push(ci);
+    if (log.length > INTENT_LOG_LIMIT) {
+      log.splice(0, log.length - INTENT_LOG_LIMIT);
+    }
+  }
+  intentLogBySession[conversationId] = log;
+};
+
+const messageContainsCommand = (msg: Message, command: string): boolean =>
+  msg.role === 'assistant' && !!msg.raw_response && msg.raw_response.includes(command);
+
+// 把意图日志重新挂载到历史快照消息上（按"包含命令的最后一条 assistant 消息"归属）
+const attachIntentsToMessages = (
+  messages: Message[],
+  log: CommandIntent[] | undefined
+): Message[] => {
+  if (!log || log.length === 0) return messages;
+  const result = messages.map((m) => ({ ...m }));
+  for (const ci of log) {
+    for (let i = result.length - 1; i >= 0; i--) {
+      const msg = result[i];
+      if (!messageContainsCommand(msg, ci.command)) continue;
+      const list = msg.command_intents || [];
+      if (!list.some((e) => e.command === ci.command)) {
+        msg.command_intents = [...list, ci];
+      }
+      break;
+    }
+  }
+  return result;
+};
+
 const fetchSessionMessages = async (
   port: number,
   sessionId: string
@@ -207,7 +260,7 @@ const fetchSessionMessages = async (
     msg.role === 'user' || msg.role === 'assistant'
   ));
 
-  return allMessages
+  const messages = allMessages
     .map((msg, index) => {
       const baseMessage = {
         id: index.toString(),
@@ -238,6 +291,9 @@ const fetchSessionMessages = async (
       };
     })
     .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
+
+  // 历史快照不含意图信息，用会话内存中的意图日志重新挂载
+  return attachIntentsToMessages(messages, intentLogBySession[sessionId]);
 };
 
 // 扩展 Conversation 类型，添加后端端口
@@ -271,6 +327,9 @@ interface ChatStore {
   // 按对话的生成状态
   generatingConversations: Set<string>;
 
+  // 按对话的 Agent 当前活动（辅助代理意图 / 安全守卫扫描），非阻塞状态提示
+  agentActivities: Record<string, AgentActivity | null>;
+
   // UI 状态
   inputValue: string;
   historyFiles: HistoryFile[];
@@ -280,6 +339,7 @@ interface ChatStore {
   activeMessages: () => Message[];
   isGenerating: () => boolean;
   isAnyGenerating: () => boolean;
+  activeAgentActivity: () => AgentActivity | null;
 
   // 对话管理
   newConversation: (name?: string) => Promise<void>;
@@ -343,6 +403,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     conversations: [defaultConv],
     activeConversationId: defaultConv.id,
     generatingConversations: new Set<string>(),
+    agentActivities: {},
     inputValue: '',
     historyFiles: [],
 
@@ -366,6 +427,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     isAnyGenerating: () => {
       return get().generatingConversations.size > 0;
+    },
+
+    activeAgentActivity: () => {
+      const { activeConversationId, agentActivities } = get();
+      return activeConversationId ? (agentActivities[activeConversationId] || null) : null;
     },
 
     // 后端管理
@@ -487,6 +553,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
       delete interruptBarriers[id];
       delete taskStateVersions[id];
       delete discardedSubmissions[id];
+      delete pendingIntentsBySession[id];
+      delete intentLogBySession[id];
 
       set({
         conversations: newConversations,
@@ -751,6 +819,103 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const conv = get().conversations.find((c) => c.id === sessionId);
       if (!conv) return;
 
+      // 更新/清除该会话的 Agent 活动提示（非阻塞）
+      const setActivity = (activity: AgentActivity | null) => {
+        set((state) => ({
+          agentActivities: { ...state.agentActivities, [sessionId]: activity },
+        }));
+      };
+
+      // 安全 Agent：命令意图解释（"Agent 正在做什么"）
+      // 异步旁路事件，分析可能晚于任务终态到达——不走活跃任务门，
+      // 迟到的意图仍按"包含该命令的 assistant 消息"持久化归属。
+      if (event.event === 'command_intent') {
+        const intent = (event.data.intent || '').trim();
+        const command = event.data.command || '';
+        if (!intent || !command) return;
+
+        const isMalicious = event.data.is_malicious === true;
+        const maliciousReason = event.data.malicious_reason || '';
+
+        const identity = activeTasksByConversation[sessionId];
+        const isCurrentTask =
+          identity?.submissionId === event.submission_id
+          && !isDiscardedSubmission(sessionId, event.submission_id);
+
+        // 活动栏临时提示只在任务仍在跑时更新；恶意由 security_malicious 事件负责告警
+        if (isCurrentTask && !isMalicious) {
+          setActivity({ kind: 'intent', text: intent, command });
+        }
+
+        const ci: CommandIntent = {
+          command,
+          intent,
+          is_malicious: isMalicious,
+          malicious_reason: isMalicious ? maliciousReason : undefined,
+        };
+        recordIntent(sessionId, ci);
+
+        // 消息已存在（意图晚到）→ 直接挂载
+        let attached = false;
+        set((state) => ({
+          conversations: state.conversations.map((c) => {
+            if (c.id !== sessionId) return c;
+            for (let i = c.messages.length - 1; i >= 0; i--) {
+              const msg = c.messages[i];
+              if (!messageContainsCommand(msg, command)) continue;
+              // 最近的匹配消息已有该命令的意图（如重复命令）→ 转入缓冲，归属下一轮回复
+              if ((msg.command_intents || []).some((e) => e.command === command)) break;
+              attached = true;
+              const messages = c.messages.slice();
+              messages[i] = {
+                ...msg,
+                command_intents: [...(msg.command_intents || []), ci],
+              };
+              return { ...c, messages, updatedAt: Date.now() };
+            }
+            return c;
+          }),
+        }));
+
+        // 尚未到达（意图早到）→ 缓冲等 round_reply；任务已结束则丢弃（日志里留有备份）
+        if (!attached && isCurrentTask) {
+          const pending = pendingIntentsBySession[sessionId] || [];
+          if (!pending.some((e) => e.command === command)) {
+            pending.push(ci);
+          }
+          pendingIntentsBySession[sessionId] = pending;
+        }
+        return;
+      }
+
+      // 安全 Agent：检测到恶意命令（后端已中断本轮会话）。异步旁路，此时
+      // task 必然已被中断退役，故与 command_intent 同区、在 active 门之前处理。
+      if (event.event === 'security_malicious') {
+        const command = event.data.command || '';
+        const reason = event.data.malicious_reason || '';
+        const intent = event.data.intent || command;
+        setActivity({
+          kind: 'security_malicious',
+          text: `检测到恶意命令：${intent}${reason ? `（${reason}）` : ''}`,
+          riskLevel: 'high',
+          command,
+        });
+        frontendLog(`[安全] 检测到恶意命令，已中断本轮会话: ${command}`);
+        // 会话末尾追加一条本地提示（命令已执行无法撤销 + 会话已中断）。
+        // 注意：此消息不在后端 history 中，切会话重拉快照后会消失（审计日志有据可查）。
+        get().addMessage(sessionId, {
+          id: `malicious_${event.task_id}_${Date.now()}`,
+          role: 'assistant',
+          content:
+            `🚨 安全 Agent 检测到恶意命令，已中断本轮会话。\n` +
+            `命令：${command}\n` +
+            `原因：${reason || '未提供'}\n` +
+            `注意：该命令在研判完成前已执行，无法自动撤销，请自行检查系统。`,
+          timestamp: Date.now(),
+        });
+        return;
+      }
+
       if (isDiscardedSubmission(sessionId, event.submission_id)) {
         return;
       }
@@ -765,12 +930,52 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       switch (event.event) {
         case 'task_started':
+          setActivity(null);
+          pendingIntentsBySession[sessionId] = [];
           get().setGenerating(sessionId, true);
           break;
 
+        // 安全守卫：正在进行 AI 风险评估
+        case 'security_checking':
+          setActivity({
+            kind: 'security_checking',
+            text: `正在评估${event.data.description || '高危操作'}的风险…`,
+            command: event.data.command,
+          });
+          break;
+
+        // 安全守卫：风险评估结果
+        case 'security_alert':
+          if (event.data.auto_allow) {
+            // 自动放行：一行信息提示
+            setActivity({
+              kind: 'security_alert',
+              text: event.data.action || '已放行系统操作',
+              riskLevel: event.data.risk_level,
+              command: event.data.command,
+            });
+          } else {
+            // 需要用户确认：由阻塞式 ConfirmBar 接管，清除"正在评估"提示避免重复
+            setActivity(null);
+          }
+          break;
+
+        // 安全守卫：用户确认结果 —— 清除扫描提示
+        case 'security_result':
+          setActivity(null);
+          break;
+
         case 'round_reply': {
+          setActivity(null);
           const content = (event.data.content || '').trim();
           if (content) {
+            // 挂载本轮缓冲的命令意图（按 raw_response 是否包含该命令归属）
+            const raw = event.data.raw_response || '';
+            const pending = pendingIntentsBySession[sessionId] || [];
+            const matched = pending.filter((ci) => raw.includes(ci.command));
+            pendingIntentsBySession[sessionId] = pending.filter(
+              (ci) => !raw.includes(ci.command)
+            );
             get().addMessage(sessionId, {
               id: `${event.task_id}_r${event.round}`,
               role: 'assistant',
@@ -778,6 +983,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
               timestamp: Date.now(),
               raw_response: event.data.raw_response,
               sent_messages: event.data.sent_messages,
+              command_intents: matched.length > 0 ? matched : undefined,
             });
           }
           break;
@@ -788,10 +994,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
           break;
 
         case 'tool_call':
+          break;
         case 'tool_result':
+          // 工具执行完成，清除意图/放行提示
+          setActivity(null);
           break;
 
         case 'task_finished': {
+          setActivity(null);
           delete activeTasksByConversation[sessionId];
           bumpTaskStateVersion(sessionId);
           get().setGenerating(sessionId, false);
@@ -927,6 +1137,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
             ? `短记忆 ${autoMatch[1]}-${autoMatch[2]} ${autoMatch[3]}:${autoMatch[4]}`
             : base.slice(0, 20);
         const newConv = createConversation(name, filename);
+        // 会话短记忆（session_*.mem）恢复时沿用原会话 ID：
+        // checkpoint / 文件备份等会话绑定数据随之恢复，无需迁移
+        if (sessionMatch) {
+          const originalId = sessionMatch[1];
+          const existing = get().conversations.find((c) => c.id === originalId);
+          if (existing) {
+            // 该会话仍在打开状态（内存里的状态比短记忆快照更新），直接切换过去
+            await get().switchConversation(originalId);
+            return;
+          }
+          newConv.id = originalId;
+        }
         newConv.backendPort = MAIN_PORT;
         newConv.backendStatus = 'running';
 

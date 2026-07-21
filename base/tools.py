@@ -29,6 +29,34 @@
 
 from typing import Any, Dict, List, Optional
 import json
+import re
+
+
+def _coerce_path_list(raw: str) -> List[str]:
+    """
+    把字符串形式的 paths 参数还原为列表。
+
+    兼容 LLM 把 JSON 数组整体写成带引号字符串的情况，以及 Windows
+    单反斜杠路径产生非法 JSON 转义（如 \\S）导致 json.loads 失败的情况。
+    """
+    text = raw.strip()
+    if not text.startswith("["):
+        return [raw]
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, list) else [raw]
+    except json.JSONDecodeError:
+        pass
+    # 单反斜杠转义后重试（F:\Soul... -> F:\\Soul...）
+    try:
+        parsed = json.loads(text.replace("\\", "\\\\"))
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    # 仍失败：直接提取引号内的片段
+    items = re.findall(r'"([^"]*)"', text) or re.findall(r"'([^']*)'", text)
+    return items if items else [raw]
 
 from .utils import (
     find_skill_md_content,
@@ -457,14 +485,7 @@ def handle_file(args: Dict[str, Any]) -> str:
         elif op_type == "delete":
             paths = a.get("paths", [])
             if isinstance(paths, str):
-                try:
-                    parsed = json.loads(paths)
-                    if isinstance(parsed, list):
-                        paths = parsed
-                    else:
-                        paths = [paths]
-                except json.JSONDecodeError:
-                    paths = [paths]
+                paths = _coerce_path_list(paths)
             return delete_path(paths=paths)
         
         else:

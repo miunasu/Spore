@@ -6,6 +6,7 @@ import React, { useRef, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import sporeIcon from '@icons/32x32.png';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useMiniModeStore } from '../../stores/miniModeStore';
 
 export const TitleBar: React.FC = () => {
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
@@ -13,6 +14,7 @@ export const TitleBar: React.FC = () => {
   const lastClickTime = useRef(0);
   const { theme, toggleTheme } = useSettingsStore();
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const { miniMode, enterMiniMode, exitMiniMode } = useMiniModeStore();
 
   const handleMinimize = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -47,6 +49,17 @@ export const TitleBar: React.FC = () => {
       setAlwaysOnTop(next);
     } catch (err) {
       console.warn('Failed to set always on top:', err);
+    }
+  };
+
+  const handleToggleMiniMode = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (miniMode) {
+      // 退出后置顶还原为进入前的状态（即本地 alwaysOnTop 值），无需同步
+      await exitMiniMode();
+    } else {
+      await enterMiniMode(alwaysOnTop);
     }
   };
 
@@ -110,13 +123,41 @@ export const TitleBar: React.FC = () => {
       {/* 右侧 - 窗口控制按钮 */}
       <div className="flex items-center -mr-3">
         <button
+          onClick={handleToggleMiniMode}
+          className={`w-10 h-8 flex items-center justify-center transition-colors ${
+            miniMode
+              ? 'bg-spore-highlight/30 text-spore-highlight hover:bg-spore-highlight/40'
+              : 'hover:bg-spore-accent/50 text-spore-muted'
+          }`}
+          title={miniMode ? '退出 Mini 模式' : 'Mini 模式'}
+          aria-pressed={miniMode}
+        >
+          <svg
+            className="w-3.5 h-3.5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M21 9V6a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h4"
+            />
+            <rect x="12" y="12" width="9" height="7" rx="1.5" />
+          </svg>
+        </button>
+
+        <button
           onClick={handleToggleAlwaysOnTop}
+          disabled={miniMode}
           className={`w-10 h-8 flex items-center justify-center transition-colors ${
             alwaysOnTop
               ? 'bg-spore-highlight/30 text-spore-highlight hover:bg-spore-highlight/40'
               : 'hover:bg-spore-accent/50 text-spore-muted'
-          }`}
-          title={alwaysOnTop ? '取消窗口置顶' : '窗口置顶'}
+          } ${miniMode ? 'opacity-40 cursor-not-allowed' : ''}`}
+          title={miniMode ? 'Mini 模式下窗口保持置顶' : alwaysOnTop ? '取消窗口置顶' : '窗口置顶'}
           aria-pressed={alwaysOnTop}
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">

@@ -100,6 +100,43 @@ export const MessageList: React.FC = () => {
                     <div className="whitespace-pre-wrap break-all text-sm leading-relaxed overflow-hidden">
                       {message.content}
                     </div>
+
+                    {/* 命令意图脚注（安全 Agent 解析，持久化显示；恶意标红） */}
+                    {message.role === 'assistant' &&
+                      message.command_intents &&
+                      message.command_intents.length > 0 && (
+                      <div className="mt-2.5 pt-2 border-t border-spore-border/40 space-y-1.5">
+                        {message.command_intents.map((ci, index) => (
+                          <div key={index} className="flex items-start gap-2 min-w-0">
+                            <span className="text-xs flex-shrink-0 leading-4">
+                              {ci.is_malicious ? '🚨' : '💡'}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div
+                                className={`text-xs leading-4 ${
+                                  ci.is_malicious ? 'text-red-400 font-medium' : 'text-spore-muted'
+                                }`}
+                              >
+                                {ci.intent}
+                              </div>
+                              {ci.is_malicious && ci.malicious_reason && (
+                                <div className="text-[11px] text-red-400/80 leading-4">
+                                  恶意原因：{ci.malicious_reason}
+                                </div>
+                              )}
+                              <div
+                                className={`text-[11px] font-mono truncate ${
+                                  ci.is_malicious ? 'text-red-400/60' : 'text-spore-muted/60'
+                                }`}
+                                title={ci.command}
+                              >
+                                $ {ci.command.replace(/\s+/g, ' ')}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   
                   {/* 查看详情按钮（仅assistant消息，显示在消息右侧，垂直居中） */}

@@ -182,3 +182,35 @@ def load_llm_client() -> Union[OpenAI, "Anthropic"]:
     return load_openai_client()
 
 
+# ---------------------------------------------------------------------------
+# 通用客户端构造器（用于颗粒化 Agent 基座：按 sdk + api_key + api_url 构造）
+# ---------------------------------------------------------------------------
+def build_openai_client(api_key: str, base_url: Optional[str] = None) -> OpenAI:
+    """按显式参数构造 OpenAI 客户端（清理 headers 遵循全局配置）。"""
+    config = get_config()
+    if config.clean_sdk_headers:
+        http_client = httpx.Client(transport=CleanHeadersTransport(clean_auth=False))
+        if base_url:
+            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
+        return OpenAI(api_key=api_key, http_client=http_client)
+    if base_url:
+        return OpenAI(api_key=api_key, base_url=base_url)
+    return OpenAI(api_key=api_key)
+
+
+def build_anthropic_client(api_key: str, base_url: Optional[str] = None) -> "Anthropic":
+    """按显式参数构造 Anthropic 客户端（清理 headers 遵循全局配置）。"""
+    if not _anthropic_available:
+        raise RuntimeError("Anthropic SDK 未安装。请运行: pip install anthropic")
+    config = get_config()
+    if config.clean_sdk_headers or config.clean_auth_header:
+        transport = CleanHeadersTransport(clean_auth=config.clean_auth_header)
+        http_client = httpx.Client(transport=transport)
+        if base_url:
+            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client)
+        return Anthropic(api_key=api_key, http_client=http_client)
+    if base_url:
+        return Anthropic(api_key=api_key, base_url=base_url)
+    return Anthropic(api_key=api_key)
+
+

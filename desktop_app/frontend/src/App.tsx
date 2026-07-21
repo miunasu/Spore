@@ -4,6 +4,8 @@
 import { useEffect, useCallback } from 'react';
 import { TitleBar } from './components/layout/TitleBar';
 import { MainLayout } from './components/layout/MainLayout';
+import { MiniModeView } from './components/layout/MiniModeView';
+import { useMiniModeStore } from './stores/miniModeStore';
 import { LogPanel } from './components/log-panel/LogPanel';
 import { ChatPanel } from './components/chat-panel/ChatPanel';
 import { SidePanel } from './components/side-panel/SidePanel';
@@ -41,8 +43,9 @@ function App() {
   const { addAgent, updateAgentStatus, addAgentLog } = useAgentStore();
   const activeConversationId = useChatStore((state) => state.activeConversationId);
   const { setTodos } = useTodoStore();
-  const { setPendingRequest, clearRequest } = useConfirmStore();
+  const { enqueueRequest, removeRequest } = useConfirmStore();
   const theme = useSettingsStore((state) => state.theme);
+  const miniMode = useMiniModeStore((state) => state.miniMode);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -132,16 +135,14 @@ function App() {
           }
           break;
         case 'confirm_request':
-          // 只处理当前活跃对话的确认请求
+          // 只处理当前活跃对话的确认请求（并发时入队排队确认）
           if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
-            setPendingRequest(event.data);
+            enqueueRequest(event.data);
           }
           break;
         case 'confirm_cancel':
-          // 只处理当前活跃对话的确认取消
-          if (!event.data.conversation_id || event.data.conversation_id === currentActiveConversationId) {
-            clearRequest();
-          }
+          // 按 request_id 精确移除（超时取消不误伤队列中其他请求）
+          removeRequest(event.data.request_id);
           break;
         case 'task_event':
           // 任务事件流（后端任务自驱）：chatStore 内部按顶层 session_id 路由到对应会话
@@ -149,7 +150,7 @@ function App() {
           break;
       }
     }
-  }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, setPendingRequest, clearRequest]);
+  }, [addLog, addAgent, updateAgentStatus, addAgentLog, setTodos, enqueueRequest, removeRequest]);
 
   useEffect(() => {
     // 订阅 WebSocket 事件
@@ -175,11 +176,15 @@ function App() {
     <div className="h-screen flex flex-col bg-spore-bg">
       <TitleBar />
       <div className="flex-1 overflow-hidden">
-        <MainLayout
-          leftPanel={<LogPanel />}
-          centerPanel={<ChatPanel />}
-          rightPanel={<SidePanel />}
-        />
+        {miniMode ? (
+          <MiniModeView />
+        ) : (
+          <MainLayout
+            leftPanel={<LogPanel />}
+            centerPanel={<ChatPanel />}
+            rightPanel={<SidePanel />}
+          />
+        )}
       </div>
     </div>
   );

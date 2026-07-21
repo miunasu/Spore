@@ -7,7 +7,11 @@ import { useConfirmStore } from '../../stores/confirmStore';
 import { wsService } from '../../services/websocket';
 
 export const ConfirmBar: React.FC = () => {
-  const { pendingRequest, clearRequest } = useConfirmStore();
+  const { pendingRequests, removeRequest } = useConfirmStore();
+
+  // 队列化：始终显示最早到达的请求，其余排队等待
+  const pendingRequest = pendingRequests[0];
+  const queuedCount = pendingRequests.length - 1;
 
   if (!pendingRequest) {
     return null;
@@ -17,7 +21,7 @@ export const ConfirmBar: React.FC = () => {
     // 通过 WebSocket 发送响应
     const sent = wsService.sendConfirmResponse(pendingRequest.request_id, confirmed);
     if (sent) {
-      clearRequest();
+      removeRequest(pendingRequest.request_id);
     }
   };
 
@@ -28,6 +32,12 @@ export const ConfirmBar: React.FC = () => {
         return '🗑️';
       case 'overwrite':
         return '📝';
+      case 'security_high':
+        return '🚨';
+      case 'security_medium':
+      case 'security_low':
+      case 'security':
+        return '⚡';
       default:
         return '⚠️';
     }
@@ -37,11 +47,21 @@ export const ConfirmBar: React.FC = () => {
   const getActionColor = (actionType: string) => {
     switch (actionType) {
       case 'delete':
+      case 'security_high':
         return 'border-red-500/50 bg-red-500/10';
+      case 'security_medium':
+      case 'security':
+        return 'border-amber-500/50 bg-amber-500/10';
+      case 'security_low':
+        return 'border-emerald-500/50 bg-emerald-500/10';
       default:
         return 'border-yellow-500/50 bg-yellow-500/10';
     }
   };
+
+  // 确认按钮：高危操作用更醒目的措辞
+  const isHighRisk = pendingRequest.action_type === 'security_high';
+  const confirmLabel = isHighRisk ? '我已了解风险，继续' : '确认';
 
   return (
     <div className={`mb-3 rounded-xl border ${getActionColor(pendingRequest.action_type)} overflow-hidden`}>
@@ -54,8 +74,15 @@ export const ConfirmBar: React.FC = () => {
 
         {/* 消息 */}
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-spore-text">
-            {pendingRequest.title}
+          <div className="flex items-center gap-2">
+            <div className="text-sm font-medium text-spore-text">
+              {pendingRequest.title}
+            </div>
+            {queuedCount > 0 && (
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-spore-accent/40 text-spore-muted flex-shrink-0">
+                还有 {queuedCount} 个待确认
+              </span>
+            )}
           </div>
           <div className="text-xs text-spore-muted">
             {pendingRequest.message}
@@ -72,9 +99,9 @@ export const ConfirmBar: React.FC = () => {
           </button>
           <button
             onClick={() => handleRespond(true)}
-            className="px-3 py-1.5 text-sm rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"
+            className="px-3 py-1.5 text-sm rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors whitespace-nowrap"
           >
-            确认
+            {confirmLabel}
           </button>
         </div>
       </div>

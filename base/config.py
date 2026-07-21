@@ -11,6 +11,9 @@ current_agent_name = "Spore"
 # 全局继承记忆标志（用于 SYSTEM_AS_USER 模式下，continue 后第一条消息拼接 prompt）
 memory_continued = False
 
+# AutoAgent 颗粒化基座：支持独立配置 LLM 基座的 Agent profile 列表
+AGENT_PROFILES = ("supervisor", "mode_selector", "security")
+
 
 class Config:
     """统一配置管理类"""
@@ -31,8 +34,11 @@ class Config:
         self.use_responses_api: bool = os.getenv("USE_RESPONSES_API", "false").lower() == "true"
 
         # OpenAI reasoning_effort 参数（用于推理模型如 o1/gpt-5.5 等）
-        # 可选值：low, medium, high, xhigh，留空表示不传此参数
-        self.openai_reasoning_effort: Optional[str] = os.getenv("OPENAI_REASONING_EFFORT", "").strip() or None
+        # 可选值：low, medium, high, xhigh；留空或 none/off 表示不传此参数
+        _openai_reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip()
+        if _openai_reasoning_effort.lower() in ("", "none", "off"):
+            _openai_reasoning_effort = ""
+        self.openai_reasoning_effort: Optional[str] = _openai_reasoning_effort or None
 
         # 是否清理 SDK 的 x-stainless headers（某些第三方API代理需要）
         # 对 OpenAI SDK 和 Anthropic SDK 都生效
@@ -49,7 +55,7 @@ class Config:
         self.anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514").strip() or "claude-sonnet-4-20250514"
 
         # Anthropic effort / thinking 配置（对应 Claude API 的 output_config.effort 与 thinking）
-        # effort 可选值：low, medium, high, xhigh, max；留空表示不传
+        # effort 可选值：low, medium, high, xhigh, max；留空或 none/off 表示不传
         # 现代模型推荐：thinking=adaptive + output_config.effort
         # 旧模型/手动扩展思考：thinking=enabled + budget_tokens
         _anthropic_effort = os.getenv("ANTHROPIC_EFFORT", "").strip().lower()
@@ -82,6 +88,23 @@ class Config:
         self.sub_agent_anthropic_api_key: Optional[str] = os.getenv("SUB_AGENT_ANTHROPIC_API_KEY", "").strip() or None
         self.sub_agent_anthropic_api_url: Optional[str] = os.getenv("SUB_AGENT_ANTHROPIC_API_URL", "").strip() or None
         self.sub_agent_anthropic_model: Optional[str] = os.getenv("SUB_AGENT_ANTHROPIC_MODEL", "").strip() or None
+
+        # ========== AutoAgent 颗粒化基座配置 ==========
+        # 每个基座目标（sub_agent 默认层 + 4 个 AutoAgent）可单独配置 LLM 基座
+        # 与高级参数（effort/thinking/responses），字段级回退：
+        #   AGENT_<PROFILE>_* → SUB_AGENT_* → 主 Agent 配置
+        # 环境变量示例：AGENT_SECURITY_LLM_SDK / AGENT_SECURITY_ANTHROPIC_EFFORT / ...
+        # effort 类参数（ANTHROPIC_EFFORT / OPENAI_REASONING_EFFORT）支持显式关闭：
+        #   留空 = 继承下层；none/off = 该 Agent 明确不传此参数（不再向下回退）
+        _layer_prefixes = {
+            "sub_agent": "SUB_AGENT",
+            "supervisor": "AGENT_SUPERVISOR",
+            "mode_selector": "AGENT_MODE_SELECTOR",
+            "security": "AGENT_SECURITY",
+        }
+        self._agent_llm_overrides: dict = {
+            key: self._parse_llm_layer(prefix) for key, prefix in _layer_prefixes.items()
+        }
         
         # 系统提示文件名（不含路径，位于 prompt 目录下）
         # 可选：prompt.md（默认）、prompt_claude.md（Claude 专用）
@@ -299,6 +322,55 @@ class Config:
         
         # 是否限制写工具的返回值（不在messages中添加arguments字段）
         self.limit_write_tool_return: bool = os.getenv("LIMIT_WRITE_TOOL_RETURN", "true").lower() == "true"
+
+        # ========== 备份恢复配置 ==========
+        # 备份系统总开关：文件写操作自动备份 + 对话点快照
+        self.backup_enabled: bool = os.getenv("BACKUP_ENABLED", "true").lower() == "true"
+
+        # 备份存储目录（相对项目根目录或绝对路径）
+        self.backup_dir: str = os.getenv("BACKUP_DIR", ".spore").strip() or ".spore"
+
+        # 单文件备份大小上限（字节），超过则跳过备份
+        try:
+            self.backup_max_file_bytes: int = int(os.getenv("BACKUP_MAX_FILE_BYTES", str(50 * 1024 * 1024)))
+        except ValueError:
+            self.backup_max_file_bytes = 50 * 1024 * 1024
+
+        # 删除目录时最多备份的文件数量
+        try:
+            self.backup_max_delete_files: int = int(os.getenv("BACKUP_MAX_DELETE_FILES", "200"))
+        except ValueError:
+            self.backup_max_delete_files = 200
+
+        # ========== 安全 Agent 配置 ==========
+        # 单一模式开关：
+        #   off   : 完全关闭
+        #   basic : 命中 ps 高危关键词 -> AI 风险评估 -> 按容忍度确认（原安全守卫能力）
+        #   full  : basic + 对未命中关键词的普通命令做意图解析 + 恶意研判（异步）
+        _sa_mode = os.getenv("SECURITY_AGENT_MODE", "full").lower().strip()
+        if _sa_mode not in ("off", "basic", "full"):
+            _sa_mode = "full"
+        self.security_agent_mode: str = _sa_mode
+        # 兼容属性：旧代码判定"守卫是否启用"（basic/full 均启用关键词检测）
+        self.security_guard_enabled: bool = _sa_mode != "off"
+
+        # 风险容忍度: strict（命中策略一律确认）/ balanced（低风险自动放行）
+        #             / permissive（低+中风险自动放行）
+        _sg_mode = os.getenv("SECURITY_GUARD_MODE", "balanced").lower().strip()
+        self.security_guard_mode: str = _sg_mode if _sg_mode in ("strict", "balanced", "permissive") else "balanced"
+
+        # 高危命令 AI 风险评估超时（秒）
+        try:
+            self.security_llm_timeout: int = int(os.getenv("SECURITY_LLM_TIMEOUT", "30"))
+        except ValueError:
+            self.security_llm_timeout = 30
+
+        # 意图 / 恶意研判超时（秒，full 模式）
+        # 留足 provider 限流重试（5s/15s）的余量，避免多命令并发分析时后续请求被静默丢弃
+        try:
+            self.security_intent_timeout: int = int(os.getenv("SECURITY_INTENT_TIMEOUT", "45"))
+        except ValueError:
+            self.security_intent_timeout = 45
         
         # ========== 目录路径配置 ==========
         # Skills 目录路径
@@ -428,6 +500,107 @@ class Config:
         if sdk == "anthropic":
             return self.get_sub_agent_anthropic_model()
         return self.get_sub_agent_openai_model()
+
+    def resolve_agent_llm(self, profile: str) -> dict:
+        """
+        解析指定基座目标的 LLM 基座 + 高级参数。
+
+        profile ∈ {sub_agent, supervisor, mode_selector, security}。
+        字段级回退：
+          - sub_agent：SUB_AGENT_* → 主 Agent
+          - 其余 AutoAgent：AGENT_<PROFILE>_* → SUB_AGENT_* → 主 Agent
+        返回 {sdk, api_key, api_url, model, use_responses_api, reasoning_effort,
+              effort, thinking_mode, thinking_budget_tokens}。
+        """
+        layers = []
+        if profile in self._agent_llm_overrides:
+            layers.append(self._agent_llm_overrides[profile])
+        if profile != "sub_agent" and "sub_agent" in self._agent_llm_overrides:
+            layers.append(self._agent_llm_overrides["sub_agent"])
+        layers.append(self._main_llm_layer())
+
+        def pick(key):
+            for layer in layers:
+                val = layer.get(key)
+                if val is not None:
+                    return val
+            return None
+
+        sdk = pick("sdk") or "openai"
+        if sdk == "anthropic":
+            return {
+                "sdk": "anthropic",
+                "api_key": pick("anthropic_api_key"),
+                "api_url": pick("anthropic_api_url"),
+                "model": pick("anthropic_model"),
+                "use_responses_api": None,
+                "reasoning_effort": None,
+                "effort": pick("anthropic_effort"),
+                "thinking_mode": pick("anthropic_thinking_mode"),
+                "thinking_budget_tokens": pick("anthropic_thinking_budget_tokens"),
+            }
+        return {
+            "sdk": "openai",
+            "api_key": pick("openai_api_key"),
+            "api_url": pick("openai_api_url"),
+            "model": pick("openai_model"),
+            "use_responses_api": pick("use_responses_api"),
+            "reasoning_effort": pick("openai_reasoning_effort"),
+            "effort": None,
+            "thinking_mode": None,
+            "thinking_budget_tokens": None,
+        }
+
+    def _main_llm_layer(self) -> dict:
+        """主 Agent 基座层（供颗粒化回退链的兜底层，反映当前主配置）。"""
+        return {
+            "sdk": self.llm_sdk,
+            "openai_api_key": self.openai_api_key or None,
+            "openai_api_url": self.openai_api_url,
+            "openai_model": self.openai_model,
+            "anthropic_api_key": self.anthropic_api_key or None,
+            "anthropic_api_url": self.anthropic_api_url,
+            "anthropic_model": self.anthropic_model,
+            "use_responses_api": self.use_responses_api,
+            "openai_reasoning_effort": self.openai_reasoning_effort,
+            "anthropic_effort": self.anthropic_effort,
+            "anthropic_thinking_mode": self.anthropic_thinking_mode,
+            "anthropic_thinking_budget_tokens": self.anthropic_thinking_budget_tokens,
+        }
+
+    @staticmethod
+    def _parse_llm_layer(prefix: str) -> dict:
+        """从 <PREFIX>_* 环境变量解析一层基座配置（基础 + 高级）。空值为 None。"""
+        def g(suffix: str):
+            return os.getenv(f"{prefix}_{suffix}", "").strip() or None
+
+        def g_lower(suffix: str):
+            v = g(suffix)
+            return v.lower() if v else None
+
+        budget_raw = g("ANTHROPIC_THINKING_BUDGET_TOKENS")
+        try:
+            budget = int(budget_raw) if budget_raw else None
+        except ValueError:
+            budget = None
+
+        ura = g_lower("USE_RESPONSES_API")
+        use_resp = True if ura == "true" else (False if ura == "false" else None)
+
+        return {
+            "sdk": g_lower("LLM_SDK"),
+            "openai_api_key": g("OPENAI_API_KEY"),
+            "openai_api_url": g("OPENAI_API_URL"),
+            "openai_model": g("OPENAI_MODEL"),
+            "anthropic_api_key": g("ANTHROPIC_API_KEY"),
+            "anthropic_api_url": g("ANTHROPIC_API_URL"),
+            "anthropic_model": g("ANTHROPIC_MODEL"),
+            "use_responses_api": use_resp,
+            "openai_reasoning_effort": g_lower("OPENAI_REASONING_EFFORT"),
+            "anthropic_effort": g_lower("ANTHROPIC_EFFORT"),
+            "anthropic_thinking_mode": g_lower("ANTHROPIC_THINKING_MODE"),
+            "anthropic_thinking_budget_tokens": budget,
+        }
     
     def get_max_tokens(self) -> int:
         """

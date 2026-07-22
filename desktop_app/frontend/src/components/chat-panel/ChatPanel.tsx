@@ -13,6 +13,7 @@ import { useLogStore } from '../../stores/logStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { useDragStore } from '../../stores/dragStore';
 import { commandsApi } from '../../services/api';
+import { useT, localeTag } from '../../i18n';
 
 // 标签类型
 type TabType = 'chat' | 'file';
@@ -26,6 +27,7 @@ interface Tab {
 }
 
 export const ChatPanel: React.FC = () => {
+  const t = useT();
   const {
     conversations,
     activeConversationId,
@@ -313,7 +315,7 @@ export const ChatPanel: React.FC = () => {
   };
 
   const handleHistoryDelete = async (filename: string) => {
-    if (confirm(`确定删除历史记忆文件 ${filename}？`)) {
+    if (confirm(t('chatPanel.confirmDeleteMemoryFile', { filename }))) {
       await deleteHistoryFile(filename);
     }
   };
@@ -387,7 +389,7 @@ export const ChatPanel: React.FC = () => {
   ): { title: string; subtitle: string } => {
     const base = name.replace(/^autosave\//, '').replace(/\.mem$/, '');
     const updatedAt = modified
-      ? new Date(modified * 1000).toLocaleString('zh-CN')
+      ? new Date(modified * 1000).toLocaleString(localeTag())
       : '';
 
     // 新版：session_<会话ID>
@@ -395,7 +397,7 @@ export const ChatPanel: React.FC = () => {
     if (sessionMatch) {
       return {
         title: sessionMatch[1],
-        subtitle: updatedAt ? `更新于 ${updatedAt}` : '会话短记忆',
+        subtitle: updatedAt ? t('chatPanel.updatedAt', { time: updatedAt }) : t('chatPanel.sessionMemory'),
       };
     }
 
@@ -407,13 +409,13 @@ export const ChatPanel: React.FC = () => {
       return {
         title: legacy[5] ? legacy[5] : `${legacy[1]} ${legacy[2]}:${legacy[3]}:${legacy[4]}`,
         subtitle: legacy[5]
-          ? `旧快照 ${legacy[1]} ${legacy[2]}:${legacy[3]}:${legacy[4]}`
-          : '旧版自动保存',
+          ? t('chatPanel.legacySnapshot', { time: `${legacy[1]} ${legacy[2]}:${legacy[3]}:${legacy[4]}` })
+          : t('chatPanel.legacyAutosave'),
       };
     }
 
     // 重命名过的短记忆（已保留，不参与自动淘汰）
-    return { title: base, subtitle: updatedAt ? `已保留 · ${updatedAt}` : '已保留' };
+    return { title: base, subtitle: updatedAt ? t('chatPanel.retainedAt', { time: updatedAt }) : t('chatPanel.retained') };
   };
 
   // 历史文件行（短记忆与历史对话共用：点击加载、重命名、删除）
@@ -451,13 +453,13 @@ export const ChatPanel: React.FC = () => {
               setShowHistoryMenu(false);
             }}
             className="flex-1 min-w-0 flex flex-col items-start text-left"
-            title="加载到新对话标签页查看"
+            title={t('chatPanel.loadToNewTab')}
           >
             <span className="truncate w-full">
               {display?.title ?? file.name.replace('.mem', '')}
             </span>
             <span className="text-xs text-spore-muted truncate w-full">
-              {display?.subtitle ?? new Date(file.modified * 1000).toLocaleString('zh-CN')}
+              {display?.subtitle ?? new Date(file.modified * 1000).toLocaleString(localeTag())}
             </span>
           </button>
         )}
@@ -468,7 +470,7 @@ export const ChatPanel: React.FC = () => {
             setEditingHistoryName(file.name);
           }}
           className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-spore-accent/50 transition-opacity"
-          title={isAutosave ? '重命名（重命名后该短记忆将被保留，不再自动淘汰）' : '重命名历史文件'}
+          title={isAutosave ? t('chatPanel.renameAutosaveTitle') : t('chatPanel.renameHistoryTitle')}
         >
           <svg className="w-3.5 h-3.5 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -480,7 +482,7 @@ export const ChatPanel: React.FC = () => {
             handleHistoryDelete(file.name);
           }}
           className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-spore-error/20 transition-opacity"
-          title={isAutosave ? '删除该短记忆' : '删除历史文件'}
+          title={isAutosave ? t('chatPanel.deleteAutosaveTitle') : t('chatPanel.deleteHistoryTitle')}
         >
           <svg className="w-3.5 h-3.5 text-spore-error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -502,21 +504,21 @@ export const ChatPanel: React.FC = () => {
       }}
     >
       <div className="px-3 py-1.5 text-xs text-spore-muted border-b border-spore-border/30">
-        短记忆（按会话自动保存，实时更新，保留最近10个会话）
+        {t('chatPanel.shortMemoryHeader')}
       </div>
       {autosaveFiles.length === 0 ? (
         <div className="px-3 py-2 text-xs text-spore-muted text-center">
-          暂无短记忆
+          {t('chatPanel.noShortMemory')}
         </div>
       ) : (
         autosaveFiles.map((file) => renderHistoryRow(file, describeAutosave(file.name, file.modified)))
       )}
       <div className="px-3 py-1.5 text-xs text-spore-muted border-y border-spore-border/30">
-        历史对话
+        {t('chatPanel.historyConversations')}
       </div>
       {manualFiles.length === 0 ? (
         <div className="px-3 py-4 text-sm text-spore-muted text-center">
-          暂无历史记录
+          {t('chatPanel.noHistory')}
         </div>
       ) : (
         manualFiles.map((file) => renderHistoryRow(file))
@@ -546,7 +548,7 @@ export const ChatPanel: React.FC = () => {
         <div className="absolute inset-0 bg-spore-highlight/10 flex items-center justify-center z-20 pointer-events-none">
           <div className="bg-spore-card border border-spore-highlight rounded-xl px-6 py-4 shadow-lg">
             <span className="text-spore-highlight font-medium">
-              {draggingFile ? `释放以查看: ${draggingFile.name}` : '释放以查看文件'}
+              {draggingFile ? t('chatPanel.dropToViewFile', { name: draggingFile.name }) : t('chatPanel.dropToView')}
             </span>
           </div>
         </div>
@@ -661,7 +663,7 @@ export const ChatPanel: React.FC = () => {
               setActiveTabType('chat');
             }}
             className="p-1.5 rounded hover:bg-spore-accent/30 text-spore-muted hover:text-spore-text transition-colors"
-            title="新建对话"
+            title={t('chatPanel.newConversation')}
           >
             <svg
               className="w-4 h-4"
@@ -683,7 +685,7 @@ export const ChatPanel: React.FC = () => {
             ref={historyButtonRef}
             onClick={() => setShowHistoryMenu(!showHistoryMenu)}
             className="p-1.5 rounded hover:bg-spore-accent/30 text-spore-muted hover:text-spore-text transition-colors"
-            title="加载历史对话"
+            title={t('chatPanel.loadHistory')}
           >
             <svg
               className="w-4 h-4"

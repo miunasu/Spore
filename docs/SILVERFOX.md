@@ -1,7 +1,8 @@
-# 🦊 SilverFox 恶意软件分析指南
+# 🦊 银狐（SilverFox）恶意软件分析指南
 
-> 适用于 Spore 3.0。请使用桌面或 CLI 启动后按下列提示复现；样本与输出见 example/MalwareAnalysis/SliverFox/。
+> [English](en/SILVERFOX.md)
 
+> 适用于 Spore 4.0。请使用桌面或 CLI 启动后按下列提示复现；样本与输出见 `example/MalwareAnalysis/SliverFox/`。
 
 ## 📋 准备工作
 
@@ -15,24 +16,27 @@
 
 ### 3. 配置 LLM
 
-在 `.env` 文件中填写以下配置：
+在安装目录的 `.env` 文件中填写以下配置（变量说明见 [配置文档](CONFIGURATION.md)）：
 
 ```env
-# LLM API 配置
-LLM_API_KEY=your_api_key_here
-LLM_API_URL=your_api_url_here
+# 以 OpenAI 兼容接口为例
+LLM_SDK=openai
+OPENAI_API_KEY=your_api_key_here
+OPENAI_API_URL=your_api_url_here
+OPENAI_MODEL=your_model_name
 
-# Token 限制配置（根据使用的模型调整）
-MAX_OUTPUT_TOKENS=8000       # LLM 单次输出的最大 token 数
+# Token 限制（根据使用的模型调整）
+MAX_OUTPUT_TOKENS=8000        # LLM 单次输出的最大 token 数
 CONTEXT_MAX_TOKENS=128000     # 上下文最大 token 数
 ```
 
+Anthropic 接口则改用 `LLM_SDK=anthropic` + `ANTHROPIC_API_KEY` / `ANTHROPIC_API_URL` / `ANTHROPIC_MODEL`。
+
 ### 4. 配置 IDA-Skill
 
-下载 [最新版 IDA-Skill](https://github.com/miunasu/IDA-Skill)，并放入skills文件夹  
+下载 [最新版 IDA-Skill](https://github.com/miunasu/IDA-Skill)，并放入安装目录的 `skills/` 文件夹。
 
-
-编辑 [IDA-Skill 配置文件](../skills/IDA-Skill/config.json)，填写 IDA 目录中的 `idat.exe` 绝对路径。
+编辑 `skills/IDA-Skill/config.json`，填写 IDA 目录中 `idat.exe` 的绝对路径。
 
 示例：
 ```json
@@ -62,13 +66,16 @@ CONTEXT_MAX_TOKENS=128000     # 上下文最大 token 数
 - 持久化记录文件夹：persistence_report_b0c27ebf2b0814f7150864d505a8f478_byovd_drv_20260202_200131
 - 恶意软件配置文件：box.ini
 - 后续通信内容：data 子文件夹
-
-请分析样本并生成完整的样本分析报告。
 ```
+
+分析过程中可通过左栏日志、右栏 Agent 监控与 TODO 栏观察进度；报告默认产出在 `output/` 目录。
+
 ---
 
 ## 📝 注意事项
 
 - 确保样本文件路径正确且可访问
+- **不要运行样本本体**：分析基于静态逆向与已有记录文件；安全 Agent（`SECURITY_AGENT_MODE=full`，默认）会对可疑执行命令熔断
 - 分析过程可能需要较长时间，请耐心等待
-- 若IDA目录同时存在idat.exe与idat64.exe，请填写idat.exe，因为该样本为32位
+- 若 IDA 目录同时存在 `idat.exe` 与 `idat64.exe`，请填写 `idat.exe`，因为该样本为 32 位
+- 建议配合角色 `characters/Malware analyst.md`（`char select` 或桌面设置中选择）

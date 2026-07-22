@@ -459,6 +459,56 @@ def toggle_command_intercept() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+def _sync_system_language(lang: str) -> None:
+    """Persist and apply the system language without restarting the chat process.
+
+    Drives the language of user-facing helper agents (command-intent explanations,
+    circuit-break remediation advice). The main agent already follows the language
+    of the user's message.
+    """
+    normalized = lang if lang in ("zh", "en") else "zh"
+    env_path = _get_env_path()
+    _upsert_env_key(env_path, "SYSTEM_LANGUAGE", normalized)
+
+    from base.config import get_config as get_base_config
+
+    get_base_config().system_language = normalized
+
+    try:
+        from .. import core as desktop_core
+        if getattr(desktop_core, "_config", None) is not None:
+            desktop_core._config.system_language = normalized
+    except Exception:
+        pass
+
+
+class LanguageRequest(BaseModel):
+    """设置系统语言请求"""
+    language: str
+
+
+@router.get("/settings/language")
+def get_system_language() -> Dict[str, Any]:
+    """Get the current system language."""
+    try:
+        from base.config import get_config
+        lang = str(getattr(get_config(), "system_language", "zh"))
+        return {"success": True, "language": lang}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/settings/language")
+def set_system_language(request: LanguageRequest) -> Dict[str, Any]:
+    """Set the system language and persist to .env (no restart required)."""
+    try:
+        normalized = request.language if request.language in ("zh", "en") else "zh"
+        _sync_system_language(normalized)
+        return {"success": True, "language": normalized}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @router.post("/settings/command_intercept")
 def set_command_intercept(request: SettingsUpdateRequest) -> Dict[str, Any]:
     """Set command intercept master switch."""

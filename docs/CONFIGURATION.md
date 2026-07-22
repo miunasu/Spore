@@ -1,9 +1,11 @@
-# 配置说明（v3.0）
+# 配置说明（v4.0）
+
+> [English](en/CONFIGURATION.md)
 
 权威配置源为项目根目录 `.env`，由 `base/config.py` 的 `Config` 加载。  
 桌面 GUI「设置 → 环境配置」最终也读写同一套变量：页面分为 **基础配置**（最小可用）与 **高级配置**（默认折叠），并支持 **配置档案（profiles）**。
 
-> 变量名以代码为准。旧文档中的 `OPENAI_BASE_URL`、`MODEL_MAIN`、`MAX_CONTEXT_TOKENS`、`MAX_TOKENS_MAIN`、`DESKTOP_CONFIRM_ENABLED` 等 **已不再使用**。
+> 变量名以代码为准。旧文档中的 `OPENAI_BASE_URL`、`MODEL_MAIN`、`MAX_CONTEXT_TOKENS`、`MAX_TOKENS_MAIN`、`DESKTOP_CONFIRM_ENABLED`、`LLM_API_KEY`、`LLM_API_URL` 等 **已不再使用**。
 
 ---
 
@@ -83,6 +85,25 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `SUB_AGENT_OPENAI_API_KEY` / `SUB_AGENT_OPENAI_API_URL` / `SUB_AGENT_OPENAI_MODEL` | 子 Agent OpenAI |
 | `SUB_AGENT_ANTHROPIC_API_KEY` / `SUB_AGENT_ANTHROPIC_API_URL` / `SUB_AGENT_ANTHROPIC_MODEL` | 子 Agent Anthropic |
 
+### 辅助 Agent 独立 LLM（v4.0，可选）
+
+三个辅助 Agent 档位可各自指定模型，回退链：**档位专属 → `SUB_AGENT_*` → 主配置**（按字段逐项回退，见 `Config.resolve_agent_llm`）：
+
+| 前缀 | 对应 Agent |
+|------|-----------|
+| `AGENT_SUPERVISOR_*` | Supervisor（循环/终止判定） |
+| `AGENT_MODE_SELECTOR_*` | ModeSelector（auto 模式选择） |
+| `AGENT_SECURITY_*` | 安全 Agent（意图/风险/熔断） |
+
+每个前缀支持的后缀与主配置一致：`LLM_SDK`、`OPENAI_API_KEY/API_URL/MODEL`、`ANTHROPIC_API_KEY/API_URL/MODEL` 及 effort / thinking 等。
+
+示例——安全 Agent 用便宜的小模型：
+
+```env
+AGENT_SECURITY_LLM_SDK=openai
+AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
+```
+
 ### 输出与超时
 
 | 变量 | 默认 | 说明 |
@@ -106,11 +127,13 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `LAUNCH_MODE` | `cli` | `cli` 或 `desktop` |
 | `DESKTOP_API_HOST` | `127.0.0.1` | FastAPI 监听地址 |
 | `DESKTOP_API_PORT` | `8765` | HTTP 端口；**WebSocket 端口 = HTTP + 1** |
+| `SYSTEM_LANGUAGE` | `zh` | 系统语言：`zh` 或 `en`。影响面向用户的辅助 Agent 输出（命令意图说明、熔断修复建议）。桌面端标题栏的语言开关会自动同步此项；主 Agent 始终跟随用户消息所用的语言。 |
 
 打包运行时还会使用环境变量（由 Tauri / 安装器注入）：
 
 - `SPORE_RESOURCE_DIR`：资源目录（prompt/skills/characters 等）
 - `SPORE_DESKTOP_MODE`：桌面静默标识
+- `SPORE_INSTANCE_ID` / `SPORE_INSTANCE_PORT`：多实例子进程
 
 ---
 
@@ -120,7 +143,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 |------|------|------|
 | `CONTEXT_MODE` | `strong_context` | 新会话默认模式 |
 | `CONTEXT_MAX_TOKENS` | `128000` | 上下文 token 上限 |
-| `CONTEXT_WARNING_THRESHOLD` | `0.8` | 警告阈值（比例） |
+| `CONTEXT_WARNING_THRESHOLD` | `0.8` | 压缩触发阈值（比例） |
 | `MAX_SINGLE_MESSAGE_RATIO` | `0.3` | 单条消息相对上限 |
 
 ### 模式含义
@@ -129,9 +152,58 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 |------|------|
 | `strong_context` | 强关联单 Agent 工具集，**无** `multi_agent_dispatch` |
 | `long_context` | 长上下文 / 多 Agent 倾向，**含** `multi_agent_dispatch` |
-| `auto` | 每轮可由 ModeSelector 选择 strong 或 long |
+| `auto` | 每轮由 ModeSelector 选择 strong 或 long |
 
-运行时可在 CLI `mode ...` 或 GUI 标题栏切换，作用于**当前会话**。
+运行时可在 CLI `mode ...` 或 GUI 模式下拉框切换，作用于**当前会话**。
+
+---
+
+## 安全（v4.0）
+
+### 安全 Agent
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `SECURITY_AGENT_MODE` | `full` | `off` 完全关闭；`basic` 事前把关：高危关键字命中后做 AI 风险评估，按风险等级自动放行 / 确认 / 阻止；`full`（默认）异步旁路：**不做关键词预筛、无确认弹窗**，每条命令后台异步研判意图与恶意，判恶意即熔断并生成修复建议。`basic` 与 `full` 是两种互斥策略 |
+| `SECURITY_GUARD_MODE` | `balanced` | 仅 `basic` 模式生效：`strict` 命中即确认 / `balanced` 中高风险确认 / `permissive` 仅高风险确认 |
+| `SECURITY_LLM_TIMEOUT` | `30` | 风险评估 LLM 超时（秒） |
+| `SECURITY_INTENT_TIMEOUT` | `45` | 意图分析 LLM 超时（秒） |
+
+相关数据文件（自动生成、git 忽略）：
+
+- `security_whitelist.json`：信任命令白名单（`basic` 模式生效；CLI `whitelist` 命令或确认时加入）
+- `.spore/security_audit.jsonl`：安全审计日志
+
+### 命令拦截
+
+桌面菜单「拦截开关」与下列变量对应：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `COMMAND_INTERCEPT` | `true`（若未设则兼容旧名 `BLOCK_SHELL_DELETE`） | 总开关 |
+| `INTERCEPT_SHELL_DELETE` | 开启 | 拦截 del/rm/Remove-Item 等 |
+| `INTERCEPT_SHELL_WRITE` | 开启 | 拦截 Set-Content/Out-File 等（建议用 `file type=write`） |
+
+> 桌面端的文件写删确认由 `confirm_manager` 走 WebSocket，**没有** `DESKTOP_CONFIRM_ENABLED` 开关。
+
+### 备份与回滚
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `BACKUP_ENABLED` | `true` | 文件留底 + 对话检查点总开关 |
+| `BACKUP_DIR` | `.spore` | 备份数据目录 |
+| `BACKUP_MAX_FILE_BYTES` | 50MB | 超过此大小的文件不留底 |
+| `BACKUP_MAX_DELETE_FILES` | `200` | 单次删除操作最多备份的文件数 |
+
+对应 CLI 命令 `rollback` / `filehistory` / `checkpoints` / `rewind`，与桌面「备份/回滚」页。
+
+### 工具策略
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `TOOL_POLICY_SCOPE` | `session` | `session`：策略按会话独立；`global`：读写根目录 `tool_policy.json` 对所有会话生效 |
+
+可开关粒度到子工具（`file.read/write/delete`、`edit.single/multi/line`、`web_browser.visit/search`、`multi_agent_dispatch.<类型>`）。桌面在「设置 → 工具」编辑；详见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ---
 
@@ -164,9 +236,10 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `MULTI_AGENT_MAX_COUNT` | `5` | 最大并发子 Agent |
 | `SUB_AGENT_MAX_ITERATIONS` | `100` | 单子 Agent 最大迭代 |
 | `MULTI_AGENT_TIMEOUT` | 空 | 等待超时秒数，空=无限 |
+| `MULTI_AGENT_TOTAL_TIMEOUT` | `3600` | 整批派发总超时（秒） |
 | `MULTI_AGENT_MONITOR_ENABLED` | `true` | 是否弹独立监控终端 |
 | `MULTI_AGENT_JOIN_INTERVAL` | `2.0` | 等待轮询间隔（秒） |
-| `CODER_MAX_ITERATIONS` | `1000` | 历史兼容/Coder 相关上限 |
+| `CODER_MAX_ITERATIONS` | `1000` | Coder 子 Agent 迭代上限 |
 
 ---
 
@@ -193,20 +266,6 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `WEB_BROWSER_TIMEOUT` | `15` | 网页超时 |
 | `WEB_PROXY_PORT` | `7897` | 非中文域名代理端口；`0` 禁用 |
 | `WEB_MAX_CONTENT_LENGTH` | `15000` | 网页正文截断长度 |
-
----
-
-## 命令拦截（安全）
-
-桌面三点菜单「拦截开关」与下列变量对应：
-
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `COMMAND_INTERCEPT` | `true`（若未设则兼容旧名 `BLOCK_SHELL_DELETE`） | 总开关 |
-| `INTERCEPT_SHELL_DELETE` | 开启 | 拦截 del/rm/Remove-Item 等 |
-| `INTERCEPT_SHELL_WRITE` | 开启 | 拦截 Set-Content/Out-File 等（建议用 `file type=write`） |
-
-> 桌面端的文件写删确认由 `confirm_manager` 走 WebSocket，**没有** `DESKTOP_CONFIRM_ENABLED` 开关。
 
 ---
 
@@ -246,7 +305,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `OUTPUT_DIR` | `output` |
 | `UPLOAD_DIR` | `uploads` |
 
-对话历史固定使用工作目录下 `history/`（含 `history/autosave/`），不由上述变量改名。
+对话历史固定使用工作目录下 `history/`（含 `history/autosave/`）；备份数据固定在 `BACKUP_DIR`（默认 `.spore/`）。
 
 ---
 
@@ -257,7 +316,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 保存后：
 
 - 多数项需重启进程生效  
-- 桌面「应用环境配置」会调用运行时热更新（`reload_config` / `apply_runtime_config`）
+- 桌面「应用环境配置」会调用运行时热更新（`reload_config` / `apply_runtime_config`：重载 `.env`、重启 Chat 进程、按会话重解析工具集）
 
 ### 2. GUI 设置（桌面）
 
@@ -267,11 +326,11 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
    - `LLM_SDK`  
    - OpenAI：`OPENAI_API_KEY` / `OPENAI_API_URL` / `OPENAI_MODEL`  
    - Anthropic：`ANTHROPIC_API_KEY` / `ANTHROPIC_API_URL` / `ANTHROPIC_MODEL`  
-2. **高级配置（默认折叠）**：Responses/Thinking、子 Agent、上下文阈值、SDK 兼容、日志、路径、多 Agent、拦截开关等  
+2. **高级配置（默认折叠）**：Responses/Thinking、子 Agent 与辅助 Agent 档位、上下文阈值、SDK 兼容、日志、路径、多 Agent、安全与拦截开关等  
 3. **API 配置套**：把当前 SDK 相关 Key/URL/模型与兼容参数存成 profile，可一键切换  
 4. 点 **保存配置** 写回 `.env` 并热应用；或 **打开 .env** 用外部编辑器  
 
-档案实现见 `base/config_profiles.py`。
+档案实现见 `base/config_profiles.py`（持久化到 `.spore_config_profiles.json`）。
 
 ---
 
@@ -301,18 +360,21 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 
 改 `CONTEXT_MAX_TOKENS`，并保证不超过模型实际窗口。可配合 `savemode` 与 `LIMIT_WRITE_TOOL_RETURN` 控制膨胀。
 
-### 如何关闭 shell 危险命令拦截？
+### 如何关闭安全 Agent / 拦截？
 
 ```env
+# 完全关闭安全 Agent（不推荐）
+SECURITY_AGENT_MODE=off
+
+# 只关闭 shell 命令拦截
 COMMAND_INTERCEPT=false
-```
 
-或在桌面菜单切换「拦截开关」。也可只关单项：
-
-```env
+# 或只关单项
 INTERCEPT_SHELL_DELETE=false
 INTERCEPT_SHELL_WRITE=false
 ```
+
+也可在桌面菜单切换「拦截开关」，或用 `whitelist add <命令>` 信任特定命令。
 
 ### 变量改了不生效？
 
@@ -325,11 +387,13 @@ INTERCEPT_SHELL_WRITE=false
 | 旧名（勿用） | 现行名 |
 |--------------|--------|
 | `OPENAI_BASE_URL` | `OPENAI_API_URL` |
+| `LLM_API_KEY` / `LLM_API_URL` | `OPENAI_API_KEY`+`OPENAI_API_URL` 或 `ANTHROPIC_API_KEY`+`ANTHROPIC_API_URL` |
 | `MODEL_MAIN` | `OPENAI_MODEL` / `ANTHROPIC_MODEL` |
 | `MAX_TOKENS_MAIN` | `MAX_OUTPUT_TOKENS` |
 | `MAX_CONTEXT_TOKENS` | `CONTEXT_MAX_TOKENS` |
+| `BLOCK_SHELL_DELETE` | `COMMAND_INTERCEPT`（仍兼容读取，但请用新名） |
 | `DESKTOP_CONFIRM_ENABLED` | （已移除；桌面确认始终可用） |
-| `MODEL_SUPERVISOR` | （已无独立监督模型配置） |
+| `MODEL_SUPERVISOR` | `AGENT_SUPERVISOR_*` 档位配置 |
 
 ---
 

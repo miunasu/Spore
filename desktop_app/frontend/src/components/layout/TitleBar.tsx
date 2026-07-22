@@ -7,8 +7,11 @@ import { appWindow } from '@tauri-apps/api/window';
 import sporeIcon from '@icons/32x32.png';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useMiniModeStore } from '../../stores/miniModeStore';
+import { useT, useLangStore } from '../../i18n';
 
 export const TitleBar: React.FC = () => {
+  const t = useT();
+  const { lang, toggleLang } = useLangStore();
   const mouseDownPos = useRef<{ x: number; y: number } | null>(null);
   const isDragging = useRef(false);
   const lastClickTime = useRef(0);
@@ -38,6 +41,12 @@ export const TitleBar: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     toggleTheme();
+  };
+
+  const handleToggleLang = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleLang();
   };
 
   const handleToggleAlwaysOnTop = async (e: React.MouseEvent) => {
@@ -129,7 +138,7 @@ export const TitleBar: React.FC = () => {
               ? 'bg-spore-highlight/30 text-spore-highlight hover:bg-spore-highlight/40'
               : 'hover:bg-spore-accent/50 text-spore-muted'
           }`}
-          title={miniMode ? '退出 Mini 模式' : 'Mini 模式'}
+          title={miniMode ? t('titleBar.exitMiniMode') : t('titleBar.miniMode')}
           aria-pressed={miniMode}
         >
           <svg
@@ -157,7 +166,7 @@ export const TitleBar: React.FC = () => {
               ? 'bg-spore-highlight/30 text-spore-highlight hover:bg-spore-highlight/40'
               : 'hover:bg-spore-accent/50 text-spore-muted'
           } ${miniMode ? 'opacity-40 cursor-not-allowed' : ''}`}
-          title={miniMode ? 'Mini 模式下窗口保持置顶' : alwaysOnTop ? '取消窗口置顶' : '窗口置顶'}
+          title={miniMode ? t('titleBar.alwaysOnTopInMini') : alwaysOnTop ? t('titleBar.unpinWindow') : t('titleBar.pinWindow')}
           aria-pressed={alwaysOnTop}
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -166,9 +175,18 @@ export const TitleBar: React.FC = () => {
         </button>
 
         <button
+          onClick={handleToggleLang}
+          className="min-w-[2.5rem] h-8 px-2 flex items-center justify-center hover:bg-spore-accent/50 transition-colors text-[11px] font-medium text-spore-muted"
+          title={t('titleBar.switchLanguage')}
+          aria-label={t('titleBar.switchLanguage')}
+        >
+          {lang === 'zh' ? '中' : 'EN'}
+        </button>
+
+        <button
           onClick={handleToggleTheme}
           className="w-10 h-8 flex items-center justify-center hover:bg-spore-accent/50 transition-colors"
-          title={theme === 'dark' ? '切换到亮色主题' : '切换到暗色主题'}
+          title={theme === 'dark' ? t('titleBar.switchToLight') : t('titleBar.switchToDark')}
         >
           {theme === 'dark' ? (
             <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">

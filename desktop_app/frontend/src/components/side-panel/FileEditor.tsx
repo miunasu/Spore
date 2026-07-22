@@ -4,8 +4,10 @@
 import React, { useRef, useEffect, useCallback } from 'react';
 import { LineNumberedTextarea } from '../common/LineNumberedTextarea';
 import { useFileStore } from '../../stores/fileStore';
+import { useT } from '../../i18n';
 
 export const FileEditor: React.FC = () => {
+  const t = useT();
   const {
     editingFile,
     editingContent,
@@ -56,7 +58,7 @@ export const FileEditor: React.FC = () => {
           <button
             onClick={closeEditor}
             className="p-1 hover:bg-spore-accent rounded"
-            title="返回"
+            title={t('common.back')}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -77,7 +79,7 @@ export const FileEditor: React.FC = () => {
           }`}
           title="Ctrl+S"
         >
-          保存
+          {t('common.save')}
         </button>
       </div>
 

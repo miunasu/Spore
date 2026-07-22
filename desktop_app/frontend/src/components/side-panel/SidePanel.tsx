@@ -7,6 +7,7 @@ import { FileManager } from './FileManager';
 import { AgentMonitor } from './AgentMonitor';
 import { NoteEditor } from './NoteEditor';
 import { useFileStore } from '../../stores/fileStore';
+import { useT } from '../../i18n';
 import type { TabType, FileItem } from '../../types';
 
 const TABS: { id: TabType; label: string; path?: string; icon: string }[] = [
@@ -47,6 +48,7 @@ const isPathBelongsToTab = (path: string, tabId: TabType): boolean => {
 };
 
 export const SidePanel: React.FC = () => {
+  const t = useT();
   const [activeTab, setActiveTab] = useState<TabType>('note');
   // 每个 tab 的状态缓存
   const [tabStates, setTabStates] = useState<Record<string, TabState>>({});
@@ -210,7 +212,7 @@ export const SidePanel: React.FC = () => {
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={tab.icon} />
             </svg>
-            {tab.label}
+            {t(`sidePanel.tabs.${tab.id}`)}
           </button>
         ))}
       </div>

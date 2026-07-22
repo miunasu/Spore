@@ -235,12 +235,33 @@ def _extract_json(reply: str, array: bool = False) -> Optional[Any]:
     return None
 
 
+def _language_directive(config) -> str:
+    """按系统语言配置生成"输出语言"指令，追加到安全 Agent 的 system prompt 末尾。
+
+    覆盖提示词内可能硬编码的语言要求，只影响面向用户的描述性字段，JSON 字段名不变。
+    """
+    lang = getattr(config, "system_language", "zh")
+    if lang == "en":
+        return (
+            "\n\n# Output language\n"
+            "All user-facing descriptive text (e.g. the values of `intent`, "
+            "`malicious_reason`, `summary`, `impact`, `manual_steps`) MUST be written "
+            "in English. Keep all JSON field names unchanged."
+        )
+    return (
+        "\n\n# 输出语言\n"
+        "所有面向用户的描述性文字（如 `intent`、`malicious_reason`、`summary`、"
+        "`impact`、`manual_steps` 等字段的值）必须使用简体中文。JSON 字段名保持英文不变。"
+    )
+
+
 def _analyze_intent(command: str) -> Optional[Dict[str, Any]]:
     """调用 LLM 分析单条命令的意图 + 恶意研判，返回结构化结果。"""
     config = get_config()
     system_prompt = load_agent_type_prompt("security_intent")
     if not system_prompt:
         return None
+    system_prompt += _language_directive(config)
 
     try:
         request_id = _ipc_manager.send_chat_request(
@@ -282,6 +303,7 @@ def _analyze_intent_batch(commands: List[str]) -> Dict[int, Dict[str, Any]]:
     system_prompt = load_agent_type_prompt("security_intent")
     if not system_prompt:
         return {}
+    system_prompt += _language_directive(config)
 
     numbered = "\n".join(f"{i}. {cmd}" for i, cmd in enumerate(commands, 1))
     try:
@@ -336,6 +358,23 @@ def _analyze_intent_batch(commands: List[str]) -> Dict[int, Dict[str, Any]]:
 
 def _fallback_remediation(command: str, reason: str) -> Dict[str, Any]:
     """LLM 不可用/解析失败时的通用处置建议。"""
+    lang = getattr(get_config(), "system_language", "zh")
+    if lang == "en":
+        return {
+            "summary": "Malicious command detected and the session was interrupted "
+                       "(AI advice generation failed; generic guidance below).",
+            "impact": f"The command executed before analysis completed. Possible impact: "
+                      f"{reason or 'unknown'}",
+            "manual_steps": [
+                "Check Task Manager for unfamiliar processes still running and end them.",
+                "Check scheduled tasks and startup entries for unknown items.",
+                "If the command involved accounts or credentials, change the relevant passwords immediately.",
+                "Open the Backup/Rewind panel, review files changed this session, and restore as needed.",
+                "Review the .spore/security_audit.jsonl audit log for the full sequence.",
+            ],
+            "auto_fix_task": "",
+            "ai_generated": False,
+        }
     return {
         "summary": "检测到恶意命令并已中断会话（AI 建议生成失败，以下为通用处置建议）",
         "impact": f"该命令在研判完成前已执行，可能造成的影响：{reason or '未知'}",
@@ -365,6 +404,7 @@ def security_remediation(command: str, intent: str, malicious_reason: str) -> Di
     system_prompt = load_agent_type_prompt("security_remediation")
     if not system_prompt:
         return _fallback_remediation(command, malicious_reason)
+    system_prompt += _language_directive(config)
 
     user_content = (
         f"已执行的恶意命令:\n```\n{command}\n```\n"
@@ -415,6 +455,36 @@ def build_auto_fix_prompt(
     command: str, intent: str, malicious_reason: str, remediation: Dict[str, Any]
 ) -> str:
     """组装"自动修复"新会话的用户输入：安全 Agent 的完整上下文 + 修复任务。"""
+    if getattr(get_config(), "system_language", "zh") == "en":
+        lines = [
+            "[Automated remediation task for a security incident]",
+            "Spore's security agent detected a malicious command in another session. "
+            "The command had already executed before analysis completed, and that session "
+            "was interrupted. As the remediation agent, investigate the impact and handle it.",
+            "",
+            f"Malicious command (already executed — do NOT run it again during investigation):\n{command}",
+            f"Command intent: {intent}",
+            f"Reason flagged malicious: {malicious_reason}",
+        ]
+        if remediation.get("summary"):
+            lines += ["", f"Incident summary: {remediation['summary']}"]
+        if remediation.get("impact"):
+            lines.append(f"Possible impact: {remediation['impact']}")
+        steps = remediation.get("manual_steps") or []
+        if steps:
+            lines += ["", "Remediation advice from the security agent:"]
+            lines += [f"{i}. {step}" for i, step in enumerate(steps, 1)]
+        if remediation.get("auto_fix_task"):
+            lines += ["", f"Remediation objective: {remediation['auto_fix_task']}"]
+        lines += [
+            "",
+            "Requirements: first investigate the command's actual impact (processes, files, "
+            "scheduled tasks, startup entries, outbound connections, credentials), then perform "
+            "the necessary cleanup and rollback, and finally produce a remediation report. "
+            "Again: never re-run the malicious command above.",
+        ]
+        return "\n".join(lines)
+
     lines = [
         "【安全事件自动修复任务】",
         "Spore 安全 Agent 在另一个会话中检测到一条恶意命令。该命令在研判完成前已被执行，"

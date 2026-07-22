@@ -7,6 +7,7 @@
  */
 import React from 'react';
 import { useChatStore } from '../../stores/chatStore';
+import { useT } from '../../i18n';
 
 const RISK_STYLE: Record<string, string> = {
   low: 'text-emerald-400',
@@ -14,13 +15,14 @@ const RISK_STYLE: Record<string, string> = {
   high: 'text-red-400',
 };
 
-const RISK_LABEL: Record<string, string> = {
-  low: '低风险',
-  medium: '中风险',
-  high: '高风险',
+const RISK_LABEL_KEY: Record<string, string> = {
+  low: 'agentActivityBar.riskLow',
+  medium: 'agentActivityBar.riskMedium',
+  high: 'agentActivityBar.riskHigh',
 };
 
 export const AgentActivityBar: React.FC = () => {
+  const t = useT();
   const activity = useChatStore((state) => state.activeAgentActivity());
 
   if (!activity) {
@@ -38,12 +40,12 @@ export const AgentActivityBar: React.FC = () => {
     textClass = 'text-sky-400';
   } else if (activity.kind === 'security_malicious') {
     icon = '🚨';
-    label = '恶意命令';
+    label = t('agentActivityBar.malicious');
     textClass = 'text-red-400';
   } else if (activity.kind === 'security_alert') {
     icon = activity.riskLevel === 'high' ? '🚨' : '⚡';
     if (activity.riskLevel) {
-      label = RISK_LABEL[activity.riskLevel] || '';
+      label = RISK_LABEL_KEY[activity.riskLevel] ? t(RISK_LABEL_KEY[activity.riskLevel]) : '';
       textClass = RISK_STYLE[activity.riskLevel] || 'text-spore-muted';
     }
   }

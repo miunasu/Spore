@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useT } from '../../i18n';
 
 interface Mode {
   value: string;
@@ -40,6 +41,7 @@ const getModeIcon = (value: string) => {
 };
 
 export const ModeSelector: React.FC<ModeSelectorProps> = ({ value, modes, onChange }) => {
+  const t = useT();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +68,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({ value, modes, onChan
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="p-1.5 rounded hover:bg-spore-accent/30 text-spore-muted hover:text-spore-text transition-colors"
-        title={selectedMode?.label || '上下文处理模式'}
+        title={selectedMode?.label || t('modeSelector.contextMode')}
       >
         {getModeIcon(value)}
       </button>

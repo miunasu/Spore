@@ -2,6 +2,7 @@
  * 单个日志区域组件 - 支持 JSON 格式化显示
  */
 import React, { useRef, useEffect, useMemo, memo } from 'react';
+import { useT } from '../../i18n';
 import type { LogType, LogEntry } from '../../types';
 
 interface LogAreaProps {
@@ -155,6 +156,7 @@ JsonHighlight.displayName = 'JsonHighlight';
 
 // 单条日志项组件
 const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log, logType }) => {
+  const t = useT();
   const { isJson, formatted, hasEmbeddedJson, prefix, jsonPart } = useMemo(
     () => formatContent(log.content),
     [log.content]
@@ -186,7 +188,7 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log, logT
             onClick={() => setCollapsed(!collapsed)}
             className="text-[10px] text-spore-info hover:text-spore-highlight transition-colors"
           >
-            {collapsed ? '展开' : '折叠'}
+            {collapsed ? t('logArea.expand') : t('logArea.collapse')}
           </button>
         )}
       </div>
@@ -245,6 +247,7 @@ export const LogArea: React.FC<LogAreaProps> = memo(({
   logs,
   onDoubleClick,
 }) => {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
 
@@ -298,7 +301,7 @@ export const LogArea: React.FC<LogAreaProps> = memo(({
       >
         {logs.length === 0 ? (
           <div className="flex items-center justify-center h-full text-spore-muted">
-            <span>暂无日志</span>
+            <span>{t('logArea.empty')}</span>
           </div>
         ) : (
           <div className="space-y-1">

@@ -13,6 +13,7 @@ import {
 import { useLogStore } from './logStore';
 import { useTodoStore } from './todoStore';
 import { useSecurityStore } from './securityStore';
+import { t, localeTag } from '../i18n';
 
 // 前端日志辅助函数
 const frontendLog = (message: string) => {
@@ -314,7 +315,9 @@ const createConversation = (
   id: generateId(),
   name:
     name ||
-    `对话 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
+    t('stores.chat.newConversationName', {
+      time: new Date().toLocaleTimeString(localeTag(), { hour: '2-digit', minute: '2-digit' }),
+    }),
   messages: [],
   createdAt: Date.now(),
   updatedAt: Date.now(),
@@ -403,7 +406,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
   // 确保后端切换到默认 session
   const chatApi = createChatApi(MAIN_PORT);
   chatApi.switchSession('default').catch((e) => {
-    frontendLog(`[错误] 初始化默认会话失败: ${e}`);
+    frontendLog(t('stores.chat.initDefaultSessionFailed', { error: String(e) }));
   });
 
   return {
@@ -484,9 +487,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       try {
         const chatApi = createChatApi(MAIN_PORT);
         await chatApi.createSession(newConv.id);
-        frontendLog(`[新建] ${newConv.name} (${newConv.id.slice(0, 16)}...)`);
+        frontendLog(t('stores.chat.created', { name: newConv.name, id: newConv.id.slice(0, 16) }));
       } catch (e) {
-        frontendLog(`[错误] 创建对话失败: ${e}`);
+        frontendLog(t('stores.chat.createConversationFailed', { error: String(e) }));
       }
     },
 
@@ -513,7 +516,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           void get().syncGeneratingState(id);
         } catch (e) {
           const errorMsg = e instanceof Error ? e.message : String(e);
-          frontendLog(`[错误] 切换会话失败: ${errorMsg}`);
+          frontendLog(t('stores.chat.switchSessionFailed', { error: errorMsg }));
         }
       }
     },
@@ -531,7 +534,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           const chatApi = createChatApi(conv.backendPort);
           await chatApi.interrupt(id);
         } catch (e) {
-          frontendLog(`[错误] 关闭对话时中断失败: ${e}`);
+          frontendLog(t('stores.chat.interruptOnCloseFailed', { error: String(e) }));
         }
       }
 
@@ -540,7 +543,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const chatApi = createChatApi(MAIN_PORT);
         await chatApi.deleteSession(id);
       } catch (e) {
-        frontendLog(`[错误] 删除后端会话失败: ${e}`);
+        frontendLog(t('stores.chat.deleteBackendSessionFailed', { error: String(e) }));
       }
 
       // 清除该会话的todos
@@ -573,7 +576,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       if (id === activeConversationId && newActiveId) {
         const chatApi = createChatApi(MAIN_PORT);
         chatApi.switchSession(newActiveId).catch((e) => {
-          frontendLog(`[错误] 关闭对话后切换会话失败: ${e}`);
+          frontendLog(t('stores.chat.switchAfterCloseFailed', { error: String(e) }));
         });
       }
     },
@@ -652,13 +655,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       const conversationId = activeConversationId;
       if (get().generatingConversations.has(conversationId)) {
-        frontendLog(`[提示] 当前会话已有运行中的任务，请先中断`);
+        frontendLog(t('stores.chat.taskAlreadyRunning'));
         return;
       }
 
       const port = await ensureBackend(conversationId);
       if (!port) {
-        frontendLog(`[错误] 后端未就绪`);
+        frontendLog(t('stores.chat.backendNotReady'));
         return;
       }
 
@@ -684,7 +687,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return {
               submitted: false,
               success: false,
-              error: '上一请求中断失败，请重试',
+              error: t('stores.chat.prevRequestInterruptFailed'),
             };
           }
         }
@@ -701,7 +704,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return {
               submitted: true,
               success: false,
-              error: response.error || '未知错误',
+              error: response.error || t('stores.chat.unknownError'),
             };
           }
           return {
@@ -747,16 +750,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 : conversation
             ),
           }));
-          frontendLog(`[错误] ${outcome.error}`);
+          frontendLog(t('stores.chat.error', { error: outcome.error }));
         } else if (outcome.submitted) {
-          frontendLog(`[错误] 任务提交失败: ${outcome.error || '未知错误'}`);
+          frontendLog(t('stores.chat.taskSubmitFailed', { error: outcome.error || t('stores.chat.unknownError') }));
           void get().syncGeneratingState(conversationId);
         }
         return;
       }
 
       identity.taskId = outcome.taskId;
-      frontendLog(`[任务] 已提交: ${outcome.taskId}`);
+      frontendLog(t('stores.chat.taskSubmitted', { taskId: outcome.taskId ?? '' }));
     },
 
     interrupt: async () => {
@@ -775,7 +778,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       delete activeTasksByConversation[conversationId];
       bumpTaskStateVersion(conversationId);
       setGenerating(conversationId, false);
-      frontendLog(`[中断] 已停止等待，旧请求回复将被丢弃`);
+      frontendLog(t('stores.chat.interruptStopped'));
 
       const previousBarrier = interruptBarriers[conversationId];
       const barrier = (async (): Promise<boolean> => {
@@ -800,7 +803,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           await chatApi.interrupt(conversationId);
           return true;
         } catch (error) {
-          frontendLog(`[错误] 中断请求失败: ${error}`);
+          frontendLog(t('stores.chat.interruptRequestFailed', { error: String(error) }));
           void get().syncGeneratingState(conversationId);
           return false;
         }
@@ -820,11 +823,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
     startSecurityAutoFix: async (autoFixPrompt) => {
       if (!autoFixPrompt || !autoFixPrompt.trim()) return;
 
-      const time = new Date().toLocaleTimeString('zh-CN', {
+      const time = new Date().toLocaleTimeString(localeTag(), {
         hour: '2-digit',
         minute: '2-digit',
       });
-      const newConv = createConversation(`安全修复 ${time}`);
+      const newConv = createConversation(t('stores.chat.securityFixConversationName', { time }));
       newConv.backendPort = MAIN_PORT;
       newConv.backendStatus = 'running';
       const conversationId = newConv.id;
@@ -841,7 +844,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         await chatApi.createSession(conversationId);
       } catch (e) {
         // /api/task/submit 对不存在的会话会自动创建，创建失败不阻断修复流程
-        frontendLog(`[错误] 创建修复会话失败（提交任务时将自动创建）: ${e}`);
+        frontendLog(t('stores.chat.createFixSessionFailed', { error: String(e) }));
       }
 
       // 新会话无并发任务/中断屏障，直接走任务提交
@@ -865,13 +868,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
           autoFixPrompt
         );
         if (!response.success) {
-          throw new Error(response.error || '未知错误');
+          throw new Error(response.error || t('stores.chat.unknownError'));
         }
         const identity = activeTasksByConversation[conversationId];
         if (identity?.submissionId === submissionId) {
           identity.taskId = response.task_id;
         }
-        frontendLog(`[安全] 已创建自动修复会话并提交处置任务`);
+        frontendLog(t('stores.chat.autoFixSubmitted'));
       } catch (e) {
         if (
           activeTasksByConversation[conversationId]?.submissionId === submissionId
@@ -880,7 +883,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           bumpTaskStateVersion(conversationId);
           get().setGenerating(conversationId, false);
         }
-        frontendLog(`[错误] 自动修复任务提交失败: ${e}`);
+        frontendLog(t('stores.chat.autoFixSubmitFailed', { error: String(e) }));
       }
     },
 
@@ -971,11 +974,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const intent = event.data.intent || command;
         setActivity({
           kind: 'security_malicious',
-          text: `检测到恶意命令：${intent}${reason ? `（${reason}）` : ''}`,
+          text:
+            t('stores.chat.maliciousActivity', { intent }) +
+            (reason ? t('stores.chat.reasonParen', { reason }) : ''),
           riskLevel: 'high',
           command,
         });
-        frontendLog(`[安全] 检测到恶意命令，已中断本轮会话: ${command}`);
+        frontendLog(t('stores.chat.maliciousLogged', { command }));
         // 登记安全事件 → 弹出熔断弹窗（处置建议由 security_remediation 事件补充）
         useSecurityStore.getState().addIncident({
           sessionId,
@@ -989,11 +994,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
         get().addMessage(sessionId, {
           id: `malicious_${event.task_id}_${Date.now()}`,
           role: 'assistant',
-          content:
-            `🚨 安全 Agent 检测到恶意命令，已中断本轮会话。\n` +
-            `命令：${command}\n` +
-            `原因：${reason || '未提供'}\n` +
-            `注意：该命令在研判完成前已执行，无法自动撤销。安全 Agent 正在生成处置建议…`,
+          content: t('stores.chat.maliciousMessage', {
+            command,
+            reason: reason || t('stores.chat.notProvided'),
+          }),
           timestamp: Date.now(),
         });
         return;
@@ -1010,7 +1014,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           autoFixPrompt: event.data.auto_fix_prompt || '',
           aiGenerated: event.data.ai_generated === true,
         });
-        frontendLog(`[安全] 恶意命令处置建议已生成`);
+        frontendLog(t('stores.chat.remediationGenerated'));
         return;
       }
 
@@ -1044,7 +1048,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           get().addMessage(sessionId, {
             id: `subagent_notice_${event.task_id}`,
             role: 'system',
-            content: `子Agent ${taskNames} 已完成 (${notice.done}/${notice.total})`,
+            content: t('stores.chat.subagentCompleted', {
+              names: taskNames,
+              done: notice.done,
+              total: notice.total,
+            }),
             timestamp: Date.now(),
           });
         }
@@ -1074,7 +1082,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
         case 'security_checking':
           setActivity({
             kind: 'security_checking',
-            text: `正在评估${event.data.description || '高危操作'}的风险…`,
+            text: t('stores.chat.evaluatingRisk', {
+              target: event.data.description || t('stores.chat.riskyOperation'),
+            }),
             command: event.data.command,
           });
           break;
@@ -1085,7 +1095,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // 自动放行：一行信息提示
             setActivity({
               kind: 'security_alert',
-              text: event.data.action || '已放行系统操作',
+              text: event.data.action || t('stores.chat.systemOperationAllowed'),
               riskLevel: event.data.risk_level,
               command: event.data.command,
             });
@@ -1141,15 +1151,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
           bumpTaskStateVersion(sessionId);
           get().setGenerating(sessionId, false);
           const { status, rounds, error } = event.data;
-          const roundText = `共${rounds ?? event.round}轮`;
+          const roundText = t('stores.chat.roundsCount', { rounds: rounds ?? event.round });
           if (status === 'interrupted') {
-            frontendLog(`[中断] 任务已中断（${roundText}）`);
+            frontendLog(t('stores.chat.taskInterrupted', { rounds: roundText }));
           } else if (status === 'timeout') {
-            frontendLog(`[错误] 任务超时: ${error || '未知错误'}（${roundText}）`);
+            frontendLog(t('stores.chat.taskTimeout', { error: error || t('stores.chat.unknownError'), rounds: roundText }));
           } else if (status === 'failed') {
-            frontendLog(`[错误] 任务失败: ${error || '未知错误'}（${roundText}）`);
+            frontendLog(t('stores.chat.taskFailed', { error: error || t('stores.chat.unknownError'), rounds: roundText }));
           } else {
-            frontendLog(`[完成] ${roundText}`);
+            frontendLog(t('stores.chat.taskDone', { rounds: roundText }));
           }
           break;
         }
@@ -1200,7 +1210,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         get().setGenerating(conversationId, false);
         return false;
       } catch (error) {
-        frontendLog(`[错误] 恢复任务状态失败: ${error}`);
+        frontendLog(t('stores.chat.resumeTaskStateFailed', { error: String(error) }));
         return false;
       }
     },
@@ -1230,9 +1240,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return;
           }
           get().setMessages(messages, conversationId);
-          frontendLog(`[恢复] 会话 ${conversationId.slice(0, 16)} 快照: ${messages.length}条消息`);
+          frontendLog(t('stores.chat.snapshotRestored', { id: conversationId.slice(0, 16), count: messages.length }));
         } catch (error) {
-          frontendLog(`[错误] 恢复会话快照失败: ${error}`);
+          frontendLog(t('stores.chat.restoreSnapshotFailed', { error: String(error) }));
         }
       }
     },
@@ -1246,30 +1256,33 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     loadHistory: async () => {
       const conv = get().activeConversation();
-      if (!conv?.backendPort){ 
-        frontendLog(`[错误] loadHistory: 没有活动对话或后端端口`);
+      if (!conv?.backendPort){
+        frontendLog(t('stores.chat.loadHistoryNoConv'));
         return;
       }
       try {
         const messages = await fetchSessionMessages(conv.backendPort, conv.id);
         get().setMessages(messages);
       } catch (error) {
-        frontendLog(`[错误] 加载历史失败: ${error}`);
+        frontendLog(t('stores.chat.loadHistoryFailed', { error: String(error) }));
       }
     },
 
     loadHistoryFile: async (filename) => {
       // 创建新对话并加载历史文件
       try {
-        frontendLog(`[加载] 历史文件: ${filename}`);
+        frontendLog(t('stores.chat.loadingHistoryFile', { filename }));
         const base = (filename.split('/').pop() ?? filename).replace('.mem', '');
         // 短记忆标签名：优先会话 ID，兼容旧时间戳快照
         const sessionMatch = base.match(/^session_(.+)$/);
         const autoMatch = base.match(/^auto_\d{4}-(\d{2})-(\d{2})_(\d{2})(\d{2})\d{2}_/);
         const name = sessionMatch
-          ? `短记忆 ${sessionMatch[1].slice(0, 24)}`
+          ? t('stores.chat.memoryNameSession', { id: sessionMatch[1].slice(0, 24) })
           : autoMatch
-            ? `短记忆 ${autoMatch[1]}-${autoMatch[2]} ${autoMatch[3]}:${autoMatch[4]}`
+            ? t('stores.chat.memoryNameAuto', {
+                date: `${autoMatch[1]}-${autoMatch[2]}`,
+                clock: `${autoMatch[3]}:${autoMatch[4]}`,
+              })
             : base.slice(0, 20);
         const newConv = createConversation(name, filename);
         // 会话短记忆（session_*.mem）恢复时沿用原会话 ID：
@@ -1350,7 +1363,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             .filter((msg): msg is Message => msg !== null && msg.content.trim() !== ''); // 过滤掉 null 和空内容
 
           newConv.messages = messages;
-          frontendLog(`[加载] 完成: ${messages.length}条消息`);
+          frontendLog(t('stores.chat.loadDone', { count: messages.length }));
 
           set((state) => ({
             conversations: [...state.conversations, newConv],
@@ -1359,10 +1372,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // 加载会刷新该会话短记忆，同步更新列表
           void get().fetchHistoryFiles();
         } else {
-          frontendLog(`[错误] 加载失败: ${loadResponse.message_count}`);
+          frontendLog(t('stores.chat.loadFailed', { count: loadResponse.message_count }));
         }
       } catch (error) {
-        frontendLog(`[错误] 加载历史文件失败: ${error}`);
+        frontendLog(t('stores.chat.loadHistoryFileFailed', { error: String(error) }));
       }
     },
 
@@ -1371,7 +1384,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const response = await commandsApi.listHistory();
         set({ historyFiles: response.files });
       } catch (error) {
-        frontendLog(`[错误] 获取历史文件列表失败: ${error}`);
+        frontendLog(t('stores.chat.fetchHistoryFilesFailed', { error: String(error) }));
       }
     },
 
@@ -1379,9 +1392,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       try {
         await commandsApi.renameHistory(oldName, newName);
         await get().fetchHistoryFiles();
-        frontendLog(`[历史] 已重命名: ${oldName} -> ${newName}`);
+        frontendLog(t('stores.chat.historyRenamed', { oldName, newName }));
       } catch (error) {
-        frontendLog(`[错误] 重命名历史文件失败: ${error}`);
+        frontendLog(t('stores.chat.renameHistoryFailed', { error: String(error) }));
       }
     },
 
@@ -1389,9 +1402,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       try {
         await commandsApi.deleteHistory(filename);
         await get().fetchHistoryFiles();
-        frontendLog(`[历史] 已删除: ${filename}`);
+        frontendLog(t('stores.chat.historyDeleted', { filename }));
       } catch (error) {
-        frontendLog(`[错误] 删除历史文件失败: ${error}`);
+        frontendLog(t('stores.chat.deleteHistoryFailed', { error: String(error) }));
       }
     },
 
@@ -1403,7 +1416,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const cmdApi = createCommandsApi(conv.backendPort);
         await cmdApi.save(conv.id);
       } catch (error) {
-        frontendLog(`[错误] 保存对话失败: ${error}`);
+        frontendLog(t('stores.chat.saveConversationFailed', { error: String(error) }));
       }
     },
   };

@@ -9,11 +9,13 @@ import { useAgentStore } from '../../stores/agentStore';
 import { useConfirmStore } from '../../stores/confirmStore';
 import { InputArea } from '../chat-panel/InputArea';
 import { AgentActivityBar } from '../chat-panel/AgentActivityBar';
+import { useT } from '../../i18n';
 
 // 最多保留的 LLM 回复条数
 const MAX_ASSISTANT_MESSAGES = 2;
 
 export const MiniModeView: React.FC = () => {
+  const t = useT();
   const conversations = useChatStore((state) => state.conversations);
   const activeConversationId = useChatStore((state) => state.activeConversationId);
   const isGenerating = useChatStore((state) => state.isGenerating());
@@ -81,7 +83,7 @@ export const MiniModeView: React.FC = () => {
         {messages.length === 0 && agents.length === 0 && !isGenerating ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <p className="text-xs text-spore-muted">
-              暂无回复 · 鼠标移到底部输入消息
+              {t('miniModeView.emptyHint')}
             </p>
           </div>
         ) : (
@@ -111,7 +113,7 @@ export const MiniModeView: React.FC = () => {
                             </div>
                             {ci.is_malicious && ci.malicious_reason && (
                               <div className="text-[11px] text-red-400/80 leading-4">
-                                恶意原因：{ci.malicious_reason}
+                                {t('miniModeView.maliciousReasonLabel')}{ci.malicious_reason}
                               </div>
                             )}
                             <div

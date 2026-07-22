@@ -5,8 +5,10 @@
 import React from 'react';
 import { useConfirmStore } from '../../stores/confirmStore';
 import { wsService } from '../../services/websocket';
+import { useT } from '../../i18n';
 
 export const ConfirmBar: React.FC = () => {
+  const t = useT();
   const { pendingRequests, removeRequest } = useConfirmStore();
 
   // 队列化：始终显示最早到达的请求，其余排队等待
@@ -61,7 +63,7 @@ export const ConfirmBar: React.FC = () => {
 
   // 确认按钮：高危操作用更醒目的措辞
   const isHighRisk = pendingRequest.action_type === 'security_high';
-  const confirmLabel = isHighRisk ? '我已了解风险，继续' : '确认';
+  const confirmLabel = isHighRisk ? t('confirmBar.highRiskConfirm') : t('common.confirm');
 
   return (
     <div className={`mb-3 rounded-xl border ${getActionColor(pendingRequest.action_type)} overflow-hidden`}>
@@ -80,7 +82,7 @@ export const ConfirmBar: React.FC = () => {
             </div>
             {queuedCount > 0 && (
               <span className="text-[11px] px-1.5 py-0.5 rounded bg-spore-accent/40 text-spore-muted flex-shrink-0">
-                还有 {queuedCount} 个待确认
+                {t('confirmBar.queued', { n: queuedCount })}
               </span>
             )}
           </div>
@@ -95,7 +97,7 @@ export const ConfirmBar: React.FC = () => {
             onClick={() => handleRespond(false)}
             className="px-3 py-1.5 text-sm rounded-lg bg-spore-accent hover:bg-spore-border text-spore-text transition-colors"
           >
-            取消
+            {t('common.cancel')}
           </button>
           <button
             onClick={() => handleRespond(true)}

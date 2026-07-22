@@ -4,8 +4,10 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { MessageDetailButton, MessageDetailContent } from './MessageDetail';
+import { useT } from '../../i18n';
 
 export const MessageList: React.FC = () => {
+  const t = useT();
   // 直接订阅 conversations 和 activeConversationId，确保状态变化时重新渲染
   const conversations = useChatStore((state) => state.conversations);
   const activeConversationId = useChatStore((state) => state.activeConversationId);
@@ -57,9 +59,9 @@ export const MessageList: React.FC = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-spore-text mb-2">开始对话</h3>
+          <h3 className="text-lg font-medium text-spore-text mb-2">{t('messageList.startConversation')}</h3>
           <p className="text-sm text-spore-muted max-w-sm">
-            输入消息与 Spore AI 交流，或使用右上角菜单执行命令
+            {t('messageList.emptyHint')}
           </p>
         </div>
       ) : (
@@ -127,7 +129,7 @@ export const MessageList: React.FC = () => {
                               </div>
                               {ci.is_malicious && ci.malicious_reason && (
                                 <div className="text-[11px] text-red-400/80 leading-4">
-                                  恶意原因：{ci.malicious_reason}
+                                  {t('messageList.maliciousReason', { reason: ci.malicious_reason })}
                                 </div>
                               )}
                               <div

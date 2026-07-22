@@ -1,6 +1,8 @@
-# CLI 模式使用指南（v3.0）
+# CLI 模式使用指南（v4.0）
 
-> 注意：当前产品重心在桌面 GUI。CLI 仍可运行，但部分交互体验（确认 UI、多会话等）弱于桌面模式。推荐：`LAUNCH_MODE=desktop`。
+> [English](en/CLI.md)
+
+> 注意：当前产品重心在桌面 GUI。CLI 仍可运行，但部分交互体验（确认 UI、多会话、异步子 Agent 通知等）弱于桌面模式。推荐：`LAUNCH_MODE=desktop`。
 
 ## 启动
 
@@ -19,6 +21,10 @@ uv run python main.py
 ```bash
 uv sync
 ```
+
+日志监控终端默认自动打开；也可手动运行 `start_log_monitor.bat` 或 `uv run python base/log_monitor.py`。
+
+CLI 没有命令行参数，全部行为由 `.env` 决定；运行时命令在 `User>` 提示符输入。
 
 ---
 
@@ -48,6 +54,29 @@ continue               - 加载最近一份历史并继续
 - 路径：`history/autosave/session_<会话ID>.mem`
 - 按会话覆盖更新，默认最多保留约 10 个会话
 - 可用 `load autosave/session_xxx.mem` 恢复
+
+### 备份与回滚（v4.0）
+
+```
+rollback <文件路径> [--to <版本号>|--steps <N>]  - 文件级回滚到指定版本 / 后退 N 个版本
+filehistory [<文件路径>]                        - 查看文件版本历史
+checkpoints                                     - 列出当前会话的对话点检查点
+rewind [<checkpoint_id>|--turns <N>]            - 回滚到对话点（文件+对话历史+TODO 一起恢复）
+```
+
+- Agent 每次写/删文件前自动留底（`.spore/`，bsdiff4 增量存储）
+- `rewind` 是「时间机器」：把工作区文件和对话上下文一起退回到某轮任务开始前
+- 总开关与限额见 [CONFIGURATION.md](CONFIGURATION.md)「备份与回滚」
+
+### 安全白名单（v4.0）
+
+```
+whitelist            - 用法帮助
+whitelist list       - 查看信任命令列表
+whitelist add <命令> - 将命令加入白名单（basic 模式下跳过安全守卫确认）
+```
+
+白名单存于 `security_whitelist.json`，在 `basic` 安全模式下生效（默认 `full` 模式不做事前确认，无需白名单）；安全审计日志见 `.spore/security_audit.jsonl`。安全 Agent 档位（`off`/`basic`/`full`）见 [CONFIGURATION.md](CONFIGURATION.md)「安全」。
 
 ### 工具与技能
 
@@ -94,6 +123,24 @@ User> continue
 [对话已加载] 继续最近的对话: ...
 ```
 
+### 文件回滚
+
+```text
+User> filehistory output/report.md
+[版本历史] output/report.md
+  v3  2026-07-20 14:22:01  (当前)
+  v2  2026-07-20 14:05:47
+  v1  2026-07-20 13:58:12
+
+User> rollback output/report.md --to 2
+[已回滚] output/report.md → v2
+
+User> checkpoints
+[检查点] 1. cp_xxxx 2026-07-20 14:20 "整理报告结构"
+User> rewind --turns 1
+[已回滚] 文件与对话历史已恢复到上一轮任务开始前
+```
+
 ### 切换模式
 
 ```text
@@ -109,7 +156,7 @@ User> mode long_context
 
 - `strong_context`：单 Agent 完整文件/命令/网络工具，**无**多 Agent 派发
 - `long_context`：额外开放 `multi_agent_dispatch`
-- `auto`：由 ModeSelector 判定
+- `auto`：由 ModeSelector 每轮判定
 
 ### 粘贴多行
 
@@ -135,8 +182,8 @@ CLI 与桌面共用同一套 IPC 架构：
 
 | 进程 | 职责 |
 |------|------|
-| 主进程 | 用户输入、协议解析、工具执行、子 Agent 协调 |
-| Chat 进程 | OpenAI / Anthropic API 调用、流式输出 |
+| 主进程 | 用户输入、协议解析、工具执行、安全守卫、子 Agent 协调 |
+| Chat 进程 | OpenAI / Anthropic API 调用、流式输出（主/子/辅助 Agent 共用） |
 
 初始化由 `base.ipc_manager.initialize_ipc_system()` 完成。
 
@@ -149,9 +196,12 @@ CLI 与桌面共用同一套 IPC 架构：
 | 能力 | CLI | Desktop |
 |------|-----|---------|
 | 多会话标签 | 弱 / 单会话为主 | 多会话 + 每会话独立 ConversationLoop |
-| 危险操作确认 | 有限（命令拦截） | WebSocket 确认栏 |
-| 实时面板 | 日志终端 | 日志 / TODO / Agent 监控 / 文件树 |
+| 任务执行 | 前台同步循环 | 后端自驱任务循环，关窗口不中断 |
+| 子 Agent 派发 | 同步阻塞等待 | 异步派发 + `[系统通知]` 回注 |
+| 危险操作确认 | 终端确认 + 命令拦截 | WebSocket 确认栏 + 安全弹窗 |
+| 实时面板 | 日志终端 | 日志 / TODO / Agent 监控 / 文件树 / Mini 模式 |
 | 配置档案 | 手改 `.env` | GUI + profiles |
+| 备份回滚 | `rollback` / `rewind` 命令 | 设置菜单「备份/回滚」可视化操作 |
 
 更多：
 

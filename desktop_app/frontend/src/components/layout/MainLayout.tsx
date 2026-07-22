@@ -6,6 +6,7 @@
  */
 import React, { useState, useCallback, useEffect } from 'react';
 import { Resizer } from './Resizer';
+import { useT } from '../../i18n';
 
 interface MainLayoutProps {
   leftPanel: React.ReactNode;
@@ -57,6 +58,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
   centerPanel,
   rightPanel,
 }) => {
+  const t = useT();
   const [leftWidth, setLeftWidth] = useState(() => loadConfig().leftWidth);
   const [rightWidth, setRightWidth] = useState(() => loadConfig().rightWidth);
   const [leftVisible, setLeftVisible] = useState(() => loadConfig().leftVisible);
@@ -95,7 +97,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         <button
           onClick={() => setLeftVisible((v) => !v)}
           className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 hover:bg-spore-accent/50 rounded-lg transition-all z-10 opacity-0 hover:opacity-100"
-          title={leftVisible ? '隐藏左栏' : '显示左栏'}
+          title={leftVisible ? t('mainLayout.hideLeftPanel') : t('mainLayout.showLeftPanel')}
         >
           <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -111,7 +113,7 @@ export const MainLayout: React.FC<MainLayoutProps> = ({
         <button
           onClick={() => setRightVisible((v) => !v)}
           className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 hover:bg-spore-accent/50 rounded-lg transition-all z-10 opacity-0 hover:opacity-100"
-          title={rightVisible ? '隐藏右栏' : '显示右栏'}
+          title={rightVisible ? t('mainLayout.hideRightPanel') : t('mainLayout.showRightPanel')}
         >
           <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path

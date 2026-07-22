@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { t, localeTag } from '../../i18n';
 
 type TokenKind =
   | 'keyword'
@@ -432,35 +433,35 @@ export function buildHighlightModel(content: string, language: SyntaxLanguageId)
 
   const notices: string[] = [];
   if (content.length > MAX_RENDER_CHARS) {
-    notices.push(`文件内容较大，仅显示前 ${formatCount(MAX_RENDER_CHARS)} 个字符`);
+    notices.push(t('sidePanel.syntax.largeContent', { count: formatCount(MAX_RENDER_CHARS) }));
   }
   if (rawLines.length > MAX_RENDER_LINES) {
-    notices.push(`仅显示前 ${formatCount(MAX_RENDER_LINES)} 行`);
+    notices.push(t('sidePanel.syntax.tooManyLines', { count: formatCount(MAX_RENDER_LINES) }));
   }
   if (previewContent !== limitedContent) {
-    notices.push('已替换不可见控制字符');
+    notices.push(t('sidePanel.syntax.controlCharsReplaced'));
   }
 
   if (previewContent.length > MAX_HIGHLIGHT_CHARS || language === 'plain') {
     if (previewContent.length > MAX_HIGHLIGHT_CHARS) {
-      notices.push('已关闭语法高亮以避免界面卡死');
+      notices.push(t('sidePanel.syntax.highlightDisabled'));
     }
     return {
       lines: toPlainLines(previewContent),
-      notice: notices.join('；'),
+      notice: notices.join(t('sidePanel.syntax.separator')),
     };
   }
 
   try {
     return {
       lines: highlightContent(previewContent, language),
-      notice: notices.join('；'),
+      notice: notices.join(t('sidePanel.syntax.separator')),
     };
   } catch (error) {
     console.error('Syntax highlight failed:', error);
     return {
       lines: toPlainLines(previewContent),
-      notice: '语法高亮失败，已切换为纯文本预览',
+      notice: t('sidePanel.syntax.highlightFailed'),
     };
   }
 }
@@ -470,7 +471,7 @@ function toPlainLines(content: string): HighlightedLine[] {
 }
 
 function formatCount(value: number) {
-  return value.toLocaleString('zh-CN');
+  return value.toLocaleString(localeTag());
 }
 
 function sanitizePreviewText(content: string) {

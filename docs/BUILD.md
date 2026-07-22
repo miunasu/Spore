@@ -1,35 +1,40 @@
-# 构建指南（v3.0）
+# 构建指南（v4.0）
 
-本文说明如何从源码构建 **Spore 3.0** Windows 桌面安装包（Tauri + PyInstaller 后端 sidecar）。
+> [English](en/BUILD.md)
+
+本文说明如何从源码构建 **Spore 4.0** Windows 桌面安装包（Tauri + PyInstaller 后端 sidecar）。
 
 ---
 
 ## 产物与版本
 
-| 组件 | 版本字段位置 | 当前 |
-|------|--------------|------|
-| Python 工程 | `pyproject.toml` → `version` | `3.0.0` |
-| 前端 npm | `desktop_app/frontend/package.json` | `3.0.0` |
-| Tauri 应用 | `desktop_app/frontend/src-tauri/tauri.conf.json` → `package.version` | `3.0.0` |
-| Rust crate | `desktop_app/frontend/src-tauri/Cargo.toml` | `3.0.0` |
-| FastAPI | `desktop_app/backend/server.py` / `standalone.py` | `3.0.0` |
+| 组件 | 版本字段位置 |
+|------|--------------|
+| Python 工程 | `pyproject.toml` → `version` |
+| 前端 npm | `desktop_app/frontend/package.json` |
+| Tauri 应用 | `desktop_app/frontend/src-tauri/tauri.conf.json` → `package.version` |
+| Rust crate | `desktop_app/frontend/src-tauri/Cargo.toml` |
+| FastAPI | `desktop_app/backend/server.py` / `standalone.py` |
 
-安装包输出通常位于：
+> 上述字段当前均为 `4.0.0`；升版本时请保持全部字段一致后再构建。
+
+安装包输出：
 
 - `desktop_app/frontend/src-tauri/target/release/bundle/nsis/`
-- 或脚本汇总目录 `release/`
+- 脚本会汇总到根目录 `release/`（`Spore.exe` + `Spore_<版本>_x64-setup.exe`）
 
 ---
 
 ## 环境要求
 
 - Windows 10/11 x64
-- Python ≥ 3.10（推荐与 `.venv` 一致）
+- Python ≥ 3.10（构建环境实际使用 3.13）
 - [uv](https://github.com/astral-sh/uv)
 - Node.js 18+ 或 20 LTS
 - Rust（`rustup`，MSVC toolchain）
 - Visual Studio Build Tools（C++ 桌面开发）
-- 项目根存在可用的 `.env`（打包会拷贝为资源）
+- PowerShell（脚本用其下载/校验 ripgrep）
+- 项目根存在可用的 `.env`（打包会拷贝为资源，**缺失会导致构建失败**）
 
 ---
 
@@ -39,15 +44,16 @@
 build_installer.bat
 ```
 
-脚本主要步骤（摘要）：
+脚本分 6 个阶段：
 
-1. 同步 Python 依赖（`uv sync`）
-2. 使用 PyInstaller + `spore_backend.spec` 打包 `spore_backend` 后端
-3. 准备 Tauri sidecar：`desktop_app/frontend/src-tauri/binaries/spore_backend-*.exe`
-4. 同步资源：`prompt/`、`skills/`、`characters/`、`.env`、`rg.exe`（ripgrep 可自动下载校验）
-5. 构建前端与 Tauri NSIS 安装包
+1. **PyInstaller 后端（onefile）**：清理旧产物；`.venv` 缺 pyinstaller 时自动 `uv sync`（或设 `FORCE_UV_SYNC=1` 强制）；执行 `uv run pyinstaller spore_backend.spec --noconfirm`，产出 `dist/spore_backend.exe`
+2. **Tauri sidecar**：复制为 `desktop_app/frontend/src-tauri/binaries/spore_backend-x86_64-pc-windows-msvc.exe`（Tauri `externalBin` 要求平台三元组后缀）
+3. **资源同步**：`prompt/`、`skills/`、`characters/`、`.env` 复制进 `src-tauri/`；下载并 SHA256 校验 **ripgrep 14.1.1**（缓存于 `.tool-cache/ripgrep/`），复制 `rg.exe`
+4. **前端 + Tauri 构建**：清理 Vite 缓存；`node_modules` 缺失时 `npm install`（或 `FORCE_NPM_INSTALL=1`）；`npm run tauri build` 产出 NSIS 安装包
+5. **汇总产物**：`Spore.exe` 与 NSIS 安装包复制到根目录 `release/`
+6. **报告**：打印产物清单与安装目录结构说明
 
-失败时按报错阶段排查；ripgrep 缓存目录：`.tool-cache/ripgrep/`。
+失败时按报错阶段排查；任一阶段失败脚本会停在 `:error` 并提示。
 
 ---
 
@@ -60,7 +66,7 @@ uv sync
 uv run pyinstaller spore_backend.spec --noconfirm
 ```
 
-产物一般在 `dist/spore_backend/` 或 spec 指定路径；复制为 Tauri `externalBin` 所需文件名：
+产物为单文件 `dist/spore_backend.exe`；复制为 Tauri `externalBin` 所需文件名：
 
 ```text
 desktop_app/frontend/src-tauri/binaries/spore_backend-x86_64-pc-windows-msvc.exe
@@ -89,22 +95,34 @@ uv run python main_entry.py   # LAUNCH_MODE=desktop
 
 # 终端 B：前端
 cd desktop_app/frontend
-npm run dev
+npm run dev                   # Vite http://localhost:1420
 
-# 或 Tauri 开发窗
+# 或 Tauri 开发窗（会自动以 uv 拉起后端）
 npm run tauri dev
 ```
 
-默认 API：`http://127.0.0.1:8765`，WebSocket：`8766`（端口 + 1）。
+默认 API：`http://127.0.0.1:8765`，WebSocket：`ws://127.0.0.1:8766`（端口 + 1）。
 
 ---
 
 ## 打包结构要点
 
-- **后端**：PyInstaller onefile/onedir 由 `spore_backend.spec` 决定；入口 `main_entry.py`
-- **资源**：Tauri `resources` 包含 prompt/skills/characters/.env/rg.exe
-- **工作目录**：安装后由 Tauri `main.rs` 与 `resource_manager` 保证 cwd / `SPORE_RESOURCE_DIR` 正确
+- **后端**：PyInstaller **onefile**（`spore_backend.spec`），入口 `main_entry.py`，`console=False`；spec 的 `datas` 为空——资源不打进 exe
+- **资源**：由 Tauri `resources` 携带：`prompt/**`、`skills/**`、`characters/**`、`.env`、`rg.exe`；运行时经 `SPORE_RESOURCE_DIR` 定位
+- **进程托管**：Tauri `main.rs` 以 sidecar 方式拉起后端，注入 `SPORE_DESKTOP_MODE=1` 与 `SPORE_RESOURCE_DIR`，并用 Windows Job Object 保证窗口关闭时整棵子进程树一并退出
+- **工作目录**：安装后由 `main.rs` 与 `resource_manager` 保证 cwd 正确，并创建可写目录（`output/`、`history/`、`logs/`、`note.txt`）
 - **隐藏导入**：若运行缺模块，补 `spore_backend.spec` 的 `hiddenimports`
+
+安装目录布局（脚本第 6 阶段打印的权威结构）：
+
+```text
+Spore.exe              # Tauri 前端
+spore_backend.exe      # Python 后端（onefile，依赖内嵌）
+rg.exe                 # ripgrep 搜索工具
+prompt/  skills/  characters/   # 只读资源
+.env                   # 配置（打包时从项目根复制）
+output/  history/  logs/  note.txt   # 运行时生成
+```
 
 ---
 
@@ -112,7 +130,7 @@ npm run tauri dev
 
 ### PyInstaller 运行报错缺模块
 
-补全 `hiddenimports`：`base` 及其子包、`desktop_app`、`uvicorn`/`fastapi`/`starlette`、`openai`/`anthropic`/`tiktoken` 等。
+补全 `hiddenimports`：`base` 及其子包、`AutoAgent`、`desktop_app`、`uvicorn`/`fastapi`/`starlette`、`openai`/`anthropic`/`tiktoken`、`bsdiff4` 等。
 
 ### Tauri 构建失败
 
@@ -129,7 +147,7 @@ npm run tauri dev
 
 ### 安装包体积
 
-后端 50–80MB 量级常见（含 Python 运行时）。
+后端 onefile 约 25–30MB，NSIS 安装包约 30MB 量级（含 Python 运行时）。
 
 ### 修改图标
 
@@ -137,7 +155,7 @@ npm run tauri dev
 
 ### 修改版本号
 
-同步修改上表所有版本字段为同一主版本（例如 `3.0.0`），再执行完整构建。
+同步修改「产物与版本」表中所有版本字段为同一版本（例如 `4.0.0`），再执行完整构建。
 
 ---
 

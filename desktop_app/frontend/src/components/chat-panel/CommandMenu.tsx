@@ -5,6 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { commandsApi, filesApi, settingsApi, backupApi, ApiError } from '../../services/api';
+import { useT } from '../../i18n';
 
 interface MenuItem {
   id: string;
@@ -131,51 +132,54 @@ const AGENT_BASE_PROFILE_KEYS = (() => {
 // advanced: 其余调优/兼容/资源/路径等，UI 中默认折叠
 type EnvConfigGroup = { title: string; items: EnvConfigItem[] };
 
+// 注：数据中的 label/description/placeholder/option.label 存 i18n key，渲染处用 t() 翻译；
+// title 保持中文（同时用作 React key、语义过滤逻辑的标识符，见 _advGroupsByTitle / startsWith）。
+// 纯技术字面量（如 'OpenAI SDK'、'low'）直接保留，t() 找不到 key 时会原样回退。
 const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
   {
     title: 'LLM SDK 选择',
     items: [
       {
         key: 'LLM_SDK',
-        label: 'SDK 类型',
+        label: 'commandMenu.env.LLM_SDK.label',
         type: 'select',
         options: [
           { value: 'openai', label: 'OpenAI SDK' },
           { value: 'anthropic', label: 'Anthropic SDK' },
         ],
-        description: 'openai 支持 OpenAI/DeepSeek/第三方代理，anthropic 直连 Claude API',
-        placeholder: '默认: openai',
+        description: 'commandMenu.env.LLM_SDK.desc',
+        placeholder: 'commandMenu.env.LLM_SDK.ph',
       },
     ],
   },
   {
     title: 'OpenAI API',
     items: [
-      { key: 'OPENAI_API_KEY', label: 'API Key', type: 'text', placeholder: '默认: 无' },
+      { key: 'OPENAI_API_KEY', label: 'API Key', type: 'text', placeholder: 'commandMenu.env.OPENAI_API_KEY.ph' },
       {
         key: 'OPENAI_API_URL',
         label: 'API URL',
         type: 'text',
-        placeholder: '默认: https://api.openai.com/v1',
+        placeholder: 'commandMenu.env.OPENAI_API_URL.ph',
       },
-      { key: 'OPENAI_MODEL', label: '模型', type: 'text', placeholder: '默认: gpt-4o-mini' },
+      { key: 'OPENAI_MODEL', label: 'commandMenu.env.OPENAI_MODEL.label', type: 'text', placeholder: 'commandMenu.env.OPENAI_MODEL.ph' },
     ],
   },
   {
     title: 'Anthropic API',
     items: [
-      { key: 'ANTHROPIC_API_KEY', label: 'API Key', type: 'text', placeholder: '默认: 无' },
+      { key: 'ANTHROPIC_API_KEY', label: 'API Key', type: 'text', placeholder: 'commandMenu.env.ANTHROPIC_API_KEY.ph' },
       {
         key: 'ANTHROPIC_API_URL',
         label: 'API URL',
         type: 'text',
-        placeholder: '默认: https://api.anthropic.com',
+        placeholder: 'commandMenu.env.ANTHROPIC_API_URL.ph',
       },
       {
         key: 'ANTHROPIC_MODEL',
-        label: '模型',
+        label: 'commandMenu.env.ANTHROPIC_MODEL.label',
         type: 'text',
-        placeholder: '默认: claude-sonnet-4-20250514',
+        placeholder: 'commandMenu.env.ANTHROPIC_MODEL.ph',
       },
     ],
   },
@@ -184,13 +188,13 @@ const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'USE_RESPONSES_API',
-        label: '使用 Responses API',
+        label: 'commandMenu.env.USE_RESPONSES_API.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        placeholder: '默认: false',
+        placeholder: 'commandMenu.env.USE_RESPONSES_API.ph',
       },
       {
         key: 'OPENAI_REASONING_EFFORT',
@@ -202,7 +206,7 @@ const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
           { value: 'high', label: 'high' },
           { value: 'xhigh', label: 'xhigh' },
         ],
-        placeholder: '默认: 不传',
+        placeholder: 'commandMenu.env.OPENAI_REASONING_EFFORT.ph',
       },
     ],
   },
@@ -220,27 +224,27 @@ const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
           { value: 'xhigh', label: 'xhigh' },
           { value: 'max', label: 'max' },
         ],
-        placeholder: '默认: 不传',
-        description: 'Claude output_config.effort；设置后默认启用 adaptive thinking',
+        placeholder: 'commandMenu.env.ANTHROPIC_EFFORT.ph',
+        description: 'commandMenu.env.ANTHROPIC_EFFORT.desc',
       },
       {
         key: 'ANTHROPIC_THINKING_MODE',
         label: 'Thinking Mode',
         type: 'select',
         options: [
-          { value: 'adaptive', label: 'adaptive（推荐）' },
-          { value: 'enabled', label: 'enabled（手动 budget）' },
+          { value: 'adaptive', label: 'commandMenu.opts.adaptiveRecommended' },
+          { value: 'enabled', label: 'commandMenu.opts.enabledManual' },
           { value: 'disabled', label: 'disabled' },
         ],
-        placeholder: '默认: 自动',
-        description: '留空时：有 effort 用 adaptive，有 budget 用 enabled',
+        placeholder: 'commandMenu.env.ANTHROPIC_THINKING_MODE.ph',
+        description: 'commandMenu.env.ANTHROPIC_THINKING_MODE.desc',
       },
       {
         key: 'ANTHROPIC_THINKING_BUDGET_TOKENS',
         label: 'Thinking Budget Tokens',
         type: 'text',
-        placeholder: '默认: 自动（仅 enabled 模式）',
-        description: '手动扩展思考 budget_tokens，需 >=1024 且 < max_tokens',
+        placeholder: 'commandMenu.env.ANTHROPIC_THINKING_BUDGET_TOKENS.ph',
+        description: 'commandMenu.env.ANTHROPIC_THINKING_BUDGET_TOKENS.desc',
       },
     ],
   },
@@ -252,36 +256,36 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'MAX_OUTPUT_TOKENS',
-        label: '最大输出 Token',
+        label: 'commandMenu.env.MAX_OUTPUT_TOKENS.label',
         type: 'text',
-        placeholder: '默认: 15000',
-        description: 'LLM 单次输出的最大 token 数',
+        placeholder: 'commandMenu.env.MAX_OUTPUT_TOKENS.ph',
+        description: 'commandMenu.env.MAX_OUTPUT_TOKENS.desc',
       },
       {
         key: 'CONTEXT_MAX_TOKENS',
-        label: '上下文最大 Token',
+        label: 'commandMenu.env.CONTEXT_MAX_TOKENS.label',
         type: 'text',
-        placeholder: '默认: 128000',
+        placeholder: 'commandMenu.env.CONTEXT_MAX_TOKENS.ph',
       },
       {
         key: 'CONTEXT_WARNING_THRESHOLD',
-        label: '上下文警告阈值',
+        label: 'commandMenu.env.CONTEXT_WARNING_THRESHOLD.label',
         type: 'text',
-        placeholder: '默认: 0.8',
-        description: '0.0-1.0，超过此比例时警告',
+        placeholder: 'commandMenu.env.CONTEXT_WARNING_THRESHOLD.ph',
+        description: 'commandMenu.env.CONTEXT_WARNING_THRESHOLD.desc',
       },
       {
         key: 'MAX_SINGLE_MESSAGE_RATIO',
-        label: '单消息最大比例',
+        label: 'commandMenu.env.MAX_SINGLE_MESSAGE_RATIO.label',
         type: 'text',
-        placeholder: '默认: 0.3',
-        description: '相对于上下文最大Token',
+        placeholder: 'commandMenu.env.MAX_SINGLE_MESSAGE_RATIO.ph',
+        description: 'commandMenu.env.MAX_SINGLE_MESSAGE_RATIO.desc',
       },
       {
         key: 'API_TIMEOUT',
-        label: 'API 超时时间',
+        label: 'commandMenu.env.API_TIMEOUT.label',
         type: 'text',
-        placeholder: '默认: 300 秒',
+        placeholder: 'commandMenu.env.API_TIMEOUT.ph',
       },
     ],
   },
@@ -290,43 +294,43 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'CLEAN_SDK_HEADERS',
-        label: '清理 SDK Headers',
+        label: 'commandMenu.env.CLEAN_SDK_HEADERS.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        description: '某些第三方代理需要开启',
-        placeholder: '默认: false',
+        description: 'commandMenu.env.CLEAN_SDK_HEADERS.desc',
+        placeholder: 'commandMenu.env.CLEAN_SDK_HEADERS.ph',
       },
       {
         key: 'CLEAN_AUTH_HEADER',
-        label: '清理 Auth Header',
+        label: 'commandMenu.env.CLEAN_AUTH_HEADER.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        description: '仅对 Anthropic SDK 有效',
-        placeholder: '默认: false',
+        description: 'commandMenu.env.CLEAN_AUTH_HEADER.desc',
+        placeholder: 'commandMenu.env.CLEAN_AUTH_HEADER.ph',
       },
       {
         key: 'SYSTEM_AS_USER',
-        label: 'System 作为 User',
+        label: 'commandMenu.env.SYSTEM_AS_USER.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        description: '兼容不支持 system role 的模型',
-        placeholder: '默认: false',
+        description: 'commandMenu.env.SYSTEM_AS_USER.desc',
+        placeholder: 'commandMenu.env.SYSTEM_AS_USER.ph',
       },
       {
         key: 'SYSTEM_PROMPT_FILE',
-        label: '系统提示文件',
+        label: 'commandMenu.env.SYSTEM_PROMPT_FILE.label',
         type: 'text',
-        placeholder: '默认: prompt.md',
-        description: '位于 prompt 目录下',
+        placeholder: 'commandMenu.env.SYSTEM_PROMPT_FILE.ph',
+        description: 'commandMenu.env.SYSTEM_PROMPT_FILE.desc',
       },
     ],
   },
@@ -335,50 +339,50 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'CONTEXT_MODE',
-        label: '上下文处理模式',
+        label: 'commandMenu.env.CONTEXT_MODE.label',
         type: 'select',
         options: [
-          { value: 'strong_context', label: '强上下文' },
-          { value: 'long_context', label: '长上下文' },
-          { value: 'auto', label: '自动选择' },
+          { value: 'strong_context', label: 'commandMenu.env.CONTEXT_MODE.opts.strong' },
+          { value: 'long_context', label: 'commandMenu.env.CONTEXT_MODE.opts.long' },
+          { value: 'auto', label: 'commandMenu.env.CONTEXT_MODE.opts.auto' },
         ],
-        placeholder: '默认: strong_context',
-        description: '控制工具集和上下文处理策略',
+        placeholder: 'commandMenu.env.CONTEXT_MODE.ph',
+        description: 'commandMenu.env.CONTEXT_MODE.desc',
       },
       {
         key: 'DEFAULT_CHARACTER',
-        label: '默认角色',
+        label: 'commandMenu.env.DEFAULT_CHARACTER.label',
         type: 'text',
-        placeholder: '默认: 无',
+        placeholder: 'commandMenu.env.DEFAULT_CHARACTER.ph',
       },
       {
         key: 'RULE_REMINDER_INTERVAL',
-        label: '规则提醒间隔',
+        label: 'commandMenu.env.RULE_REMINDER_INTERVAL.label',
         type: 'text',
-        placeholder: '默认: 10',
-        description: '每 N 次 LLM 回复提醒一次，0 禁用',
+        placeholder: 'commandMenu.env.RULE_REMINDER_INTERVAL.ph',
+        description: 'commandMenu.env.RULE_REMINDER_INTERVAL.desc',
       },
       {
         key: 'RULE_REMINDER_SHORT',
-        label: '精简版规则提醒',
+        label: 'commandMenu.env.RULE_REMINDER_SHORT.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        placeholder: '默认: false',
-        description: '节省 token',
+        placeholder: 'commandMenu.env.RULE_REMINDER_SHORT.ph',
+        description: 'commandMenu.env.RULE_REMINDER_SHORT.desc',
       },
       {
         key: 'LIMIT_WRITE_TOOL_RETURN',
-        label: '限制写工具返回',
+        label: 'commandMenu.env.LIMIT_WRITE_TOOL_RETURN.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        placeholder: '默认: true',
-        description: '节省 token',
+        placeholder: 'commandMenu.env.LIMIT_WRITE_TOOL_RETURN.ph',
+        description: 'commandMenu.env.LIMIT_WRITE_TOOL_RETURN.desc',
       },
     ],
   },
@@ -387,43 +391,43 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'LOG_TO_FILE',
-        label: '记录到文件',
+        label: 'commandMenu.env.LOG_TO_FILE.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        placeholder: '默认: true',
+        placeholder: 'commandMenu.env.LOG_TO_FILE.ph',
       },
       {
         key: 'LOG_FILE_MAX_SIZE',
-        label: '日志文件最大大小',
+        label: 'commandMenu.env.LOG_FILE_MAX_SIZE.label',
         type: 'text',
-        placeholder: '默认: 10485760 (10MB)',
+        placeholder: 'commandMenu.env.LOG_FILE_MAX_SIZE.ph',
       },
       {
         key: 'LOG_BACKUP_COUNT',
-        label: '日志备份数量',
+        label: 'commandMenu.env.LOG_BACKUP_COUNT.label',
         type: 'text',
-        placeholder: '默认: 5',
+        placeholder: 'commandMenu.env.LOG_BACKUP_COUNT.ph',
       },
       {
         key: 'LOG_MONITOR_MAX_LINE_LENGTH',
-        label: '日志行最大长度',
+        label: 'commandMenu.env.LOG_MONITOR_MAX_LINE_LENGTH.label',
         type: 'text',
-        placeholder: '默认: 200 字符',
+        placeholder: 'commandMenu.env.LOG_MONITOR_MAX_LINE_LENGTH.ph',
       },
-      { key: 'LOG_ERROR_FILENAME', label: '错误日志文件名', type: 'text', placeholder: '默认: error.log' },
-      { key: 'LOG_LLM_VALIDATION_FILENAME', label: 'LLM 校验日志', type: 'text', placeholder: '默认: llm_validation.log' },
-      { key: 'LOG_TOOL_EXECUTION_FILENAME', label: '工具执行日志', type: 'text', placeholder: '默认: tool_execution.log' },
-      { key: 'LOG_GENERAL_FILENAME', label: '通用日志', type: 'text', placeholder: '默认: general.log' },
-      { key: 'LOG_MONITOR_LOCK_FILENAME', label: '监控锁文件', type: 'text', placeholder: '默认: .monitor.lock' },
-      { key: 'LOG_MONITOR_CHECK_INTERVAL', label: '日志检查间隔', type: 'text', placeholder: '默认: 0.5 秒' },
+      { key: 'LOG_ERROR_FILENAME', label: 'commandMenu.env.LOG_ERROR_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_ERROR_FILENAME.ph' },
+      { key: 'LOG_LLM_VALIDATION_FILENAME', label: 'commandMenu.env.LOG_LLM_VALIDATION_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_LLM_VALIDATION_FILENAME.ph' },
+      { key: 'LOG_TOOL_EXECUTION_FILENAME', label: 'commandMenu.env.LOG_TOOL_EXECUTION_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_TOOL_EXECUTION_FILENAME.ph' },
+      { key: 'LOG_GENERAL_FILENAME', label: 'commandMenu.env.LOG_GENERAL_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_GENERAL_FILENAME.ph' },
+      { key: 'LOG_MONITOR_LOCK_FILENAME', label: 'commandMenu.env.LOG_MONITOR_LOCK_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_MONITOR_LOCK_FILENAME.ph' },
+      { key: 'LOG_MONITOR_CHECK_INTERVAL', label: 'commandMenu.env.LOG_MONITOR_CHECK_INTERVAL.label', type: 'text', placeholder: 'commandMenu.env.LOG_MONITOR_CHECK_INTERVAL.ph' },
       {
         key: 'LOG_MONITOR_TYPES',
-        label: '日志监控类型',
+        label: 'commandMenu.env.LOG_MONITOR_TYPES.label',
         type: 'text',
-        placeholder: '默认: error,llm_validation,tool_execution',
+        placeholder: 'commandMenu.env.LOG_MONITOR_TYPES.ph',
       },
     ],
   },
@@ -432,33 +436,33 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'WEB_BROWSER_TIMEOUT',
-        label: '浏览器超时',
+        label: 'commandMenu.env.WEB_BROWSER_TIMEOUT.label',
         type: 'text',
-        placeholder: '默认: 15 秒',
+        placeholder: 'commandMenu.env.WEB_BROWSER_TIMEOUT.ph',
       },
       {
         key: 'WEB_PROXY_PORT',
-        label: 'Web 代理端口',
+        label: 'commandMenu.env.WEB_PROXY_PORT.label',
         type: 'text',
-        placeholder: '默认: 7897',
+        placeholder: 'commandMenu.env.WEB_PROXY_PORT.ph',
       },
       {
         key: 'WEB_MAX_CONTENT_LENGTH',
-        label: 'Web 内容最大长度',
+        label: 'commandMenu.env.WEB_MAX_CONTENT_LENGTH.label',
         type: 'text',
-        placeholder: '默认: 2000 字符',
+        placeholder: 'commandMenu.env.WEB_MAX_CONTENT_LENGTH.ph',
       },
       {
         key: 'TOOL_EXECUTION_TIMEOUT',
-        label: '工具执行超时',
+        label: 'commandMenu.env.TOOL_EXECUTION_TIMEOUT.label',
         type: 'text',
-        placeholder: '默认: 120 秒',
+        placeholder: 'commandMenu.env.TOOL_EXECUTION_TIMEOUT.ph',
       },
       {
         key: 'SHELL_COMMAND_TIMEOUT',
-        label: 'Shell 命令超时',
+        label: 'commandMenu.env.SHELL_COMMAND_TIMEOUT.label',
         type: 'text',
-        placeholder: '默认: 60 秒',
+        placeholder: 'commandMenu.env.SHELL_COMMAND_TIMEOUT.ph',
       },
     ],
   },
@@ -467,45 +471,45 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'MULTI_AGENT_MAX_COUNT',
-        label: '最大并发子 Agent',
+        label: 'commandMenu.env.MULTI_AGENT_MAX_COUNT.label',
         type: 'text',
-        placeholder: '默认: 5',
+        placeholder: 'commandMenu.env.MULTI_AGENT_MAX_COUNT.ph',
       },
       {
         key: 'SUB_AGENT_MAX_ITERATIONS',
-        label: '子 Agent 最大迭代',
+        label: 'commandMenu.env.SUB_AGENT_MAX_ITERATIONS.label',
         type: 'text',
-        placeholder: '默认: 100',
+        placeholder: 'commandMenu.env.SUB_AGENT_MAX_ITERATIONS.ph',
       },
       {
         key: 'CODER_MAX_ITERATIONS',
-        label: 'Coder 最大迭代',
+        label: 'commandMenu.env.CODER_MAX_ITERATIONS.label',
         type: 'text',
-        placeholder: '默认: 1000',
+        placeholder: 'commandMenu.env.CODER_MAX_ITERATIONS.ph',
       },
       {
         key: 'MULTI_AGENT_TIMEOUT',
-        label: '多 Agent 超时',
+        label: 'commandMenu.env.MULTI_AGENT_TIMEOUT.label',
         type: 'text',
-        placeholder: '默认: 无限等待',
-        description: '秒，留空表示无限等待',
+        placeholder: 'commandMenu.env.MULTI_AGENT_TIMEOUT.ph',
+        description: 'commandMenu.env.MULTI_AGENT_TIMEOUT.desc',
       },
       {
         key: 'MULTI_AGENT_JOIN_INTERVAL',
-        label: '等待轮询间隔',
+        label: 'commandMenu.env.MULTI_AGENT_JOIN_INTERVAL.label',
         type: 'text',
-        placeholder: '默认: 2.0 秒',
-        description: '用于检查中断信号',
+        placeholder: 'commandMenu.env.MULTI_AGENT_JOIN_INTERVAL.ph',
+        description: 'commandMenu.env.MULTI_AGENT_JOIN_INTERVAL.desc',
       },
       {
         key: 'MULTI_AGENT_MONITOR_ENABLED',
-        label: '启用多 Agent 监控',
+        label: 'commandMenu.env.MULTI_AGENT_MONITOR_ENABLED.label',
         type: 'select',
         options: [
-          { value: 'true', label: '是' },
-          { value: 'false', label: '否' },
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
         ],
-        placeholder: '默认: true',
+        placeholder: 'commandMenu.env.MULTI_AGENT_MONITOR_ENABLED.ph',
       },
     ],
   },
@@ -514,39 +518,39 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'CHAT_MAX_WORKERS',
-        label: '最大并发 LLM 请求',
+        label: 'commandMenu.env.CHAT_MAX_WORKERS.label',
         type: 'text',
-        placeholder: '默认: 5',
+        placeholder: 'commandMenu.env.CHAT_MAX_WORKERS.ph',
       },
       {
         key: 'CHAT_RESPONSE_EXPIRE',
-        label: '响应缓存过期时间',
+        label: 'commandMenu.env.CHAT_RESPONSE_EXPIRE.label',
         type: 'text',
-        placeholder: '默认: 300 秒',
+        placeholder: 'commandMenu.env.CHAT_RESPONSE_EXPIRE.ph',
       },
       {
         key: 'CHAT_RESPONSE_CLEANUP_INTERVAL',
-        label: '缓存清理间隔',
+        label: 'commandMenu.env.CHAT_RESPONSE_CLEANUP_INTERVAL.label',
         type: 'text',
-        placeholder: '默认: 60 秒',
+        placeholder: 'commandMenu.env.CHAT_RESPONSE_CLEANUP_INTERVAL.ph',
       },
       {
         key: 'IPC_CHECK_INTERVAL',
-        label: 'IPC 检查间隔',
+        label: 'commandMenu.env.IPC_CHECK_INTERVAL.label',
         type: 'text',
-        placeholder: '默认: 0.1 秒',
+        placeholder: 'commandMenu.env.IPC_CHECK_INTERVAL.ph',
       },
     ],
   },
   {
     title: '路径配置',
     items: [
-      { key: 'SKILLS_DIR', label: 'Skills 目录', type: 'text', placeholder: '默认: skills' },
-      { key: 'CHARACTERS_DIR', label: 'Characters 目录', type: 'text', placeholder: '默认: characters' },
-      { key: 'PROMPT_DIR', label: 'Prompt 目录', type: 'text', placeholder: '默认: prompt' },
-      { key: 'LOG_DIR', label: '日志目录', type: 'text', placeholder: '默认: logs' },
-      { key: 'OUTPUT_DIR', label: '输出目录', type: 'text', placeholder: '默认: output' },
-      { key: 'UPLOAD_DIR', label: '上传目录', type: 'text', placeholder: '默认: uploads' },
+      { key: 'SKILLS_DIR', label: 'commandMenu.env.SKILLS_DIR.label', type: 'text', placeholder: 'commandMenu.env.SKILLS_DIR.ph' },
+      { key: 'CHARACTERS_DIR', label: 'commandMenu.env.CHARACTERS_DIR.label', type: 'text', placeholder: 'commandMenu.env.CHARACTERS_DIR.ph' },
+      { key: 'PROMPT_DIR', label: 'commandMenu.env.PROMPT_DIR.label', type: 'text', placeholder: 'commandMenu.env.PROMPT_DIR.ph' },
+      { key: 'LOG_DIR', label: 'commandMenu.env.LOG_DIR.label', type: 'text', placeholder: 'commandMenu.env.LOG_DIR.ph' },
+      { key: 'OUTPUT_DIR', label: 'commandMenu.env.OUTPUT_DIR.label', type: 'text', placeholder: 'commandMenu.env.OUTPUT_DIR.ph' },
+      { key: 'UPLOAD_DIR', label: 'commandMenu.env.UPLOAD_DIR.label', type: 'text', placeholder: 'commandMenu.env.UPLOAD_DIR.ph' },
     ],
   },
   {
@@ -554,16 +558,16 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'LAUNCH_MODE',
-        label: '启动模式',
+        label: 'commandMenu.env.LAUNCH_MODE.label',
         type: 'select',
         options: [
           { value: 'cli', label: 'CLI' },
           { value: 'desktop', label: 'Desktop' },
         ],
-        placeholder: '默认: cli',
+        placeholder: 'commandMenu.env.LAUNCH_MODE.ph',
       },
-      { key: 'DESKTOP_API_HOST', label: 'API Host', type: 'text', placeholder: '默认: 127.0.0.1' },
-      { key: 'DESKTOP_API_PORT', label: 'API Port', type: 'text', placeholder: '默认: 8765' },
+      { key: 'DESKTOP_API_HOST', label: 'API Host', type: 'text', placeholder: 'commandMenu.env.DESKTOP_API_HOST.ph' },
+      { key: 'DESKTOP_API_PORT', label: 'API Port', type: 'text', placeholder: 'commandMenu.env.DESKTOP_API_PORT.ph' },
     ],
   },
   {
@@ -571,36 +575,36 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'COMMAND_INTERCEPT',
-        label: '拦截开关',
+        label: 'commandMenu.env.COMMAND_INTERCEPT.label',
         type: 'select',
         options: [
-          { value: 'true', label: '开启（推荐）' },
-          { value: 'false', label: '关闭' },
+          { value: 'true', label: 'commandMenu.env.COMMAND_INTERCEPT.opts.onRecommended' },
+          { value: 'false', label: 'commandMenu.env.COMMAND_INTERCEPT.opts.off' },
         ],
-        description: '总开关：开启后启用 shell 安全拦截策略（删除/写入等，后续可扩展）',
-        placeholder: '默认: true',
+        description: 'commandMenu.env.COMMAND_INTERCEPT.desc',
+        placeholder: 'commandMenu.env.COMMAND_INTERCEPT.ph',
       },
       {
         key: 'INTERCEPT_SHELL_DELETE',
-        label: '拦截 shell 删除',
+        label: 'commandMenu.env.INTERCEPT_SHELL_DELETE.label',
         type: 'select',
         options: [
-          { value: 'true', label: '开启' },
-          { value: 'false', label: '关闭' },
+          { value: 'true', label: 'commandMenu.env.INTERCEPT_SHELL_DELETE.opts.on' },
+          { value: 'false', label: 'commandMenu.env.INTERCEPT_SHELL_DELETE.opts.off' },
         ],
-        description: '仅总开关开启时生效；拦截 del/rm/rmdir/Remove-Item',
-        placeholder: '默认: true（不写则开启）',
+        description: 'commandMenu.env.INTERCEPT_SHELL_DELETE.desc',
+        placeholder: 'commandMenu.env.INTERCEPT_SHELL_DELETE.ph',
       },
       {
         key: 'INTERCEPT_SHELL_WRITE',
-        label: '拦截 shell 写入',
+        label: 'commandMenu.env.INTERCEPT_SHELL_WRITE.label',
         type: 'select',
         options: [
-          { value: 'true', label: '开启' },
-          { value: 'false', label: '关闭' },
+          { value: 'true', label: 'commandMenu.env.INTERCEPT_SHELL_WRITE.opts.on' },
+          { value: 'false', label: 'commandMenu.env.INTERCEPT_SHELL_WRITE.opts.off' },
         ],
-        description: '仅总开关开启时生效；拦截 Set-Content/Out-File（防 BOM）',
-        placeholder: '默认: true（不写则开启）',
+        description: 'commandMenu.env.INTERCEPT_SHELL_WRITE.desc',
+        placeholder: 'commandMenu.env.INTERCEPT_SHELL_WRITE.ph',
       },
     ],
   },
@@ -609,35 +613,35 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'BACKUP_ENABLED',
-        label: '备份系统',
+        label: 'commandMenu.env.BACKUP_ENABLED.label',
         type: 'select',
         options: [
-          { value: 'true', label: '开启（推荐）' },
-          { value: 'false', label: '关闭' },
+          { value: 'true', label: 'commandMenu.env.BACKUP_ENABLED.opts.onRecommended' },
+          { value: 'false', label: 'commandMenu.env.BACKUP_ENABLED.opts.off' },
         ],
-        description: '总开关：文件写操作自动增量备份 + 每轮对话点快照，支持文件级/对话级回滚',
-        placeholder: '默认: true',
+        description: 'commandMenu.env.BACKUP_ENABLED.desc',
+        placeholder: 'commandMenu.env.BACKUP_ENABLED.ph',
       },
       {
         key: 'BACKUP_DIR',
-        label: '备份目录',
+        label: 'commandMenu.env.BACKUP_DIR.label',
         type: 'text',
-        description: '备份数据存储目录（相对项目根目录或绝对路径）；修改后需重启后端生效',
-        placeholder: '默认: .spore',
+        description: 'commandMenu.env.BACKUP_DIR.desc',
+        placeholder: 'commandMenu.env.BACKUP_DIR.ph',
       },
       {
         key: 'BACKUP_MAX_FILE_BYTES',
-        label: '单文件备份上限',
+        label: 'commandMenu.env.BACKUP_MAX_FILE_BYTES.label',
         type: 'number',
-        description: '超过该大小（字节）的文件跳过备份，避免占用过多空间',
-        placeholder: '默认: 52428800（50MB）',
+        description: 'commandMenu.env.BACKUP_MAX_FILE_BYTES.desc',
+        placeholder: 'commandMenu.env.BACKUP_MAX_FILE_BYTES.ph',
       },
       {
         key: 'BACKUP_MAX_DELETE_FILES',
-        label: '删除目录备份上限',
+        label: 'commandMenu.env.BACKUP_MAX_DELETE_FILES.label',
         type: 'number',
-        description: '删除目录时最多备份的文件数量',
-        placeholder: '默认: 200',
+        description: 'commandMenu.env.BACKUP_MAX_DELETE_FILES.desc',
+        placeholder: 'commandMenu.env.BACKUP_MAX_DELETE_FILES.ph',
       },
     ],
   },
@@ -646,45 +650,66 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
     items: [
       {
         key: 'SECURITY_AGENT_MODE',
-        label: '安全 Agent 模式',
+        label: 'commandMenu.env.SECURITY_AGENT_MODE.label',
         type: 'select',
         options: [
-          { value: 'off', label: 'off（关闭）' },
-          { value: 'basic', label: 'basic（关键词研判）' },
-          { value: 'full', label: 'full（全权交给安全 Agent）' },
+          { value: 'off', label: 'commandMenu.env.SECURITY_AGENT_MODE.opts.off' },
+          { value: 'basic', label: 'commandMenu.env.SECURITY_AGENT_MODE.opts.basic' },
+          { value: 'full', label: 'commandMenu.env.SECURITY_AGENT_MODE.opts.full' },
         ],
-        description: 'off 全关；basic 仅对命中高危关键词的命令做 AI 风险评估与确认；full 不做关键词预筛，每条命令都交安全 Agent 异步研判语义意图+风险+恶意，判定恶意时自动熔断会话并弹出处置建议',
-        placeholder: '默认: full',
+        description: 'commandMenu.env.SECURITY_AGENT_MODE.desc',
+        placeholder: 'commandMenu.env.SECURITY_AGENT_MODE.ph',
       },
       {
         key: 'SECURITY_GUARD_MODE',
-        label: '风险容忍度',
+        label: 'commandMenu.env.SECURITY_GUARD_MODE.label',
         type: 'select',
         options: [
-          { value: 'strict', label: 'strict（命中即确认）' },
-          { value: 'balanced', label: 'balanced（低风险自动放行）' },
-          { value: 'permissive', label: 'permissive（低+中风险放行）' },
+          { value: 'strict', label: 'commandMenu.env.SECURITY_GUARD_MODE.opts.strict' },
+          { value: 'balanced', label: 'commandMenu.env.SECURITY_GUARD_MODE.opts.balanced' },
+          { value: 'permissive', label: 'commandMenu.env.SECURITY_GUARD_MODE.opts.permissive' },
         ],
-        description: 'strict 最谨慎；balanced 平衡；permissive 仅高风险才拦截',
-        placeholder: '默认: balanced',
+        description: 'commandMenu.env.SECURITY_GUARD_MODE.desc',
+        placeholder: 'commandMenu.env.SECURITY_GUARD_MODE.ph',
       },
       {
         key: 'SECURITY_LLM_TIMEOUT',
-        label: '风险评估超时',
+        label: 'commandMenu.env.SECURITY_LLM_TIMEOUT.label',
         type: 'number',
-        description: '高危命令 AI 风险评估的超时时间（秒）',
-        placeholder: '默认: 30',
+        description: 'commandMenu.env.SECURITY_LLM_TIMEOUT.desc',
+        placeholder: 'commandMenu.env.SECURITY_LLM_TIMEOUT.ph',
       },
       {
         key: 'SECURITY_INTENT_TIMEOUT',
-        label: '意图研判超时',
+        label: 'commandMenu.env.SECURITY_INTENT_TIMEOUT.label',
         type: 'number',
-        description: 'full 模式下普通命令意图/恶意研判的超时时间（秒）',
-        placeholder: '默认: 45',
+        description: 'commandMenu.env.SECURITY_INTENT_TIMEOUT.desc',
+        placeholder: 'commandMenu.env.SECURITY_INTENT_TIMEOUT.ph',
       },
     ],
   },
 ];
+
+// 分组标题 → i18n key 映射（title 本身仍是逻辑标识符，渲染时经此翻译）
+const GROUP_TITLE_I18N: Record<string, string> = {
+  'LLM SDK 选择': 'commandMenu.groups.llmSdk',
+  'OpenAI API': 'commandMenu.groups.openaiApi',
+  'Anthropic API': 'commandMenu.groups.anthropicApi',
+  'OpenAI 高级': 'commandMenu.groups.openaiAdvanced',
+  'Anthropic 高级': 'commandMenu.groups.anthropicAdvanced',
+  'LLM 参数': 'commandMenu.groups.llmParams',
+  'SDK 兼容性': 'commandMenu.groups.sdkCompat',
+  '对话管理': 'commandMenu.groups.conversation',
+  '日志配置': 'commandMenu.groups.logging',
+  '工具配置': 'commandMenu.groups.tools',
+  '多 Agent 配置': 'commandMenu.groups.multiAgent',
+  'Chat 进程配置': 'commandMenu.groups.chatProcess',
+  '路径配置': 'commandMenu.groups.paths',
+  'Desktop 启动配置': 'commandMenu.groups.desktop',
+  '拦截开关': 'commandMenu.groups.intercept',
+  '备份恢复': 'commandMenu.groups.backup',
+  '安全 Agent': 'commandMenu.groups.securityAgent',
+};
 
 // 环境配置分组按语义拆到三个设置标签（LLM / Agent / 系统）
 const _advGroupsByTitle = (titles: string[]): EnvConfigGroup[] =>
@@ -704,18 +729,20 @@ const EnvGroupFields: React.FC<{
   group: EnvConfigGroup;
   envValues: Record<string, string>;
   updateEnvValue: (key: string, value: string) => void;
-}> = ({ group, envValues, updateEnvValue }) => (
+}> = ({ group, envValues, updateEnvValue }) => {
+  const t = useT();
+  return (
   <div className="space-y-3">
     <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
-      {group.title}
+      {t(GROUP_TITLE_I18N[group.title] || group.title)}
     </h5>
     <div className="space-y-3">
       {group.items.map((item) => (
         <div key={item.key} className="space-y-1">
           <label className="flex items-center gap-2 text-xs text-spore-muted">
-            <span>{item.label}</span>
+            <span>{t(item.label)}</span>
             {item.description && (
-              <span className="text-spore-muted/60">({item.description})</span>
+              <span className="text-spore-muted/60">({t(item.description)})</span>
             )}
           </label>
           {item.type === 'select' ? (
@@ -724,9 +751,9 @@ const EnvGroupFields: React.FC<{
               onChange={(e) => updateEnvValue(item.key, e.target.value)}
               className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
             >
-              <option value="">{item.placeholder || '未设置'}</option>
+              <option value="">{item.placeholder ? t(item.placeholder) : t('commandMenu.env.notSet')}</option>
               {item.options?.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
+                <option key={opt.value} value={opt.value}>{t(opt.label)}</option>
               ))}
             </select>
           ) : (
@@ -734,7 +761,7 @@ const EnvGroupFields: React.FC<{
               type={item.type === 'number' ? 'number' : 'text'}
               value={envValues[item.key] || ''}
               onChange={(e) => updateEnvValue(item.key, e.target.value)}
-              placeholder={item.placeholder}
+              placeholder={item.placeholder ? t(item.placeholder) : undefined}
               className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono"
             />
           )}
@@ -742,7 +769,8 @@ const EnvGroupFields: React.FC<{
       ))}
     </div>
   </div>
-);
+  );
+};
 
 // Agent 基座配置目标：子 Agent 是所有 AutoAgent 的默认基座，
 // 其余 4 个 AutoAgent 可各自覆盖（字段留空则回退到子 Agent → 主 Agent）
@@ -754,10 +782,10 @@ type AgentBaseTarget = {
 };
 
 const AGENT_BASE_TARGETS: AgentBaseTarget[] = [
-  { id: 'sub_agent', label: '子 Agent（默认基座）', prefix: 'SUB_AGENT', hint: '所有子 Agent / AutoAgent 的默认基座；留空则继承主 Agent' },
-  { id: 'supervisor', label: 'Supervisor（循环检测）', prefix: 'AGENT_SUPERVISOR', hint: '检测对话是否结束；留空则继承子 Agent' },
-  { id: 'mode_selector', label: 'ModeSelector（模式选择）', prefix: 'AGENT_MODE_SELECTOR', hint: '自动选择上下文模式；留空则继承子 Agent' },
-  { id: 'security', label: 'Security（安全 Agent）', prefix: 'AGENT_SECURITY', hint: '高危命令风险评估 + 普通命令意图/恶意研判；推荐 Sonnet/GPT-4o-mini 级模型；留空则继承子 Agent' },
+  { id: 'sub_agent', label: 'commandMenu.agentBase.targets.subAgentLabel', prefix: 'SUB_AGENT', hint: 'commandMenu.agentBase.targets.subAgentHint' },
+  { id: 'supervisor', label: 'commandMenu.agentBase.targets.supervisorLabel', prefix: 'AGENT_SUPERVISOR', hint: 'commandMenu.agentBase.targets.supervisorHint' },
+  { id: 'mode_selector', label: 'commandMenu.agentBase.targets.modeSelectorLabel', prefix: 'AGENT_MODE_SELECTOR', hint: 'commandMenu.agentBase.targets.modeSelectorHint' },
+  { id: 'security', label: 'commandMenu.agentBase.targets.securityLabel', prefix: 'AGENT_SECURITY', hint: 'commandMenu.agentBase.targets.securityHint' },
 ];
 
 // 给定配置目标前缀，返回该目标的 env key 集合（基础 + 高级）
@@ -784,8 +812,9 @@ const AgentBaseEditor: React.FC<{
   envValues: Record<string, string>;
   updateEnvValue: (key: string, value: string) => void;
 }> = ({ agentBaseTarget, setAgentBaseTarget, envValues, updateEnvValue }) => {
+  const t = useT();
   const target =
-    AGENT_BASE_TARGETS.find((t) => t.id === agentBaseTarget) || AGENT_BASE_TARGETS[0];
+    AGENT_BASE_TARGETS.find((tg) => tg.id === agentBaseTarget) || AGENT_BASE_TARGETS[0];
   const keys = agentBaseKeys(target.prefix);
   const targetSdk = (envValues[keys.sdk] || '').toLowerCase();
   const subSdk = (envValues['SUB_AGENT_LLM_SDK'] || '').toLowerCase();
@@ -793,34 +822,36 @@ const AgentBaseEditor: React.FC<{
   // 有效 SDK：决定展示哪一套字段（该目标显式选择 → 子 Agent → 主 Agent）
   const effectiveSdk = targetSdk || (target.id !== 'sub_agent' ? subSdk : '') || mainSdk;
   const isAnthropic = effectiveSdk === 'anthropic';
-  const inheritHint = target.id === 'sub_agent' ? '默认: 继承主 Agent' : '默认: 继承子 Agent';
+  const inheritHint = target.id === 'sub_agent'
+    ? t('commandMenu.agentBase.inheritMain')
+    : t('commandMenu.agentBase.inheritSub');
   return (
     <div className="space-y-3">
       <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
-        Agent 基座（颗粒化）
+        {t('commandMenu.agentBase.title')}
       </h5>
       <p className="text-[11px] text-spore-muted/70 -mt-1">
-        每个目标拥有独立的基座 + 高级参数（effort/thinking），与主 Agent 互不影响；任一字段留空即继承上层基座。
+        {t('commandMenu.agentBase.intro')}
       </p>
       {/* 配置目标下拉 */}
       <div className="space-y-1">
-        <label className="text-xs text-spore-muted">配置目标</label>
+        <label className="text-xs text-spore-muted">{t('commandMenu.agentBase.target')}</label>
         <select
           value={agentBaseTarget}
           onChange={(e) => setAgentBaseTarget(e.target.value)}
           className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-highlight/40 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/60"
         >
-          {AGENT_BASE_TARGETS.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}
+          {AGENT_BASE_TARGETS.map((tg) => (
+            <option key={tg.id} value={tg.id}>
+              {t(tg.label)}
             </option>
           ))}
         </select>
-        <p className="text-[11px] text-spore-muted/70">{target.hint}</p>
+        <p className="text-[11px] text-spore-muted/70">{t(target.hint)}</p>
       </div>
       {/* SDK 选择 */}
       <div className="space-y-1">
-        <label className="text-xs text-spore-muted">SDK 类型</label>
+        <label className="text-xs text-spore-muted">{t('commandMenu.agentBase.sdkType')}</label>
         <select
           value={envValues[keys.sdk] || ''}
           onChange={(e) => updateEnvValue(keys.sdk, e.target.value)}
@@ -833,17 +864,17 @@ const AgentBaseEditor: React.FC<{
       </div>
       {/* 按 SDK 动态显示 OpenAI / Anthropic 字段 */}
       {[
-        { show: !isAnthropic, label: 'OpenAI Key', k: keys.openaiKey },
-        { show: !isAnthropic, label: 'OpenAI URL', k: keys.openaiUrl },
-        { show: !isAnthropic, label: 'OpenAI 模型', k: keys.openaiModel },
-        { show: isAnthropic, label: 'Anthropic Key', k: keys.anthropicKey },
-        { show: isAnthropic, label: 'Anthropic URL', k: keys.anthropicUrl },
-        { show: isAnthropic, label: 'Anthropic 模型', k: keys.anthropicModel },
+        { show: !isAnthropic, label: 'commandMenu.agentBase.openaiKey', k: keys.openaiKey },
+        { show: !isAnthropic, label: 'commandMenu.agentBase.openaiUrl', k: keys.openaiUrl },
+        { show: !isAnthropic, label: 'commandMenu.agentBase.openaiModel', k: keys.openaiModel },
+        { show: isAnthropic, label: 'commandMenu.agentBase.anthropicKey', k: keys.anthropicKey },
+        { show: isAnthropic, label: 'commandMenu.agentBase.anthropicUrl', k: keys.anthropicUrl },
+        { show: isAnthropic, label: 'commandMenu.agentBase.anthropicModel', k: keys.anthropicModel },
       ]
         .filter((f) => f.show)
         .map((f) => (
           <div key={f.k} className="space-y-1">
-            <label className="text-xs text-spore-muted">{f.label}</label>
+            <label className="text-xs text-spore-muted">{t(f.label)}</label>
             <input
               type="text"
               value={envValues[f.k] || ''}
@@ -856,20 +887,20 @@ const AgentBaseEditor: React.FC<{
       {/* 高级参数（按有效 SDK 展示；每个目标独立，留空继承上层） */}
       <div className="space-y-3 pt-2 border-t border-spore-border/20">
         <p className="text-[11px] text-spore-muted/70">
-          高级参数 · {isAnthropic ? 'Anthropic' : 'OpenAI'}（留空继承上层基座）
+          {t('commandMenu.agentBase.advancedParams', { sdk: isAnthropic ? 'Anthropic' : 'OpenAI' })}
         </p>
         {!isAnthropic && (
           <>
             <div className="space-y-1">
-              <label className="text-xs text-spore-muted">使用 Responses API</label>
+              <label className="text-xs text-spore-muted">{t('commandMenu.agentBase.useResponsesApi')}</label>
               <select
                 value={envValues[keys.useResponsesApi] || ''}
                 onChange={(e) => updateEnvValue(keys.useResponsesApi, e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
               >
                 <option value="">{inheritHint}</option>
-                <option value="true">是</option>
-                <option value="false">否</option>
+                <option value="true">{t('common.yes')}</option>
+                <option value="false">{t('common.no')}</option>
               </select>
             </div>
             <div className="space-y-1">
@@ -880,7 +911,7 @@ const AgentBaseEditor: React.FC<{
                 className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
               >
                 <option value="">{inheritHint}</option>
-                <option value="none">none（明确不传此参数）</option>
+                <option value="none">{t('commandMenu.opts.noneExplicit')}</option>
                 {['low', 'medium', 'high', 'xhigh'].map((o) => (
                   <option key={o} value={o}>{o}</option>
                 ))}
@@ -898,7 +929,7 @@ const AgentBaseEditor: React.FC<{
                 className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
               >
                 <option value="">{inheritHint}</option>
-                <option value="none">none（明确不传此参数）</option>
+                <option value="none">{t('commandMenu.opts.noneExplicit')}</option>
                 {['low', 'medium', 'high', 'xhigh', 'max'].map((o) => (
                   <option key={o} value={o}>{o}</option>
                 ))}
@@ -912,8 +943,8 @@ const AgentBaseEditor: React.FC<{
                 className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
               >
                 <option value="">{inheritHint}</option>
-                <option value="adaptive">adaptive（推荐）</option>
-                <option value="enabled">enabled（手动 budget）</option>
+                <option value="adaptive">{t('commandMenu.opts.adaptiveRecommended')}</option>
+                <option value="enabled">{t('commandMenu.opts.enabledManual')}</option>
                 <option value="disabled">disabled</option>
               </select>
             </div>
@@ -992,6 +1023,7 @@ const updateEnvContent = (
 };
 
 export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini = false }) => {
+  const t = useT();
   const [isOpen, setIsOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'general' | 'llm' | 'agent' | 'system' | 'tools'>('general');
@@ -1048,8 +1080,8 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
   const [toolPolicyScopes, setToolPolicyScopes] = useState<
     Array<{ value: string; label: string; description?: string }>
   >([
-    { value: 'session', label: '仅当前会话', description: '每个会话独立配置工具开关' },
-    { value: 'global', label: '全局', description: '所有会话共用同一套工具开关' },
+    { value: 'session', label: 'commandMenu.tools.scopeSession', description: 'commandMenu.tools.scopeSessionDesc' },
+    { value: 'global', label: 'commandMenu.tools.scopeGlobal', description: 'commandMenu.tools.scopeGlobalDesc' },
   ]);
   
   const { newConversation, activeConversationId, loadHistory } = useChatStore();
@@ -1090,7 +1122,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       setEnvContent(data.content);
       setEnvValues(parseEnvContent(data.content));
     } catch (err) {
-      setEnvError('加载 .env 失败');
+      setEnvError(t('commandMenu.env.loadFailed'));
     } finally {
       setEnvLoading(false);
     }
@@ -1104,10 +1136,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         setConfigProfiles(response.profiles || []);
         setActiveProfileId(response.active_profile_id || '');
       } else {
-        setEnvError(response.error || '加载配置套失败');
+        setEnvError(response.error || t('commandMenu.err.loadProfiles'));
       }
     } catch {
-      setEnvError('加载配置套失败');
+      setEnvError(t('commandMenu.err.loadProfiles'));
     }
   };
 
@@ -1163,7 +1195,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
   // 打开设置时加载 env 和角色列表
   const applyToolPolicyResponse = (response: any) => {
     if (!response?.success) {
-      setToolPolicyError(response?.error || '加载工具策略失败');
+      setToolPolicyError(response?.error || t('commandMenu.err.loadToolPolicy'));
       return;
     }
     setToolPolicyError(null);
@@ -1196,7 +1228,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       );
       applyToolPolicyResponse(response);
     } catch (err) {
-      setToolPolicyError('加载工具策略失败');
+      setToolPolicyError(t('commandMenu.err.loadToolPolicy'));
     } finally {
       setToolPolicyLoading(false);
     }
@@ -1275,12 +1307,12 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         policy: toolPolicy,
       });
       if (!response.success) {
-        setToolPolicyError(response.error || '保存失败');
+        setToolPolicyError(response.error || t('commandMenu.err.saveFailed'));
         return;
       }
       applyToolPolicyResponse(response);
     } catch {
-      setToolPolicyError('保存工具策略失败');
+      setToolPolicyError(t('commandMenu.err.saveToolPolicy'));
     } finally {
       setToolPolicySaving(false);
     }
@@ -1295,13 +1327,13 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         toolPolicyMode
       );
       if (!response.success) {
-        setToolPolicyError(response.error || '重置失败');
+        setToolPolicyError(response.error || t('commandMenu.err.resetFailed'));
         return;
       }
       // reload full view to refresh catalog/policy consistently
       await loadToolPolicy(toolPolicyMode);
     } catch {
-      setToolPolicyError('重置工具策略失败');
+      setToolPolicyError(t('commandMenu.err.resetToolPolicy'));
     } finally {
       setToolPolicySaving(false);
     }
@@ -1310,7 +1342,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
   const changeToolPolicyScope = async (scope: 'session' | 'global') => {
     if (scope === toolPolicyScope) return;
     if (toolPolicyDirty) {
-      const ok = window.confirm('当前有未保存的工具开关修改，切换作用域将丢弃它们，是否继续？');
+      const ok = window.confirm(t('commandMenu.confirm.discardScope'));
       if (!ok) return;
     }
     setToolPolicySaving(true);
@@ -1321,12 +1353,12 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         conversation_id: activeConversationId || undefined,
       });
       if (!response.success) {
-        setToolPolicyError(response.error || '切换作用域失败');
+        setToolPolicyError(response.error || t('commandMenu.err.switchScope'));
         return;
       }
       applyToolPolicyResponse(response);
     } catch {
-      setToolPolicyError('切换作用域失败');
+      setToolPolicyError(t('commandMenu.err.switchScope'));
     } finally {
       setToolPolicySaving(false);
     }
@@ -1346,7 +1378,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     }
     if (toolPolicyDirty) {
       const ok = window.confirm(
-        '当前有未保存的工具开关修改，切换会话将丢弃它们，是否继续？'
+        t('commandMenu.confirm.discardSession')
       );
       if (!ok) {
         // Keep editing the previous conversation's snapshot; save still targets toolPolicyConversationId.
@@ -1382,7 +1414,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       // 后端按时间正序存储，展示时最新的在前
       setCheckpoints((res.checkpoints || []).slice().reverse());
     } catch (err) {
-      setBackupError(extractApiError(err, '加载对话点失败'));
+      setBackupError(extractApiError(err, t('commandMenu.err.loadCheckpoints')));
     } finally {
       setBackupLoading(false);
     }
@@ -1396,7 +1428,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       const res = await backupApi.listTrackedFiles();
       setTrackedFiles(res.files || []);
     } catch (err) {
-      setBackupError(extractApiError(err, '加载备份文件列表失败'));
+      setBackupError(extractApiError(err, t('commandMenu.err.loadTrackedFiles')));
     } finally {
       setBackupLoading(false);
     }
@@ -1411,7 +1443,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
 
   const handleRewind = async (checkpointId: string) => {
     const ok = window.confirm(
-      `回滚到对话点 ${checkpointId}？\n将同时恢复文件和对话历史，该对话点之后的修改会被撤销。`
+      t('commandMenu.confirm.rewind', { id: checkpointId })
     );
     if (!ok) return;
     setBackupBusy(true);
@@ -1424,36 +1456,36 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       await loadHistory();
       setShowBackup(false);
       const lines = [
-        `已回到对话点 ${res.checkpoint} (${res.ts})`,
-        `对话历史: 截断到 ${res.message_count} 条消息`,
+        t('commandMenu.rewind.doneAt', { checkpoint: res.checkpoint, ts: res.ts }),
+        t('commandMenu.rewind.truncated', { count: res.message_count }),
       ];
       if (res.restored.length) {
-        lines.push(`恢复文件 ${res.restored.length} 个:`, ...res.restored.map((p) => `  - ${p}`));
+        lines.push(t('commandMenu.rewind.restored', { count: res.restored.length }), ...res.restored.map((p) => `  - ${p}`));
       }
       if (res.deleted.length) {
         lines.push(
-          `删除文件（回滚创建操作）${res.deleted.length} 个:`,
+          t('commandMenu.rewind.deleted', { count: res.deleted.length }),
           ...res.deleted.map((p) => `  - ${p}`)
         );
       }
       if (res.skipped.length) {
         lines.push(
-          `跳过（仅其它会话修改）${res.skipped.length} 个:`,
+          t('commandMenu.rewind.skipped', { count: res.skipped.length }),
           ...res.skipped.map((p) => `  - ${p}`)
         );
       }
       if (res.failed.length) {
         lines.push(
-          `失败 ${res.failed.length} 个:`,
+          t('commandMenu.rewind.failed', { count: res.failed.length }),
           ...res.failed.map((f) => `  - ${f.path}: ${f.error}`)
         );
       }
       setModalContent({
-        title: res.success ? '回滚成功' : '回滚部分成功',
+        title: res.success ? t('commandMenu.rewind.successTitle') : t('commandMenu.rewind.partialTitle'),
         content: lines.join('\n'),
       });
     } catch (err) {
-      setBackupError(extractApiError(err, '回滚失败'));
+      setBackupError(extractApiError(err, t('commandMenu.err.rewind')));
     } finally {
       setBackupBusy(false);
     }
@@ -1470,28 +1502,28 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         versions: res.versions || [],
       });
     } catch (err) {
-      setBackupError(extractApiError(err, '加载文件历史失败'));
+      setBackupError(extractApiError(err, t('commandMenu.err.loadFileHistory')));
     } finally {
       setBackupLoading(false);
     }
   };
 
   const handleRestoreFile = async (path: string, versionId: number) => {
-    const label = versionId === 0 ? 'baseline（首次备份前的原始内容）' : `v${versionId}`;
-    if (!window.confirm(`将文件恢复到 ${label}？\n${path}`)) return;
+    const label = versionId === 0 ? t('commandMenu.restore.baselineLabel') : `v${versionId}`;
+    if (!window.confirm(t('commandMenu.confirm.restore', { label, path }))) return;
     setBackupBusy(true);
     setBackupError(null);
     try {
       const res = await backupApi.restoreFile({ path, version_id: versionId });
       await loadFileHistory(path);
       setModalContent({
-        title: '恢复成功',
+        title: t('commandMenu.restore.successTitle'),
         content: res.deleted
-          ? `${res.path}\n已恢复到 v${res.restored_to_version}（该版本文件不存在，已删除）`
-          : `${res.path}\n已恢复到 v${res.restored_to_version}`,
+          ? t('commandMenu.restore.doneDeleted', { path: res.path, version: res.restored_to_version })
+          : t('commandMenu.restore.done', { path: res.path, version: res.restored_to_version }),
       });
     } catch (err) {
-      setBackupError(extractApiError(err, '恢复文件失败'));
+      setBackupError(extractApiError(err, t('commandMenu.err.restoreFile')));
     } finally {
       setBackupBusy(false);
     }
@@ -1545,18 +1577,18 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     try {
       const response = await settingsApi.applyConfigProfile(profileId);
       if (!response.success) {
-        throw new Error(response.error || '应用配置套失败');
+        throw new Error(response.error || t('commandMenu.err.applyProfile'));
       }
 
       await loadEnvFile();
       await loadConfigProfiles();
       setActiveProfileId(profileId);
       setModalContent({
-        title: '成功',
-        content: response.message || '配置套已应用到当前 Spore 进程',
+        title: t('common.success'),
+        content: response.message || t('commandMenu.profile.applied'),
       });
     } catch (err) {
-      setEnvError(err instanceof Error ? err.message : '应用配置套失败');
+      setEnvError(err instanceof Error ? err.message : t('commandMenu.err.applyProfile'));
     } finally {
       setProfileBusy(false);
     }
@@ -1567,7 +1599,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       ? configProfiles.find((profile) => profile.id === activeProfileId)
       : undefined;
     const name = window.prompt(
-      '配置套名称',
+      t('commandMenu.profile.namePrompt'),
       currentProfile?.name || ''
     );
     if (!name) {
@@ -1583,7 +1615,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     try {
       const values = collectProfileValues();
       if (Object.keys(values).length === 0) {
-        throw new Error('当前没有可保存到配置套的配置项');
+        throw new Error(t('commandMenu.profile.emptyValues'));
       }
       const response = await settingsApi.saveConfigProfile({
         name: trimmedName,
@@ -1591,17 +1623,17 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         values,
       });
       if (!response.success || !response.profile) {
-        throw new Error(response.error || '保存配置套失败');
+        throw new Error(response.error || t('commandMenu.err.saveProfile'));
       }
 
       await loadConfigProfiles();
       setActiveProfileId(response.profile.id);
       setModalContent({
-        title: '成功',
-        content: `配置套 "${response.profile.name}" 已保存`,
+        title: t('common.success'),
+        content: t('commandMenu.profile.saved', { name: response.profile.name }),
       });
     } catch (err) {
-      setEnvError(err instanceof Error ? err.message : '保存配置套失败');
+      setEnvError(err instanceof Error ? err.message : t('commandMenu.err.saveProfile'));
     } finally {
       setProfileBusy(false);
     }
@@ -1613,7 +1645,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     }
 
     const profile = configProfiles.find((item) => item.id === activeProfileId);
-    if (!window.confirm(`删除配置套 "${profile?.name || activeProfileId}"？`)) {
+    if (!window.confirm(t('commandMenu.confirm.deleteProfile', { name: profile?.name || activeProfileId }))) {
       return;
     }
 
@@ -1622,12 +1654,12 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     try {
       const response = await settingsApi.deleteConfigProfile(activeProfileId);
       if (!response.success) {
-        throw new Error(response.error || '删除配置套失败');
+        throw new Error(response.error || t('commandMenu.err.deleteProfile'));
       }
       setActiveProfileId('');
       await loadConfigProfiles();
     } catch (err) {
-      setEnvError(err instanceof Error ? err.message : '删除配置套失败');
+      setEnvError(err instanceof Error ? err.message : t('commandMenu.err.deleteProfile'));
     } finally {
       setProfileBusy(false);
     }
@@ -1641,17 +1673,17 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       await filesApi.write('.env', newContent);
       const applyResponse = await settingsApi.applyEnvFile();
       if (!applyResponse.success) {
-        throw new Error(applyResponse.error || '应用配置失败');
+        throw new Error(applyResponse.error || t('commandMenu.err.applyEnv'));
       }
       setEnvContent(newContent);
       await loadConfigProfiles();
       setEnvError(null);
       setModalContent({
-        title: '成功',
-        content: applyResponse.message || '配置已保存并应用到当前 Spore 进程',
+        title: t('common.success'),
+        content: applyResponse.message || t('commandMenu.env.saved'),
       });
     } catch (err) {
-      setEnvError(err instanceof Error ? err.message : '保存失败');
+      setEnvError(err instanceof Error ? err.message : t('commandMenu.err.saveFailed'));
     } finally {
       setEnvSaving(false);
     }
@@ -1663,10 +1695,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     try {
       const response = await settingsApi.openEnvFile();
       if (!response.success) {
-        setEnvError(response.error || '打开 .env 失败');
+        setEnvError(response.error || t('commandMenu.err.openEnv'));
       }
     } catch (err) {
-      setEnvError('打开 .env 失败');
+      setEnvError(t('commandMenu.err.openEnv'));
     } finally {
       setEnvOpening(false);
     }
@@ -1675,74 +1707,74 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
   const menuItems: MenuItem[] = [
     {
       id: 'save',
-      label: '保存对话',
+      label: t('commandMenu.menu.save'),
       icon: 'M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4',
       action: async () => {
         await commandsApi.save(activeConversationId || undefined);
-        setModalContent({ title: '成功', content: '对话已保存' });
+        setModalContent({ title: t('common.success'), content: t('commandMenu.menu.saveDone') });
       },
     },
     {
       id: 'prompt',
-      label: '查看提示词',
+      label: t('commandMenu.menu.viewPrompt'),
       icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
       action: async () => {
         const result = await commandsApi.getPrompt(activeConversationId || undefined);
         setModalContent({
-          title: `系统提示词 (${result.token_count} tokens)`,
-          content: result.prompt || '无',
+          title: t('commandMenu.menu.promptTitle', { count: result.token_count }),
+          content: result.prompt || t('commandMenu.none'),
         });
       },
     },
     {
       id: 'context',
-      label: '查看上下文',
+      label: t('commandMenu.menu.viewContext'),
       icon: 'M4 6h16M4 10h16M4 14h16M4 18h16',
       action: async () => {
         const result = await commandsApi.getContext(false, activeConversationId || undefined);
         setModalContent({
-          title: `上下文 (${result.message_count} 条消息)`,
+          title: t('commandMenu.menu.contextTitle', { count: result.message_count ?? 0 }),
           content: JSON.stringify(result.messages, null, 2),
         });
       },
     },
     {
       id: 'skills',
-      label: '查看技能',
+      label: t('commandMenu.menu.viewSkills'),
       icon: 'M13 10V3L4 14h7v7l9-11h-7z',
       action: async () => {
         const result = await commandsApi.getSkills();
         setModalContent({
-          title: '可用技能',
-          content: result.skills || '无可用技能',
+          title: t('commandMenu.menu.skillsTitle'),
+          content: result.skills || t('commandMenu.menu.noSkills'),
         });
       },
     },
     {
       id: 'memclean',
-      label: '清除记忆',
+      label: t('commandMenu.menu.clearMemory'),
       icon: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',
       action: async () => {
         await commandsApi.clearMemory(activeConversationId || undefined);
         await newConversation();
-        setModalContent({ title: '成功', content: '记忆已清除' });
+        setModalContent({ title: t('common.success'), content: t('commandMenu.menu.memoryClearedDone') });
       },
     },
     {
       id: 'savemode',
-      label: '切换节省模式',
+      label: t('commandMenu.menu.toggleSaveMode'),
       icon: 'M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z',
       action: async () => {
         const result = await commandsApi.toggleSaveMode(activeConversationId || undefined);
         setModalContent({
-          title: '节省模式',
-          content: result.save_mode ? '已开启' : '已关闭',
+          title: t('commandMenu.menu.saveModeTitle'),
+          content: result.save_mode ? t('commandMenu.menu.turnedOn') : t('commandMenu.menu.turnedOff'),
         });
       },
     },
     {
       id: 'backup',
-      label: '备份回滚',
+      label: t('commandMenu.menu.backup'),
       icon: 'M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3',
       action: async () => {
         openBackup();
@@ -1750,33 +1782,33 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     },
         {
       id: 'intercept',
-      label: '拦截开关',
+      label: t('commandMenu.menu.intercept'),
       icon: 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636',
       action: async () => {
         const result = await settingsApi.toggleCommandIntercept();
         if (!result.success) {
-          throw new Error(result.error || '切换失败');
+          throw new Error(result.error || t('commandMenu.err.saveFailed'));
         }
         setModalContent({
-          title: '拦截开关',
+          title: t('commandMenu.menu.intercept'),
           content: result.command_intercept
-            ? '已开启：命令拦截策略生效（含 shell 删除/危险写入等）。'
-            : '已关闭：已关闭全部命令拦截策略（请谨慎）。',
+            ? t('commandMenu.menu.interceptOn')
+            : t('commandMenu.menu.interceptOff'),
         });
       },
     },
 {
       id: 'clearlogs',
-      label: '清理日志',
+      label: t('commandMenu.menu.clearLogs'),
       icon: 'M9 13h6m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2zM12 11V7',
       action: async () => {
         const result = await commandsApi.clearLogs();
         const skippedMsg = result.skipped_current
-          ? `\n(已跳过当前会话: ${result.skipped_current})`
+          ? '\n' + t('commandMenu.menu.clearLogsSkipped', { id: result.skipped_current })
           : '';
         setModalContent({
-          title: '清理完成',
-          content: `已清理 ${result.cleared_count} 个日志文件/文件夹${skippedMsg}${result.errors ? '\n\n错误:\n' + result.errors.join('\n') : ''}`,
+          title: t('commandMenu.menu.clearLogsDone'),
+          content: `${t('commandMenu.menu.clearLogsResult', { count: result.cleared_count })}${skippedMsg}${result.errors ? '\n\n' + t('commandMenu.menu.errorsLabel') + '\n' + result.errors.join('\n') : ''}`,
         });
       },
     },
@@ -1788,8 +1820,8 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
       await item.action();
     } catch (error) {
       setModalContent({
-        title: '错误',
-        content: error instanceof Error ? error.message : '操作失败',
+        title: t('common.error'),
+        content: error instanceof Error ? error.message : t('commandMenu.menu.actionFailed'),
       });
     }
   };
@@ -1894,7 +1926,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                   d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
                 />
               </svg>
-              设置
+              {t('common.settings')}
             </button>
           </div>
         </>
@@ -1905,7 +1937,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
           <div className="bg-spore-card border border-spore-border/50 rounded-2xl w-[680px] max-w-[90vw] max-h-[85vh] overflow-hidden shadow-elevated flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-spore-border/30">
-              <h3 className="font-semibold text-spore-text">设置</h3>
+              <h3 className="font-semibold text-spore-text">{t('common.settings')}</h3>
               <div className="flex items-center gap-2">
                 {(settingsTab === 'llm' || settingsTab === 'agent' || settingsTab === 'system') && envError && (
                   <span className="text-xs text-spore-error">{envError}</span>
@@ -1917,14 +1949,14 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                       disabled={envOpening || envLoading}
                       className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                     >
-                      {envOpening ? '打开中...' : '打开 .env'}
+                      {envOpening ? t('commandMenu.env.opening') : t('commandMenu.env.openEnv')}
                     </button>
                     <button
                       onClick={saveEnvFile}
                       disabled={envSaving || envLoading}
                       className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                     >
-                      {envSaving ? '保存中...' : '保存配置'}
+                      {envSaving ? t('commandMenu.env.saving') : t('commandMenu.env.saveConfig')}
                     </button>
                   </>
                 )}
@@ -1958,7 +1990,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                常规
+                {t('commandMenu.tab.general')}
               </button>
               <button
                 onClick={() => setSettingsTab('llm')}
@@ -1968,7 +2000,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                LLM 设置
+                {t('commandMenu.tab.llm')}
               </button>
               <button
                 onClick={() => setSettingsTab('agent')}
@@ -1978,7 +2010,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                Agent 设置
+                {t('commandMenu.tab.agent')}
               </button>
               <button
                 onClick={() => setSettingsTab('system')}
@@ -1988,7 +2020,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                系统
+                {t('commandMenu.tab.system')}
               </button>
               <button
                 onClick={() => { setSettingsTab('tools'); loadToolPolicy(toolPolicyMode); }}
@@ -1998,7 +2030,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                工具策略
+                {t('commandMenu.tab.tools')}
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-5">
@@ -2006,13 +2038,13 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                 <div className="space-y-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
-                      <div className="text-sm text-spore-text font-medium">工具策略</div>
-                      <div className="text-xs text-spore-muted">关闭后：工具说明 / 协议注入 / 执行校验都会剔除对应能力。作用域可在「仅当前会话」与「全局」之间切换。</div>
+                      <div className="text-sm text-spore-text font-medium">{t('commandMenu.tools.title')}</div>
+                      <div className="text-xs text-spore-muted">{t('commandMenu.tools.desc')}</div>
                       <div className="text-xs text-spore-muted">
-                        当前会话模式: <span className="text-spore-highlight">{toolContextMode}</span>
+                        {t('commandMenu.tools.currentMode')} <span className="text-spore-highlight">{toolContextMode}</span>
                         {" · "}
-                        编辑基线: <span className="text-spore-highlight">{toolPolicyMode}</span>
-                        {toolPolicyDirty ? " · 未保存" : ""}
+                        {t('commandMenu.tools.editBaseline')} <span className="text-spore-highlight">{toolPolicyMode}</span>
+                        {toolPolicyDirty ? " · " + t('commandMenu.tools.unsaved') : ""}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
@@ -2021,46 +2053,46 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                         disabled={toolPolicyLoading || toolPolicySaving}
                         className="px-3 py-1.5 text-xs rounded-lg border border-spore-border/50 text-spore-muted hover:text-spore-text hover:bg-spore-accent/40 disabled:opacity-50"
                       >
-                        重置
+                        {t('common.reset')}
                       </button>
                       <button
                         onClick={() => saveToolPolicy()}
                         disabled={toolPolicyLoading || toolPolicySaving || !toolPolicyDirty}
                         className="px-3 py-1.5 text-xs rounded-lg bg-spore-highlight hover:bg-spore-highlight-hover text-white disabled:opacity-50"
                       >
-                        {toolPolicySaving ? "保存中..." : "保存"}
+                        {toolPolicySaving ? t('commandMenu.tools.saving') : t('common.save')}
                       </button>
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <div className="text-xs text-spore-muted">作用域</div>
+                    <div className="text-xs text-spore-muted">{t('commandMenu.tools.scope')}</div>
                     <div className="flex items-center gap-2">
                       {toolPolicyScopes.map((s) => (
                         <button
                           key={s.value}
                           onClick={() => changeToolPolicyScope(s.value as 'session' | 'global')}
                           disabled={toolPolicyLoading || toolPolicySaving}
-                          title={s.description || s.label}
+                          title={s.description ? t(s.description) : t(s.label)}
                           className={`px-3 py-1.5 rounded-lg text-xs border transition-colors disabled:opacity-50 ${
                             toolPolicyScope === s.value
                               ? 'bg-spore-highlight/20 text-spore-highlight border-spore-highlight/60'
                               : 'bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text hover:bg-spore-accent/50'
                           }`}
                         >
-                          {s.label}
+                          {t(s.label)}
                         </button>
                       ))}
                     </div>
                     <div className="text-[11px] text-spore-muted">
                       {toolPolicyScope === 'global'
-                        ? '全局：所有会话共用 tool_policy.json 中的开关配置'
-                        : '仅当前会话：只影响当前对话，其它会话保持各自配置'}
+                        ? t('commandMenu.tools.scopeGlobalHint')
+                        : t('commandMenu.tools.scopeSessionHint')}
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <div className="text-xs text-spore-muted">编辑的模式基线</div>
+                    <div className="text-xs text-spore-muted">{t('commandMenu.tools.modeBaseline')}</div>
                     <div className="flex items-center gap-2">
                       {(["strong_context", "long_context"] as const).map((m) => (
                         <button
@@ -2069,7 +2101,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                             if (m === toolPolicyMode) return;
                             if (toolPolicyDirty) {
                               const ok = window.confirm(
-                                '当前有未保存的工具开关修改，切换模式基线将丢弃它们，是否继续？'
+                                t('commandMenu.confirm.discardMode')
                               );
                               if (!ok) return;
                             }
@@ -2082,7 +2114,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                               : "bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text"
                           }`}
                         >
-                          {m === "strong_context" ? "强上下文工具集" : "长上下文工具集"}
+                          {m === "strong_context" ? t('commandMenu.tools.strongContextSet') : t('commandMenu.tools.longContextSet')}
                         </button>
                       ))}
                     </div>
@@ -2093,7 +2125,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                   )}
 
                   {toolPolicyLoading ? (
-                    <div className="text-sm text-spore-muted py-8 text-center">加载中...</div>
+                    <div className="text-sm text-spore-muted py-8 text-center">{t('common.loading')}</div>
                   ) : (
                     <div className="space-y-3">
                       {toolCatalog.map((tool) => {
@@ -2121,7 +2153,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                                   onChange={(e) => setToolEnabled(tool.id, e.target.checked)}
                                   className="rounded border-spore-border"
                                 />
-                                启用
+                                {t('commandMenu.tools.enable')}
                               </label>
                             </div>
                             {tool.subs && tool.subs.length > 0 && (
@@ -2154,7 +2186,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                                           }
                                           className="rounded border-spore-border"
                                         />
-                                        启用
+                                        {t('commandMenu.tools.enable')}
                                       </label>
                                     </div>
                                   );
@@ -2166,11 +2198,11 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                       })}
                       {toolCatalog.length === 0 && (
                         <div className="text-sm text-spore-muted text-center py-6">
-                          当前模式无可用工具
+                          {t('commandMenu.tools.noTools')}
                         </div>
                       )}
                       <div className="text-[11px] text-spore-muted">
-                        已启用顶层工具: {toolEnabledList.join(", ") || "无"}
+                        {t('commandMenu.tools.enabledTopLevel')} {toolEnabledList.join(", ") || t('commandMenu.none')}
                       </div>
                     </div>
                   )}
@@ -2178,7 +2210,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
               ) : settingsTab === 'general' ? (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <div className="text-sm text-spore-text">主题</div>
+                    <div className="text-sm text-spore-text">{t('commandMenu.general.theme')}</div>
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => setTheme('dark')}
@@ -2188,7 +2220,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                             : 'bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text hover:bg-spore-accent/50'
                         }`}
                       >
-                        暗色
+                        {t('commandMenu.general.dark')}
                       </button>
                       <button
                         onClick={() => setTheme('light')}
@@ -2198,23 +2230,23 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                             : 'bg-spore-bg text-spore-muted border-spore-border/50 hover:text-spore-text hover:bg-spore-accent/50'
                         }`}
                       >
-                        亮色
+                        {t('commandMenu.general.light')}
                       </button>
                     </div>
                   </div>
-                  
+
                   {/* 角色选择 */}
                   <div className="space-y-2">
-                    <div className="text-sm text-spore-text">角色</div>
+                    <div className="text-sm text-spore-text">{t('commandMenu.general.character')}</div>
                     {charactersLoading ? (
-                      <div className="text-xs text-spore-muted">加载中...</div>
+                      <div className="text-xs text-spore-muted">{t('common.loading')}</div>
                     ) : (
                       <select
                         value={currentCharacter}
                         onChange={(e) => handleSelectCharacter(e.target.value)}
                         className="w-full px-3 py-2 bg-spore-bg border border-spore-border/50 rounded-lg text-sm text-spore-text focus:outline-none focus:ring-2 focus:ring-spore-highlight/50"
                       >
-                        <option value="">无角色</option>
+                        <option value="">{t('commandMenu.general.noCharacter')}</option>
                         {characters.map((char) => (
                           <option key={char.name} value={char.name}>
                             {char.name}
@@ -2223,10 +2255,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                       </select>
                     )}
                     <div className="text-xs text-spore-muted">
-                      选择角色后会在对话中自动应用，选择"无角色"则禁用角色系统
+                      {t('commandMenu.general.characterHint')}
                     </div>
                   </div>
-                  
+
                   {/* 自动清理短日志 */}
                   <div className="space-y-3">
                     <label className="flex items-center gap-3 cursor-pointer">
@@ -2236,11 +2268,11 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                         onChange={(e) => setAutoCleanShortLogs(e.target.checked)}
                         className="w-4 h-4 rounded border-spore-border bg-spore-bg text-spore-accent focus:ring-spore-accent"
                       />
-                      <span className="text-sm text-spore-text">启动时自动清理短日志</span>
+                      <span className="text-sm text-spore-text">{t('commandMenu.general.autoCleanLogs')}</span>
                     </label>
                     {autoCleanShortLogs && (
                       <div className="ml-7 flex items-center gap-2">
-                        <span className="text-xs text-spore-muted">最小行数:</span>
+                        <span className="text-xs text-spore-muted">{t('commandMenu.general.minLines')}</span>
                         <input
                           type="number"
                           min={1}
@@ -2249,7 +2281,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                           onChange={(e) => setAutoCleanMinLines(Number(e.target.value) || 10)}
                           className="w-16 px-2 py-1 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-accent"
                         />
-                        <span className="text-xs text-spore-muted">行</span>
+                        <span className="text-xs text-spore-muted">{t('commandMenu.general.linesUnit')}</span>
                       </div>
                     )}
                   </div>
@@ -2259,15 +2291,15 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                   <div className="space-y-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <div className="text-sm font-medium text-spore-text">API 配置套</div>
-                        <div className="text-xs text-spore-muted">按当前 SDK 保存对应的 API 地址、Key、模型和兼容参数。</div>
+                        <div className="text-sm font-medium text-spore-text">{t('commandMenu.profile.title')}</div>
+                        <div className="text-xs text-spore-muted">{t('commandMenu.profile.desc')}</div>
                       </div>
                       <button
                         onClick={handleSaveConfigProfile}
                         disabled={profileBusy || envLoading}
                         className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                       >
-                        保存当前
+                        {t('commandMenu.profile.saveCurrent')}
                       </button>
                     </div>
                     <div className="flex flex-col sm:flex-row gap-2">
@@ -2278,7 +2310,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                         className="flex-1 px-3 py-2 text-sm bg-spore-card border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 disabled:opacity-50"
                       >
                         <option value="">
-                          {configProfiles.length === 0 ? '暂无配置套' : '未匹配配置套'}
+                          {configProfiles.length === 0 ? t('commandMenu.profile.none') : t('commandMenu.profile.unmatched')}
                         </option>
                         {configProfiles.map((profile) => (
                           <option key={profile.id} value={profile.id}>
@@ -2291,28 +2323,28 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                         disabled={profileBusy || envLoading || !activeProfileId}
                         className="px-3 py-2 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                       >
-                        {profileBusy ? '处理中...' : '应用'}
+                        {profileBusy ? t('commandMenu.profile.processing') : t('common.apply')}
                       </button>
                       <button
                         onClick={handleDeleteConfigProfile}
                         disabled={profileBusy || envLoading || !activeProfileId}
                         className="px-3 py-2 bg-spore-bg hover:bg-spore-error/10 text-spore-muted hover:text-spore-error border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                       >
-                        删除
+                        {t('common.delete')}
                       </button>
                     </div>
                   </div>
                   {envLoading ? (
                     <div className="flex items-center justify-center h-32">
-                      <span className="text-spore-muted">加载中...</span>
+                      <span className="text-spore-muted">{t('common.loading')}</span>
                     </div>
                   ) : (
                     <>
                       {/* 基础配置：最小可用 */}
                       <div className="space-y-4">
                         <div className="flex items-baseline justify-between gap-2">
-                          <h4 className="text-sm font-semibold text-spore-text">基础配置</h4>
-                          <span className="text-[11px] text-spore-muted">最小可用：SDK + Key / URL / 模型</span>
+                          <h4 className="text-sm font-semibold text-spore-text">{t('commandMenu.env.basicTitle')}</h4>
+                          <span className="text-[11px] text-spore-muted">{t('commandMenu.env.basicHint')}</span>
                         </div>
                         {ENV_BASIC_CONFIG_GROUPS.map((group) => {
                           const selectedSdk = (envValues['LLM_SDK'] || '').toLowerCase();
@@ -2325,15 +2357,15 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                           return (
                             <div key={group.title} className={`space-y-3 ${isDisabled ? 'opacity-40' : ''}`}>
                               <h5 className="text-sm font-medium text-spore-highlight border-b border-spore-border/30 pb-2">
-                                {group.title}
+                                {t(GROUP_TITLE_I18N[group.title] || group.title)}
                               </h5>
                               <div className="space-y-3">
                                 {group.items.map((item) => (
                                   <div key={item.key} className="space-y-1">
                                     <label className="flex items-center gap-2 text-xs text-spore-muted">
-                                      <span>{item.label}</span>
+                                      <span>{t(item.label)}</span>
                                       {item.description && (
-                                        <span className="text-spore-muted/60">({item.description})</span>
+                                        <span className="text-spore-muted/60">({t(item.description)})</span>
                                       )}
                                     </label>
                                     {item.type === 'select' ? (
@@ -2343,10 +2375,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                                         disabled={isDisabled}
                                         className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 ${isDisabled ? 'cursor-not-allowed' : ''}`}
                                       >
-                                        <option value="">{item.placeholder || '未设置'}</option>
+                                        <option value="">{item.placeholder ? t(item.placeholder) : t('commandMenu.env.notSet')}</option>
                                         {item.options?.map((opt) => (
                                           <option key={opt.value} value={opt.value}>
-                                            {opt.label}
+                                            {t(opt.label)}
                                           </option>
                                         ))}
                                       </select>
@@ -2355,7 +2387,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                                         type={item.type === 'number' ? 'number' : 'text'}
                                         value={envValues[item.key] || ''}
                                         onChange={(e) => updateEnvValue(item.key, e.target.value)}
-                                        placeholder={item.placeholder}
+                                        placeholder={item.placeholder ? t(item.placeholder) : undefined}
                                         disabled={isDisabled}
                                         className={`w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono ${isDisabled ? 'cursor-not-allowed' : ''}`}
                                       />
@@ -2376,9 +2408,9 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                           className="w-full flex items-center justify-between gap-3 px-4 py-3 bg-spore-bg/50 hover:bg-spore-accent/30 transition-colors"
                         >
                           <div className="text-left">
-                            <div className="text-sm font-semibold text-spore-text">高级配置</div>
+                            <div className="text-sm font-semibold text-spore-text">{t('commandMenu.env.advancedTitle')}</div>
                             <div className="text-[11px] text-spore-muted">
-                              LLM 参数、SDK 兼容性
+                              {t('commandMenu.env.advancedHint')}
                             </div>
                           </div>
                           <svg
@@ -2445,7 +2477,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
           <div className="bg-spore-card border border-spore-border/50 rounded-2xl w-[640px] max-w-[90vw] max-h-[80vh] overflow-hidden shadow-elevated flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-spore-border/30">
-              <h3 className="font-semibold text-spore-text">备份回滚</h3>
+              <h3 className="font-semibold text-spore-text">{t('commandMenu.menu.backup')}</h3>
               <div className="flex items-center gap-2">
                 {backupError && (
                   <span className="text-xs text-spore-error max-w-[280px] truncate" title={backupError}>
@@ -2463,7 +2495,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                   disabled={backupLoading || backupBusy}
                   className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                 >
-                  刷新
+                  {t('common.refresh')}
                 </button>
                 <button
                   onClick={() => setShowBackup(false)}
@@ -2498,7 +2530,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                对话点
+                {t('commandMenu.backup.checkpointsTab')}
               </button>
               <button
                 onClick={() => {
@@ -2511,22 +2543,20 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     : 'text-spore-muted hover:text-spore-text'
                 }`}
               >
-                文件备份
+                {t('commandMenu.backup.filesTab')}
               </button>
             </div>
             <div className="flex-1 overflow-y-auto p-5">
               {backupLoading ? (
-                <div className="text-sm text-spore-muted py-8 text-center">加载中...</div>
+                <div className="text-sm text-spore-muted py-8 text-center">{t('common.loading')}</div>
               ) : backupTab === 'checkpoints' ? (
                 <div className="space-y-3">
                   <div className="text-xs text-spore-muted">
-                    只有当某条 LLM 回复实际修改了文件时才会产生对话点。回滚即回到这条回复之前：
-                    截断当前会话的对话历史，并把本会话在该点之后修改过的文件恢复到当时的版本；
-                    其它会话修改的文件不受影响。
+                    {t('commandMenu.backup.checkpointsDesc')}
                   </div>
                   {checkpoints.length === 0 ? (
                     <div className="text-sm text-spore-muted text-center py-6">
-                      当前会话没有对话点快照
+                      {t('commandMenu.backup.noCheckpoints')}
                     </div>
                   ) : (
                     checkpoints.map((cp) => (
@@ -2543,10 +2573,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                             className="text-xs text-spore-text/80 mt-1 line-clamp-2"
                             title={cp.reply_preview || undefined}
                           >
-                            {cp.reply_preview || '（工具执行轮，无文字回复）'}
+                            {cp.reply_preview || t('commandMenu.backup.noReply')}
                           </div>
                           <div className="text-xs text-spore-muted mt-0.5">
-                            消息数 {cp.message_count} · 跟踪文件 {Object.keys(cp.files || {}).length}
+                            {t('commandMenu.backup.checkpointMeta', { count: cp.message_count, files: Object.keys(cp.files || {}).length })}
                           </div>
                         </div>
                         <button
@@ -2554,7 +2584,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                           disabled={backupBusy}
                           className="px-3 py-1.5 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0"
                         >
-                          {backupBusy ? '回滚中...' : '回滚到此'}
+                          {backupBusy ? t('commandMenu.backup.rewinding') : t('commandMenu.backup.rewindHere')}
                         </button>
                       </div>
                     ))
@@ -2566,7 +2596,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                     onClick={() => setFileHistory(null)}
                     className="text-xs text-spore-muted hover:text-spore-text transition-colors"
                   >
-                    ← 返回文件列表
+                    {t('commandMenu.backup.backToFiles')}
                   </button>
                   <div className="text-sm text-spore-text font-mono break-all">{fileHistory.path}</div>
                   <div className="space-y-2">
@@ -2574,14 +2604,14 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                       <div className="flex items-center justify-between gap-3 rounded-xl border border-spore-border/50 bg-spore-bg/40 p-3">
                         <div className="min-w-0">
                           <div className="text-sm text-spore-text font-medium">v0 · baseline</div>
-                          <div className="text-xs text-spore-muted mt-0.5">首次备份前的原始内容</div>
+                          <div className="text-xs text-spore-muted mt-0.5">{t('commandMenu.backup.baselineDesc')}</div>
                         </div>
                         <button
                           onClick={() => handleRestoreFile(fileHistory.path, 0)}
                           disabled={backupBusy}
                           className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0"
                         >
-                          恢复
+                          {t('commandMenu.backup.restore')}
                         </button>
                       </div>
                     )}
@@ -2599,7 +2629,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                               <span className="ml-2 text-xs text-spore-muted font-normal">{v.ts}</span>
                             </div>
                             <div className="text-xs text-spore-muted mt-0.5">
-                              {v.op} · {v.store === 'delete' ? '删除' : `${v.size} bytes`}
+                              {v.op} · {v.store === 'delete' ? t('commandMenu.backup.deletedState') : `${v.size} bytes`}
                             </div>
                           </div>
                           <button
@@ -2607,7 +2637,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                             disabled={backupBusy}
                             className="px-3 py-1.5 bg-spore-bg hover:bg-spore-accent/60 text-spore-text border border-spore-border/50 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 flex-shrink-0"
                           >
-                            恢复
+                            {t('commandMenu.backup.restore')}
                           </button>
                         </div>
                       ))}
@@ -2616,10 +2646,10 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
               ) : (
                 <div className="space-y-3">
                   <div className="text-xs text-spore-muted">
-                    Agent 每次写文件前都会自动备份，点击文件查看版本历史并恢复到任意版本。
+                    {t('commandMenu.backup.filesDesc')}
                   </div>
                   {trackedFiles.length === 0 ? (
-                    <div className="text-sm text-spore-muted text-center py-6">尚无被跟踪的文件备份</div>
+                    <div className="text-sm text-spore-muted text-center py-6">{t('commandMenu.backup.noTrackedFiles')}</div>
                   ) : (
                     trackedFiles.map((f) => (
                       <button

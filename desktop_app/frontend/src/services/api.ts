@@ -620,6 +620,15 @@ export const settingsApi = {
       body: JSON.stringify({ command_intercept: commandIntercept }),
     }),
 
+  setLanguage: (language: 'zh' | 'en') =>
+    request<{ success: boolean; language?: string; error?: string }>(
+      '/api/settings/settings/language',
+      {
+        method: 'POST',
+        body: JSON.stringify({ language }),
+      }
+    ),
+
 
   openEnvFile: () =>
     request<{ success: boolean; path?: string; error?: string }>(

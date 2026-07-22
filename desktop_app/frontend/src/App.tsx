@@ -11,6 +11,8 @@ import { ChatPanel } from './components/chat-panel/ChatPanel';
 import { SidePanel } from './components/side-panel/SidePanel';
 import { SecurityRemediationModal } from './components/chat-panel/SecurityRemediationModal';
 import { wsService } from './services/websocket';
+import { settingsApi } from './services/api';
+import { useLangStore } from './i18n';
 import { useLogStore } from './stores/logStore';
 import { useAgentStore } from './stores/agentStore';
 import { useChatStore } from './stores/chatStore';
@@ -47,6 +49,15 @@ function App() {
   const { enqueueRequest, removeRequest } = useConfirmStore();
   const theme = useSettingsStore((state) => state.theme);
   const miniMode = useMiniModeStore((state) => state.miniMode);
+  const lang = useLangStore((state) => state.lang);
+
+  // Keep the backend's system language in sync with the UI language, so
+  // helper agents (command-intent, remediation advice) follow the same language.
+  useEffect(() => {
+    settingsApi.setLanguage(lang).catch(() => {
+      /* backend may not be ready yet; a later toggle will retry */
+    });
+  }, [lang]);
 
   useEffect(() => {
     const root = document.documentElement;

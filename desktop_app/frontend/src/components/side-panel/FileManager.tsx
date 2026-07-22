@@ -6,6 +6,7 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { useFileStore } from '../../stores/fileStore';
 import { useDragStore } from '../../stores/dragStore';
 import { useEditorStore } from '../../stores/editorStore';
+import { useT } from '../../i18n';
 import { FileEditor } from './FileEditor';
 import type { FileItem } from '../../types';
 
@@ -22,6 +23,7 @@ type SystemFileClipboard = {
 };
 
 export const FileManager: React.FC = () => {
+  const t = useT();
   const {
     currentPath,
     rootPath,
@@ -303,7 +305,7 @@ export const FileManager: React.FC = () => {
         <button
           onClick={handleGoUp}
           className="p-1.5 hover:bg-spore-accent rounded-lg transition-colors"
-          title="返回上级"
+          title={t('fileManager.goUp')}
         >
           <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -318,7 +320,7 @@ export const FileManager: React.FC = () => {
         <button
           onClick={() => setNewItemType('file')}
           className="p-1.5 hover:bg-spore-accent rounded-lg transition-colors"
-          title="新建文件"
+          title={t('fileManager.newFile')}
         >
           <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -327,7 +329,7 @@ export const FileManager: React.FC = () => {
         <button
           onClick={() => setNewItemType('folder')}
           className="p-1.5 hover:bg-spore-accent rounded-lg transition-colors"
-          title="新建文件夹"
+          title={t('fileManager.newFolder')}
         >
           <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
@@ -344,7 +346,7 @@ export const FileManager: React.FC = () => {
               value={newItemName}
               onChange={(e) => setNewItemName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-              placeholder={`新建${newItemType === 'file' ? '文件' : '文件夹'}名称`}
+              placeholder={t(newItemType === 'file' ? 'fileManager.newFilePlaceholder' : 'fileManager.newFolderPlaceholder')}
               className="flex-1 bg-spore-bg border border-spore-border/50 rounded-lg px-3 py-2 text-xs focus:border-spore-highlight/50 focus:outline-none"
               autoFocus
             />
@@ -352,13 +354,13 @@ export const FileManager: React.FC = () => {
               onClick={handleCreate}
               className="px-3 py-2 bg-spore-highlight hover:bg-spore-highlight-hover text-white rounded-lg text-xs font-medium transition-colors"
             >
-              创建
+              {t('fileManager.create')}
             </button>
             <button
               onClick={() => { setNewItemType(null); setNewItemName(''); }}
               className="px-3 py-2 bg-spore-accent hover:bg-spore-border rounded-lg text-xs transition-colors"
             >
-              取消
+              {t('common.cancel')}
             </button>
           </div>
         </div>
@@ -378,7 +380,7 @@ export const FileManager: React.FC = () => {
               <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              加载中...
+              {t('common.loading')}
             </div>
           </div>
         ) : items.length === 0 ? (
@@ -386,7 +388,7 @@ export const FileManager: React.FC = () => {
             <svg className="w-12 h-12 mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
             </svg>
-            <span className="text-sm">空目录</span>
+            <span className="text-sm">{t('fileManager.emptyDir')}</span>
           </div>
         ) : (
           <div className="space-y-1">
@@ -469,7 +471,7 @@ export const FileManager: React.FC = () => {
                   <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                   </svg>
-                  复制
+                  {t('common.copy')}
                 </button>
                 <button
                   onClick={() => handleClipboardAction(contextMenu.item!, 'cut')}
@@ -478,7 +480,7 @@ export const FileManager: React.FC = () => {
                   <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.121 14.121L19 19m-7-7l7-7M5 19l4.879-4.879M12 12L5 5m7 7l-2.121 2.121M12 12l2.121 2.121" />
                   </svg>
-                  剪切
+                  {t('fileManager.cut')}
                 </button>
                 {(canPasteFiles || clipboardItem) && contextMenu.item!.type === 'folder' && (
                   <button
@@ -488,7 +490,7 @@ export const FileManager: React.FC = () => {
                     <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                     </svg>
-                    粘贴到此文件夹
+                    {t('fileManager.pasteToFolder')}
                   </button>
                 )}
                 <button
@@ -501,7 +503,7 @@ export const FileManager: React.FC = () => {
                   <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
                   </svg>
-                  打开所在位置
+                  {t('fileManager.openLocation')}
                 </button>
                 <button
                   onClick={() => {
@@ -514,11 +516,11 @@ export const FileManager: React.FC = () => {
                   <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>
-                  重命名
+                  {t('common.rename')}
                 </button>
                 <button
                   onClick={() => {
-                    if (confirm(`确定删除 ${contextMenu.item!.name}？`)) {
+                    if (confirm(t('fileManager.deleteConfirm', { name: contextMenu.item!.name }))) {
                       deleteItem(contextMenu.item!.path);
                     }
                     setContextMenu(null);
@@ -528,7 +530,7 @@ export const FileManager: React.FC = () => {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                   </svg>
-                  删除
+                  {t('common.delete')}
                 </button>
               </>
             )}
@@ -540,7 +542,7 @@ export const FileManager: React.FC = () => {
                 <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                 </svg>
-                粘贴到当前目录
+                {t('fileManager.pasteToCurrent')}
               </button>
             )}
             <button
@@ -550,7 +552,7 @@ export const FileManager: React.FC = () => {
               <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              新建文件
+              {t('fileManager.newFile')}
             </button>
             <button
               onClick={() => { setNewItemType('folder'); setContextMenu(null); }}
@@ -559,7 +561,7 @@ export const FileManager: React.FC = () => {
               <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
               </svg>
-              新建文件夹
+              {t('fileManager.newFolder')}
             </button>
           </div>
         </>

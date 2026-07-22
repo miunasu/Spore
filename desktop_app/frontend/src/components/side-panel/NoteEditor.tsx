@@ -3,10 +3,12 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { filesApi } from '../../services/api';
+import { useT } from '../../i18n';
 
 const NOTE_PATH = 'note.txt';
 
 export const NoteEditor: React.FC = () => {
+  const t = useT();
   const [content, setContent] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -27,7 +29,7 @@ export const NoteEditor: React.FC = () => {
         setContent('');
         setHasChanges(false);
       } else {
-        setError('加载失败');
+        setError(t('noteEditor.loadFailed'));
       }
     } finally {
       setIsLoading(false);
@@ -46,7 +48,7 @@ export const NoteEditor: React.FC = () => {
       await filesApi.write(NOTE_PATH, content);
       setHasChanges(false);
     } catch (err) {
-      setError('保存失败');
+      setError(t('noteEditor.saveFailed'));
     } finally {
       setIsSaving(false);
     }
@@ -78,7 +80,7 @@ export const NoteEditor: React.FC = () => {
           <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          加载中...
+          {t('common.loading')}
         </div>
       </div>
     );
@@ -106,12 +108,12 @@ export const NoteEditor: React.FC = () => {
                 : 'bg-spore-accent/30 text-spore-muted cursor-not-allowed'
             }`}
           >
-            {isSaving ? '保存中...' : '保存'}
+            {isSaving ? t('noteEditor.saving') : t('common.save')}
           </button>
           <button
             onClick={loadNote}
             className="p-1.5 hover:bg-spore-accent rounded-lg transition-colors"
-            title="刷新"
+            title={t('common.refresh')}
           >
             <svg className="w-4 h-4 text-spore-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -125,7 +127,7 @@ export const NoteEditor: React.FC = () => {
         <textarea
           value={content}
           onChange={handleChange}
-          placeholder="在这里记录笔记..."
+          placeholder={t('noteEditor.placeholder')}
           className="w-full h-full bg-spore-bg/50 border border-spore-border/30 rounded-lg p-3 text-sm text-spore-text resize-none focus:outline-none focus:border-spore-highlight/50 font-mono"
           spellCheck={false}
         />

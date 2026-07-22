@@ -4,6 +4,7 @@
  */
 import React, { useMemo, useCallback } from 'react';
 import { useLogStore } from '../../stores/logStore';
+import { useT } from '../../i18n';
 import { LogArea } from './LogArea';
 import type { LogType } from '../../types';
 
@@ -29,6 +30,7 @@ const LOG_TYPES: { type: LogType; label: string; color: string; icon: string }[]
 ];
 
 export const LogPanel: React.FC = () => {
+  const t = useT();
   const expandedLog = useLogStore((state) => state.expandedLog);
   const setExpanded = useLogStore((state) => state.setExpanded);
   const activeConversationId = useLogStore((state) => state.activeConversationId);
@@ -62,7 +64,7 @@ export const LogPanel: React.FC = () => {
       <div className="h-full flex flex-col p-2">
         <LogArea
           type={expandedLog}
-          label={logConfig?.label || ''}
+          label={t(`logPanel.types.${expandedLog}`)}
           color={logConfig?.color || ''}
           icon={logConfig?.icon || ''}
           logs={getLogsForType(expandedLog)}
@@ -76,11 +78,11 @@ export const LogPanel: React.FC = () => {
   // 竖排四格布局，等分高度，无标题栏
   return (
     <div className="h-full flex flex-col gap-2 p-2">
-      {LOG_TYPES.map(({ type, label, color, icon }) => (
+      {LOG_TYPES.map(({ type, color, icon }) => (
         <div key={type} className="flex-1 min-h-0">
           <LogArea
             type={type}
-            label={label}
+            label={t(`logPanel.types.${type}`)}
             color={color}
             icon={icon}
             logs={getLogsForType(type)}

@@ -1,4 +1,6 @@
-# 技能开发指南（v3.0）
+# 技能开发指南（v4.0）
+
+> [English](en/SKILLS.md)
 
 Spore 的扩展技能遵循 Claude Skills 风格目录规范：每个技能一个文件夹，核心是 `SKILL.md`。  
 主 Agent / 子 Agent 通过工具 **`skill_query`** 按需读取文档，避免把全部技能正文塞进 system prompt。
@@ -17,17 +19,19 @@ skills/your-skill/
 └── requirements.txt      # 可选：额外 Python 依赖
 ```
 
+规范详见 `skills/agent_skills_spec.md`。
+
 当前仓库内置示例：
 
 | 技能目录 | 用途 |
 |----------|------|
 | `skills/docx` | Word 创建 / 模板填充 / 分析 |
-| `skills/pdf` | PDF 提取、生成、表单等 |
+| `skills/pdf` | PDF 提取、生成、合并拆分、表单等 |
 | `skills/pptx` | PowerPoint 生成与处理 |
-| `skills/pcap-analyst` | PCAP 流量分析、C2/Beacon、规则产出 |
-| `skills/skill-creator` | 帮助创建新技能包 |
+| `skills/pcap-analyst` | PCAP 流量分析、C2/Beacon 检测、Snort/YARA 规则产出 |
+| `skills/skill-creator` | 帮助创建新技能包（含脚手架脚本） |
 
-逆向（IDA 等）能力通常通过 **主机命令工具 + 外部工具链 + 案例目录** 完成，不强制内置在 `skills/`。案例见 `example/MalwareAnalysis/`。
+逆向（IDA 等）能力通常通过 **主机命令工具 + 外部工具链 + 案例目录** 完成，不强制内置在 `skills/`。案例见 `example/MalwareAnalysis/`，配套技能见 [IDA-Skill](https://github.com/miunasu/IDA-Skill)（用法见 [银狐案例](SILVERFOX.md)）。
 
 ---
 
@@ -70,6 +74,8 @@ python scripts/xxx.py --input a --output b
 ...
 ```
 
+frontmatter 支持 `name` / `description`（必需），以及可选的 `license` / `metadata` / `allowed-tools`。
+
 Agent 侧调用形态（文本协议）：
 
 ```text
@@ -80,7 +86,7 @@ skill_query skill_name="your-skill"
 
 实现见 `base/tools.py` → `handle_skill_query`，内容检索见 `base/utils/skills.py`。
 
-系统提示中的技能目录摘要由 `prompt_loader.collect_skills_md_features()` 扫描装配到 `prompt/prompt.md` 的 `{skills}` 占位符。
+系统提示中的技能目录摘要由 `prompt_loader.collect_skills_md_features()` 扫描装配到 `prompt/prompt.md` 的 `{skills}` 占位符（仅 name + description，正文按需查询）。
 
 ---
 
@@ -98,7 +104,9 @@ CLI 自检：
 User> skills
 ```
 
-会打印已发现技能的功能摘要。
+会打印已发现技能的功能摘要。桌面端右栏「skills」页也可直接浏览技能目录。
+
+> 提示：桌面安装版的技能目录位于安装目录下 `skills/`（由 `SPORE_RESOURCE_DIR` 定位）；把新技能包放进该目录即可被发现。
 
 ---
 
@@ -114,12 +122,14 @@ User> skills
 
 ## 与工具系统的关系
 
-技能 **不是** 新的 function-call 名称；技能教 Agent 如何组合已有工具：
+技能 **不是** 新的工具名称；技能教 Agent 如何组合已有工具：
 
-- `execute_command`：跑脚本 / PowerShell  
-- `file` / `edit` / `Grep`：读写改搜  
-- `web_browser`：在线资料  
-- `multi_agent_dispatch`（long_context）：并行调研与编辑  
+- `execute_command`：跑脚本 / PowerShell（受安全守卫管控）
+- `file` / `edit` / `Grep`：读写改搜
+- `web_browser`：在线资料
+- `multi_agent_dispatch`（long_context）：并行调研与编辑
+
+注意：若在工具策略中禁用了某工具（见 [ARCHITECTURE.md](ARCHITECTURE.md)「工具策略」），依赖该工具的技能步骤将无法执行。
 
 协议说明见 [ARCHITECTURE.md](ARCHITECTURE.md)「文本协议」一节。
 

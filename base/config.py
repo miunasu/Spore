@@ -378,6 +378,12 @@ class Config:
             self.security_intent_timeout: int = int(os.getenv("SECURITY_INTENT_TIMEOUT", "45"))
         except ValueError:
             self.security_intent_timeout = 45
+
+        # ========== 系统语言 ==========
+        # 影响需要"面向用户自然语言输出"的辅助 Agent（如命令意图说明、熔断修复建议）。
+        # zh: 简体中文；en: English。前端语言开关会通过 settings 接口同步此项。
+        _sys_lang = os.getenv("SYSTEM_LANGUAGE", "zh").lower().strip()
+        self.system_language: str = _sys_lang if _sys_lang in ("zh", "en") else "zh"
         
         # ========== 目录路径配置 ==========
         # Skills 目录路径

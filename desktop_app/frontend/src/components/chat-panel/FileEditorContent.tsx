@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { LineNumberedTextarea } from '../common/LineNumberedTextarea';
 import { SyntaxHighlighter, getSyntaxLanguage } from '../common/SyntaxHighlighter';
 import { useEditorStore } from '../../stores/editorStore';
+import { useT } from '../../i18n';
 
 type ViewMode = 'preview' | 'edit';
 
 class SyntaxPreviewBoundary extends React.Component<
-  { children: React.ReactNode; resetKey: string },
+  { children: React.ReactNode; resetKey: string; fallbackText: string },
   { hasError: boolean }
 > {
   state = { hasError: false };
@@ -29,7 +30,7 @@ class SyntaxPreviewBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="flex h-full items-center justify-center rounded-lg border border-spore-border/30 bg-spore-bg/50 p-4 text-sm text-spore-muted">
-          预览失败，请切换到编辑模式查看原始内容
+          {this.props.fallbackText}
         </div>
       );
     }
@@ -39,6 +40,7 @@ class SyntaxPreviewBoundary extends React.Component<
 }
 
 export const FileEditorContent: React.FC = () => {
+  const t = useT();
   const {
     openFiles,
     activeFilePath,
@@ -74,7 +76,7 @@ export const FileEditorContent: React.FC = () => {
   if (!activeFile) {
     return (
       <div className="flex-1 flex items-center justify-center text-spore-muted">
-        {isLoading ? '加载中...' : '选择一个文件进行查看'}
+        {isLoading ? t('common.loading') : t('chatPanel.fileEditorContent.selectFile')}
       </div>
     );
   }
@@ -98,9 +100,9 @@ export const FileEditorContent: React.FC = () => {
                   ? 'bg-spore-highlight text-white'
                   : 'text-spore-muted hover:bg-spore-accent/50 hover:text-spore-text'
               }`}
-              title="语法高亮预览"
+              title={t('chatPanel.fileEditorContent.previewTitle')}
             >
-              预览
+              {t('chatPanel.fileEditorContent.preview')}
             </button>
             <button
               onClick={() => setViewMode('edit')}
@@ -109,9 +111,9 @@ export const FileEditorContent: React.FC = () => {
                   ? 'bg-spore-highlight text-white'
                   : 'text-spore-muted hover:bg-spore-accent/50 hover:text-spore-text'
               }`}
-              title="编辑文件内容"
+              title={t('chatPanel.fileEditorContent.editTitle')}
             >
-              编辑
+              {t('common.edit')}
             </button>
           </div>
 
@@ -124,9 +126,9 @@ export const FileEditorContent: React.FC = () => {
                 ? 'bg-spore-highlight hover:bg-spore-highlight-hover text-white'
                 : 'bg-spore-accent/30 text-spore-muted cursor-not-allowed'
             }`}
-            title="保存 (Ctrl+S)"
+            title={t('chatPanel.fileEditorContent.saveTitle')}
           >
-            {isSaving ? '保存中...' : '保存'}
+            {isSaving ? t('chatPanel.fileEditorContent.saving') : t('common.save')}
           </button>
         </div>
       </div>
@@ -134,12 +136,13 @@ export const FileEditorContent: React.FC = () => {
       <div className="flex-1 overflow-hidden p-2">
         {isLoading ? (
           <div className="flex items-center justify-center h-full">
-            <span className="text-spore-muted">加载中...</span>
+            <span className="text-spore-muted">{t('common.loading')}</span>
           </div>
         ) : viewMode === 'preview' ? (
           <SyntaxPreviewBoundary
             key={activeFile.path}
             resetKey={`${activeFile.path}:${activeFile.content.length}:${language.id}`}
+            fallbackText={t('chatPanel.fileEditorContent.previewFailed')}
           >
             <SyntaxHighlighter
               content={activeFile.content}

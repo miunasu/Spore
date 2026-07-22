@@ -8,8 +8,10 @@
 import React from 'react';
 import { useSecurityStore } from '../../stores/securityStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useT } from '../../i18n';
 
 export const SecurityRemediationModal: React.FC = () => {
+  const t = useT();
   const incidents = useSecurityStore((state) => state.incidents);
   const removeIncident = useSecurityStore((state) => state.removeIncident);
   const conversations = useChatStore((state) => state.conversations);
@@ -30,10 +32,10 @@ export const SecurityRemediationModal: React.FC = () => {
         id: `remediation_${Date.now()}`,
         role: 'assistant',
         content:
-          `🛡️ 安全 Agent 处置建议（用户选择手动处理）\n` +
-          (incident.summary ? `概述：${incident.summary}\n` : '') +
-          (incident.impact ? `可能影响：${incident.impact}\n` : '') +
-          (steps ? `排查/修复步骤：\n${steps}` : ''),
+          t('securityModal.manualLogTitle') + '\n' +
+          (incident.summary ? t('securityModal.manualLogSummary', { text: incident.summary }) + '\n' : '') +
+          (incident.impact ? t('securityModal.manualLogImpact', { text: incident.impact }) + '\n' : '') +
+          (steps ? t('securityModal.manualLogSteps', { steps }) : ''),
         timestamp: Date.now(),
       });
     }
@@ -58,16 +60,16 @@ export const SecurityRemediationModal: React.FC = () => {
           <span className="text-lg">🚨</span>
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold text-spore-text">
-              安全 Agent 已熔断会话
-              {sourceConv ? `（${sourceConv.name}）` : ''}
+              {t('securityModal.circuitBroken')}
+              {sourceConv ? t('securityModal.sessionSuffix', { name: sourceConv.name }) : ''}
             </div>
             <div className="text-xs text-spore-muted">
-              检测到恶意命令，已中断该会话及其子 Agent
+              {t('securityModal.detectedMalicious')}
             </div>
           </div>
           {queuedCount > 0 && (
             <span className="text-[11px] px-1.5 py-0.5 rounded bg-spore-accent/40 text-spore-muted flex-shrink-0">
-              还有 {queuedCount} 起待处理
+              {t('securityModal.queued', { n: queuedCount })}
             </span>
           )}
         </div>
@@ -75,20 +77,20 @@ export const SecurityRemediationModal: React.FC = () => {
         {/* 研判结果 */}
         <div className="px-4 py-3 space-y-2 max-h-[55vh] overflow-y-auto">
           <div>
-            <div className="text-xs text-spore-muted mb-1">恶意命令（已执行）</div>
+            <div className="text-xs text-spore-muted mb-1">{t('securityModal.maliciousCommandExecuted')}</div>
             <div className="text-xs font-mono text-spore-text bg-spore-accent/30 rounded-lg px-2 py-1.5 break-all">
               {incident.command}
             </div>
           </div>
           {incident.intent && (
             <div className="text-xs text-spore-text">
-              <span className="text-spore-muted">意图：</span>
+              <span className="text-spore-muted">{t('securityModal.intentLabel')}</span>
               {incident.intent}
             </div>
           )}
           {incident.maliciousReason && (
             <div className="text-xs text-red-400">
-              <span className="text-spore-muted">恶意原因：</span>
+              <span className="text-spore-muted">{t('securityModal.maliciousReasonLabel')}</span>
               {incident.maliciousReason}
             </div>
           )}
@@ -98,26 +100,26 @@ export const SecurityRemediationModal: React.FC = () => {
             {!incident.adviceReady ? (
               <div className="flex items-center gap-2 py-2 text-xs text-spore-muted">
                 <span className="inline-block w-3 h-3 rounded-full border-2 border-spore-muted border-t-transparent animate-spin" />
-                安全 Agent 正在生成处置建议…
+                {t('securityModal.generatingAdvice')}
               </div>
             ) : (
               <div className="space-y-2">
                 {incident.summary && (
                   <div className="text-xs text-spore-text">
-                    <span className="text-spore-muted">概述：</span>
+                    <span className="text-spore-muted">{t('securityModal.summaryLabel')}</span>
                     {incident.summary}
                   </div>
                 )}
                 {incident.impact && (
                   <div className="text-xs text-spore-text">
-                    <span className="text-spore-muted">可能影响：</span>
+                    <span className="text-spore-muted">{t('securityModal.impactLabel')}</span>
                     {incident.impact}
                   </div>
                 )}
                 {(incident.manualSteps || []).length > 0 && (
                   <div>
                     <div className="text-xs text-spore-muted mb-1">
-                      排查 / 修复步骤
+                      {t('securityModal.stepsTitle')}
                     </div>
                     <ol className="space-y-1">
                       {(incident.manualSteps || []).map((step, index) => (
@@ -130,7 +132,7 @@ export const SecurityRemediationModal: React.FC = () => {
                 )}
                 {incident.aiGenerated === false && (
                   <div className="text-[11px] text-spore-muted">
-                    （AI 建议生成失败，以上为通用处置建议）
+                    {t('securityModal.aiFailedNote')}
                   </div>
                 )}
               </div>
@@ -144,15 +146,15 @@ export const SecurityRemediationModal: React.FC = () => {
             onClick={handleManual}
             className="px-3 py-1.5 text-sm rounded-lg bg-spore-accent hover:bg-spore-border text-spore-text transition-colors"
           >
-            我来手动处理
+            {t('securityModal.manualButton')}
           </button>
           <button
             onClick={handleAutoFix}
             disabled={autoFixDisabled}
             title={
               autoFixDisabled
-                ? '等待安全 Agent 生成处置建议后可用'
-                : '新建会话，由 Spore 按安全 Agent 的建议自动排查与修复'
+                ? t('securityModal.autoFixDisabledTip')
+                : t('securityModal.autoFixTip')
             }
             className={`px-3 py-1.5 text-sm rounded-lg text-white transition-colors whitespace-nowrap ${
               autoFixDisabled
@@ -160,7 +162,7 @@ export const SecurityRemediationModal: React.FC = () => {
                 : 'bg-red-600 hover:bg-red-700'
             }`}
           >
-            🔧 自动修复（新建会话）
+            {t('securityModal.autoFixButton')}
           </button>
         </div>
       </div>

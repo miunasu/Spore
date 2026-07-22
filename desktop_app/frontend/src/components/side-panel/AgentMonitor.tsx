@@ -4,6 +4,7 @@
  */
 import React, { useRef, useEffect, useMemo, memo } from 'react';
 import { useAgentStore } from '../../stores/agentStore';
+import { useT } from '../../i18n';
 import { shallow } from 'zustand/shallow';
 
 // 尝试解析并格式化 JSON
@@ -94,6 +95,7 @@ LogItem.displayName = 'LogItem';
 
 // 独立的 Agent 面板，直接从 agentsById 订阅
 const AgentPanelConnected: React.FC<{ agentId: string; height: string }> = memo(({ agentId, height }) => {
+  const t = useT();
   // 直接订阅这个特定 agent 的数据，使用 shallow 比较
   const agent = useAgentStore((state) => state.agentsById[agentId], shallow);
   
@@ -146,7 +148,7 @@ const AgentPanelConnected: React.FC<{ agentId: string; height: string }> = memo(
         onScroll={handleScroll}
       >
         {visibleLogs.length === 0 ? (
-          <div className="text-spore-muted text-center py-2">等待输出...</div>
+          <div className="text-spore-muted text-center py-2">{t('agentMonitor.waitingOutput')}</div>
         ) : (
           <div className="space-y-1">
             {visibleLogs.map((log, index) => (
@@ -162,6 +164,7 @@ const AgentPanelConnected: React.FC<{ agentId: string; height: string }> = memo(
 AgentPanelConnected.displayName = 'AgentPanelConnected';
 
 export const AgentMonitor: React.FC = () => {
+  const t = useT();
   // 只订阅 agentIds，使用 shallow 比较
   const agentIds = useAgentStore((state) => state.agentIds, shallow);
   const agentCount = agentIds.length;
@@ -184,7 +187,7 @@ export const AgentMonitor: React.FC = () => {
               d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
             />
           </svg>
-          <p>暂无活跃的 Agent</p>
+          <p>{t('agentMonitor.noActiveAgents')}</p>
         </div>
       </div>
     );

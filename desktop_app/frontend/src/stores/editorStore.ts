@@ -3,6 +3,7 @@
  */
 import { create } from 'zustand';
 import { filesApi } from '../services/api';
+import { t } from '../i18n';
 
 interface EditorFile {
   path: string;
@@ -72,7 +73,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
     } catch (err) {
       set({
-        error: '打开文件失败',
+        error: t('stores.editor.openFileFailed'),
         isLoading: false,
       });
     }
@@ -140,7 +141,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       });
     } catch (err) {
       set({
-        error: '保存失败',
+        error: t('stores.editor.saveFailed'),
         isSaving: false,
       });
     }

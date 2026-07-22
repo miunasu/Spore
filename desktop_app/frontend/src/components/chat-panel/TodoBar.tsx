@@ -6,8 +6,10 @@
 import React from 'react';
 import { useTodoStore } from '../../stores/todoStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useT } from '../../i18n';
 
 export const TodoBar: React.FC = () => {
+  const t = useT();
   const { getTodos, isExpanded, toggleExpanded } = useTodoStore();
   const activeConversationId = useChatStore((state) => state.activeConversationId);
   
@@ -64,7 +66,7 @@ export const TodoBar: React.FC = () => {
 
         {/* 当前任务 */}
         <span className="flex-1 text-sm text-spore-text truncate">
-          {currentTask ? currentTask.content : '所有任务已完成'}
+          {currentTask ? currentTask.content : t('todoBar.allTasksCompleted')}
         </span>
 
         {/* 进度 */}

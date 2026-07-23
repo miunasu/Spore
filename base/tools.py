@@ -142,7 +142,7 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "PowerShell命令字符串（通过-EncodedCommand传递，引号安全）。单行直接写command=xxx；多行使用@SPORE:CONTENT格式传参。多行Python固定格式：@'(换行)python代码(换行)'@ | python -"},
-                    "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
+                    "timeout": {"type": "integer", "description": "超时时间（秒），默认60秒；传入0表示无限制等待，直到命令自行结束。对于耗时较长的命令（如IDA分析），建议设置更长超时"},
                     "working_dir": {"type": "string", "description": "工作目录（可选），指定命令执行的目录路径"}
                 },
                 "required": ["command"],

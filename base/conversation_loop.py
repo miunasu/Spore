@@ -639,6 +639,12 @@ class ConversationLoop:
 
         try:
             no_timeout_tools = ["multi_agent_dispatch", "file"]
+            if tool_name == "execute_command":
+                try:
+                    if int((args or {}).get("timeout")) == 0:
+                        no_timeout_tools.append(tool_name)
+                except (TypeError, ValueError):
+                    pass
             timed_out = False
 
             if tool_name in no_timeout_tools:

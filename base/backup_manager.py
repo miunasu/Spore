@@ -61,13 +61,14 @@ class BackupManager:
         if not base_path.is_absolute():
             base_path = Path(_PROJECT_ROOT) / base_path
         self.root = base_path
-        self.backups_dir = self.root / "backups"
-        self.metadata_path = self.root / "metadata" / "file_history.json"
+        # 移除全局路径，改为会话级动态获取
+        # self.backups_dir 和 self.metadata_path 现在通过 _get_session_backup_dir 和 _get_session_metadata_path 获取
         self.checkpoints_dir = self.root / "checkpoints"
         self.audit_path = self.root / "security_audit.jsonl"
 
         self._lock = threading.RLock()
-        self._metadata: Optional[Dict[str, Any]] = None
+        # 元数据改为按会话缓存：{session_id: metadata_dict}
+        self._metadata_cache: Dict[str, Dict[str, Any]] = {}
         self._checkpoint_counter = 0
         # 待提交的对话点上下文（按会话）：ACTION 执行前登记，
         # 本轮首次实际记录文件版本时提交为 checkpoint，轮末清除
@@ -91,32 +92,56 @@ class BackupManager:
         return getattr(get_config(), "backup_max_delete_files", 200)
 
     # ------------------------------------------------------------------
+    # 会话级路径获取
+    # ------------------------------------------------------------------
+    def _get_session_backup_dir(self, session_id: Optional[str]) -> Path:
+        """获取会话级备份目录"""
+        if session_id:
+            return self.root / "backups" / session_id
+        # 后向兼容：无 session_id 时使用全局目录
+        return self.root / "backups" / "__global__"
+    
+    def _get_session_metadata_path(self, session_id: Optional[str]) -> Path:
+        """获取会话级元数据路径"""
+        if session_id:
+            return self.root / "metadata" / f"{session_id}_file_history.json"
+        # 后向兼容：无 session_id 时使用全局文件
+        return self.root / "metadata" / "file_history.json"
+
+    # ------------------------------------------------------------------
     # 元数据
     # ------------------------------------------------------------------
-    def _load_metadata(self) -> Dict[str, Any]:
-        if self._metadata is not None:
-            return self._metadata
+    def _load_metadata(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """加载会话级元数据"""
+        cache_key = session_id or "__global__"
+        if cache_key in self._metadata_cache:
+            return self._metadata_cache[cache_key]
+        
         data: Dict[str, Any] = {}
-        if self.metadata_path.is_file():
+        metadata_path = self._get_session_metadata_path(session_id)
+        if metadata_path.is_file():
             try:
-                with open(self.metadata_path, "r", encoding="utf-8") as f:
+                with open(metadata_path, "r", encoding="utf-8") as f:
                     raw = json.load(f)
                 if isinstance(raw, dict):
                     data = raw
             except Exception as e:
-                log_error("BACKUP_METADATA_LOAD_ERROR", "Failed to load file_history.json", e)
-        self._metadata = data
+                log_error("BACKUP_METADATA_LOAD_ERROR", f"Failed to load {metadata_path.name}", e)
+        self._metadata_cache[cache_key] = data
         return data
 
-    def _save_metadata(self) -> None:
+    def _save_metadata(self, session_id: Optional[str] = None) -> None:
+        """保存会话级元数据"""
+        cache_key = session_id or "__global__"
+        metadata_path = self._get_session_metadata_path(session_id)
         try:
-            self.metadata_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.metadata_path.with_suffix(".json.tmp")
+            metadata_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = metadata_path.with_suffix(".json.tmp")
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self._metadata or {}, f, ensure_ascii=False, indent=1)
-            tmp.replace(self.metadata_path)
+                json.dump(self._metadata_cache.get(cache_key, {}), f, ensure_ascii=False, indent=1)
+            tmp.replace(metadata_path)
         except Exception as e:
-            log_error("BACKUP_METADATA_SAVE_ERROR", "Failed to save file_history.json", e)
+            log_error("BACKUP_METADATA_SAVE_ERROR", f"Failed to save {metadata_path.name}", e)
 
     @staticmethod
     def _normalize(path: str) -> str:
@@ -266,7 +291,8 @@ class BackupManager:
             return None  # 超大文件不做备份
 
         with self._lock:
-            meta = self._load_metadata()
+            # 使用会话级元数据
+            meta = self._load_metadata(session_id)
             path_hash = self._path_hash(norm_path)
             entry = meta.get(norm_path)
             if entry is None:
@@ -275,7 +301,9 @@ class BackupManager:
             versions: List[Dict[str, Any]] = entry["versions"]
             version_id = len(versions) + 1
 
-            backup_dir = self.backups_dir / path_hash
+            # 使用会话级备份目录
+            session_backup_dir = self._get_session_backup_dir(session_id)
+            backup_dir = session_backup_dir / path_hash
             backup_dir.mkdir(parents=True, exist_ok=True)
 
             # 首个版本且原文件存在：先存 baseline（修改前的原始内容）
@@ -318,24 +346,28 @@ class BackupManager:
                 "size": len(after) if after is not None else 0,
                 "session": session_id,
             })
-            self._save_metadata()
+            # 使用会话级保存
+            self._save_metadata(session_id)
             # 本轮首次实际改动文件：提交该轮登记的对话点快照
             self._commit_pending_checkpoint(session_id)
             return version_id
 
-    def _reconstruct(self, norm_path: str, target_version: int) -> Tuple[bool, Optional[bytes]]:
+    def _reconstruct(self, norm_path: str, target_version: int, session_id: Optional[str] = None) -> Tuple[bool, Optional[bytes]]:
         """
         重建文件在指定版本时的内容。
 
         target_version=0 表示 baseline（首次备份前的原始内容）。
         返回 (成功, 内容)；内容为 None 表示该版本文件不存在（已删除/尚未创建）。
         """
-        meta = self._load_metadata()
+        # 使用会话级元数据
+        meta = self._load_metadata(session_id)
         entry = meta.get(norm_path)
         if entry is None:
             return False, None
         versions: List[Dict[str, Any]] = entry["versions"]
-        backup_dir = self.backups_dir / entry["path_hash"]
+        # 使用会话级备份目录
+        session_backup_dir = self._get_session_backup_dir(session_id)
+        backup_dir = session_backup_dir / entry["path_hash"]
         baseline_path = backup_dir / "baseline.full"
 
         if target_version == 0:
@@ -390,7 +422,8 @@ class BackupManager:
         """
         norm = self._normalize(file_path)
         with self._lock:
-            meta = self._load_metadata()
+            # 使用会话级元数据
+            meta = self._load_metadata(session_id)
             entry = meta.get(norm)
             if entry is None:
                 return {"ok": False, "error": f"没有该文件的备份记录: {norm}"}
@@ -403,7 +436,8 @@ class BackupManager:
             if version_id > latest:
                 return {"ok": False, "error": f"版本号超出范围: {version_id} (最新 {latest})"}
 
-            ok, content = self._reconstruct(norm, version_id)
+            # 传递 session_id 到 _reconstruct
+            ok, content = self._reconstruct(norm, version_id, session_id)
             if not ok:
                 return {"ok": False, "error": f"重建版本内容失败: {norm} v{version_id}"}
 
@@ -437,24 +471,27 @@ class BackupManager:
                 "deleted": content is None,
             }
 
-    def get_history(self, file_path: str) -> Dict[str, Any]:
+    def get_history(self, file_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """查看某文件的版本历史。"""
         norm = self._normalize(file_path)
         with self._lock:
-            meta = self._load_metadata()
+            # 使用会话级元数据
+            meta = self._load_metadata(session_id)
             entry = meta.get(norm)
             if entry is None:
                 return {"ok": False, "error": f"没有该文件的备份记录: {norm}"}
+            # 使用会话级备份目录
+            session_backup_dir = self._get_session_backup_dir(session_id)
             return {
                 "ok": True,
                 "path": norm,
-                "has_baseline": (self.backups_dir / entry["path_hash"] / "baseline.full").exists(),
+                "has_baseline": (session_backup_dir / entry["path_hash"] / "baseline.full").exists(),
                 "versions": entry["versions"],
             }
 
-    def list_tracked_files(self) -> List[str]:
+    def list_tracked_files(self, session_id: Optional[str] = None) -> List[str]:
         with self._lock:
-            return list(self._load_metadata().keys())
+            return list(self._load_metadata(session_id).keys())
 
     # ------------------------------------------------------------------
     # 对话点快照 (Checkpoint)
@@ -507,7 +544,8 @@ class BackupManager:
             return None
         with self._lock:
             if files is None:
-                meta = self._load_metadata()
+                # 使用会话级元数据
+                meta = self._load_metadata(session_id)
                 files = {
                     path: (entry["versions"][-1]["id"] if entry["versions"] else 0)
                     for path, entry in meta.items()
@@ -555,7 +593,8 @@ class BackupManager:
         if not self.enabled:
             return
         with self._lock:
-            meta = self._load_metadata()
+            # 使用会话级元数据
+            meta = self._load_metadata(session_id)
             files = {
                 path: (entry["versions"][-1]["id"] if entry["versions"] else 0)
                 for path, entry in meta.items()
@@ -643,7 +682,8 @@ class BackupManager:
                 target = checkpoints[idx]
 
             cp_files: Dict[str, int] = target.get("files", {})
-            meta = self._load_metadata()
+            # 使用会话级元数据
+            meta = self._load_metadata(session_id)
 
             restored: List[str] = []
             deleted: List[str] = []

@@ -43,6 +43,28 @@ class SessionConversationLoop(ConversationLoop):
         # 初始化文本协议管理器
         from base.text_protocol import ProtocolManager
         self.protocol_manager = ProtocolManager()
+
+        # 初始化 Learning 系统（情景记忆检索）
+        # 注意：本类不调用父类 __init__，所以父类里的 learning 初始化
+        # 不会执行，必须在这里同步维护，否则 send_chat_request 会
+        # AttributeError: no attribute 'retriever'
+        self._task_start_query = None
+        self._task_start_time = None
+        try:
+            from learning import EpisodicRetriever
+            self.retriever = EpisodicRetriever()
+        except Exception as e:
+            # Learning 模块不可用时降级运行
+            self.retriever = None
+            try:
+                from base.logger import log_error
+                log_error(
+                    "LEARNING_INIT_ERROR",
+                    f"Failed to initialize learning system: {e}",
+                    e,
+                )
+            except Exception:
+                pass
     
     @property
     def state(self):

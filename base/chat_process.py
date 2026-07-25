@@ -110,6 +110,11 @@ class ChatProcess:
         last_result = None
         for attempt, delay in enumerate(self._RETRY_DELAYS):
             if delay > 0:
+                # 显示重试进度到 Desktop error 日志
+                log_error(
+                    "LLM_API_RETRY_PROGRESS",
+                    f"请求失败，{delay}秒后进行第 {attempt + 1} 次重试..."
+                )
                 time.sleep(delay)
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}

@@ -66,6 +66,19 @@ class ConversationLoop:
         self.protocol_manager = ProtocolManager()
         self._request_id_lock = threading.Lock()
         self._current_request_id: Optional[str] = None
+        
+        # 初始化 Learning 系统（情景记忆检索）
+        # 这两个字段必须在 try 之外赋值：即使 EpisodicRetriever 构造失败，
+        # 后续任务完成分支也会读取它们
+        self._task_start_query = None  # 记录任务开始时的用户查询
+        self._task_start_time = None   # 记录任务开始时间
+        try:
+            from learning import EpisodicRetriever
+            self.retriever = EpisodicRetriever()
+        except Exception as e:
+            # Learning 模块不可用时降级运行
+            self.retriever = None
+            log_error("LEARNING_INIT_ERROR", f"Failed to initialize learning system: {e}", e)
     
     @property
     def state(self):
@@ -498,8 +511,33 @@ class ConversationLoop:
         if base_prompt:
             # Use filtered tool definitions (mode baseline + session policy, sub-tools)
             tool_definitions = self._get_current_tool_definitions()
+            
+            # 注入 Learning 系统的历史上下文（情景记忆检索）
+            learning_context = ""
+            if self.retriever is not None and self.state.messages:
+                try:
+                    # 获取最后一条用户消息作为查询
+                    last_user_msg = next((m for m in reversed(self.state.messages) if m["role"] == "user"), None)
+                    if last_user_msg:
+                        user_query = last_user_msg["content"]
+                        # 记录任务开始的查询（用于后续记录）
+                        if not self._task_start_query:
+                            self._task_start_query = user_query
+                            self._task_start_time = time.time()
+                        
+                        # 检索相关历史（限制3条，避免占用过多token）
+                        learning_context = self.retriever.get_injection_context(
+                            user_query=user_query,
+                            task_type="general_task",
+                            max_episodes=3
+                        )
+                        if learning_context:
+                            learning_context = f"\n\n## 相关历史经验\n{learning_context}\n"
+                except Exception as e:
+                    log_error("LEARNING_RETRIEVAL_ERROR", f"Failed to retrieve learning context: {e}", e)
+            
             current_system_prompt = self.protocol_manager.inject_protocol(
-                base_prompt,
+                base_prompt + learning_context,
                 tool_definitions,
             )
         else:
@@ -995,6 +1033,36 @@ class ConversationLoop:
 
             # 回合完成：按会话 upsert 短记忆（最近 10 个会话）
             auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
+            
+            # Learning 系统：记录任务执行结果
+            if self.retriever is not None and self._task_start_query:
+                try:
+                    # 收集工具调用记录
+                    tool_calls = []
+                    for msg in self.state.messages:
+                        if msg.get("role") == "assistant":
+                            action = self._parse_action_block_from_message(msg.get("content", ""))
+                            if action:
+                                tool_calls.append({
+                                    "tool": action.tool_name,
+                                    "args": action.parameters
+                                })
+                    
+                    # 记录任务执行
+                    self.retriever.record_task_execution(
+                        task_type="general_task",
+                        user_query=self._task_start_query,
+                        output_data={"final_reply": display_text or parsed.stop_reason_text},
+                        outcome="success",
+                        tool_calls=tool_calls,
+                        salience=0.7  # 默认显著性
+                    )
+                except Exception as e:
+                    log_error("LEARNING_RECORD_ERROR", f"Failed to record task execution: {e}", e)
+                finally:
+                    # 重置任务追踪
+                    self._task_start_query = None
+                    self._task_start_time = None
 
             # 清理状态
             self.state.restore_temp_messages()

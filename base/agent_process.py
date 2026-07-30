@@ -427,7 +427,12 @@ class SubAgentThread(threading.Thread):
         
         # 用于循环检测
         self._last_answer = ""
-        
+        # 连续空响应 / 截断计数（用于上限保护）
+        _empty_streak = 0
+        _truncation_streak = 0
+        _MAX_EMPTY_STREAK = 2
+        _MAX_TRUNCATION_STREAK = 3
+
         iteration = 0
         completed = False
         try:
@@ -456,28 +461,137 @@ class SubAgentThread(threading.Thread):
                     self.log_output("请求被取消")
                     self.database.set_status(AgentStatus.INTERRUPTED)
                     return
-                
-                if response.get("status") != "success":
+
+                status = response.get("status")
+
+                if status == "empty_response":
+                    # 模型无文本输出：计数重试，超限后放弃
+                    _empty_streak += 1
+                    self.log_output(
+                        f"收到空响应 ({_empty_streak}/{_MAX_EMPTY_STREAK})", "WARNING"
+                    )
+                    self._log_to_agent_file(
+                        f"empty_response (迭代 {iteration}, 连续第 {_empty_streak} 次)",
+                        "WARNING",
+                    )
+                    if _empty_streak >= _MAX_EMPTY_STREAK:
+                        self.log_output("连续空响应超限，停止任务", "ERROR")
+                        self.database.set_error(f"连续空响应 {_MAX_EMPTY_STREAK} 次")
+                        return
+                    # 必须往历史里注入反馈再重试：什么都不改就 continue，下一轮发出的
+                    # 是逐字节相同的请求，模型只会给出同样的空回复，白烧一轮 token。
+                    # 空回复本身不能写进历史（空 assistant 消息会让后续请求全被 400 拒），
+                    # 所以这里注入的是一条 user 侧的 @SPORE:RESULT 反馈。
+                    self.messages.append({
+                        "role": "user",
+                        "content": self.protocol_manager.format_empty_response(
+                            attempt=_empty_streak
+                        ),
+                    })
+                    continue
+                _empty_streak = 0  # 收到任何有内容的状态即重置
+
+                if status == "refusal":
+                    # 模型明确拒绝生成，不可重试
+                    self.log_output("模型拒绝生成内容，停止任务", "ERROR")
+                    self._log_to_agent_file(f"refusal (迭代 {iteration})", "ERROR")
+                    self.database.set_error("模型拒绝生成内容")
+                    return
+
+                if status == "error":
                     error_msg = response.get("data", "未知错误")
                     self.log_output(f"请求失败: {error_msg}", "ERROR")
                     self.database.set_error(error_msg)
                     return
-                
+
+                if status != "success":
+                    # 未知状态——宽容跳过，不污染历史
+                    self.log_output(f"未知响应状态: {status!r}，跳过本轮", "WARNING")
+                    self._log_to_agent_file(
+                        f"未知状态 {status!r} (迭代 {iteration})", "WARNING"
+                    )
+                    continue
+
+                # ── status == "success" ──────────────────────────────────────
                 # 处理响应（使用文本协议）
                 reply_data = response.get("data", {})
                 reply_content = reply_data.get("content", "")
-                
+
+                # 从健康元数据提取截断标志，供协议层消歧
+                reply_meta = {
+                    "truncated":         reply_data.get("truncated"),
+                    "api_stop_reason":   reply_data.get("api_stop_reason"),
+                    "finish_state":      reply_data.get("finish_state"),
+                    "truncation_source": reply_data.get("truncation_source"),
+                    "max_tokens":        reply_data.get("max_tokens"),
+                }
+                is_truncated = bool(reply_meta.get("truncated"))
+
                 # 检查回复是否为空或只包含空白字符
+                # （正常路径下 empty_response 已在上面拦截，此处作防御性保留）
                 if not reply_content or not reply_content.strip():
                     self.log_output("收到空响应或纯空白响应", "WARNING")
-                    self._log_to_agent_file(f"收到空响应: {repr(reply_content)}", "WARNING")
+                    self._log_to_agent_file(
+                        f"收到空响应: {repr(reply_content)}", "WARNING"
+                    )
                     continue
                 
                 # 记录LLM完整回复到子Agent日志
-                self._log_to_agent_file(f"LLM回复 (长度: {len(reply_content)})\n{reply_content}", "DEBUG")
-                
-                # 使用 ProtocolManager 解析响应
-                parsed = self.protocol_manager.parse_response(reply_content)
+                self._log_to_agent_file(
+                    f"LLM回复 (长度: {len(reply_content)}, truncated={is_truncated})\n{reply_content}",
+                    "DEBUG",
+                )
+
+                # 使用 ProtocolManager 解析响应（传入截断标志以消歧协议错误）
+                parsed = self.protocol_manager.parse_response(
+                    reply_content, truncated=is_truncated
+                )
+
+                # ── 截断回复特殊处理 ─────────────────────────────────────────
+                # final 是例外，与主 Agent（conversation_loop.validate_and_check_response）
+                # 保持一致：_scan_protocol 对未闭合的协议块一律报错，能解析出 final
+                # 说明协议结构本身完整，不必为一条结构完整的回复再跑一轮截断重试。
+                # 但要留一条警告：单行 STOP_REASON= 的原因若正好在行中被砍断，
+                # 结果里就会少一小截，事后只有这条日志能指向真正原因。
+                if (is_truncated or parsed.truncated) and parsed.response_type == "final":
+                    self.log_output(
+                        "最终回复被标记为截断，但协议结构完整，按任务完成处理", "WARNING"
+                    )
+                    self._log_to_agent_file(
+                        f"截断但按 final 接受 (迭代 {iteration}, "
+                        f"api_stop_reason={reply_meta.get('api_stop_reason')!r}, "
+                        f"truncation_source={reply_meta.get('truncation_source')!r})："
+                        f"若结果末尾缺内容，优先怀疑这里",
+                        "WARNING",
+                    )
+                elif is_truncated or parsed.truncated:
+                    _truncation_streak += 1
+                    self.log_output(
+                        f"回复被截断 ({_truncation_streak}/{_MAX_TRUNCATION_STREAK})，"
+                        f"来源: {reply_meta.get('truncation_source', '?')}",
+                        "WARNING",
+                    )
+                    self._log_to_agent_file(
+                        f"截断 (迭代 {iteration}, 连续第 {_truncation_streak} 次, "
+                        f"api_stop_reason={reply_meta.get('api_stop_reason')!r})",
+                        "WARNING",
+                    )
+                    # 保留截断回复在历史中以供续写，但不执行其中的 ACTION
+                    self.messages.append({"role": "assistant", "content": reply_content})
+                    if _truncation_streak >= _MAX_TRUNCATION_STREAK:
+                        self.log_output("连续截断超限，停止任务", "ERROR")
+                        self.database.set_error(f"连续截断 {_MAX_TRUNCATION_STREAK} 次")
+                        return
+                    # 注入 OutputTruncated 反馈，让模型从截断处续写
+                    trunc_feedback = self.protocol_manager.format_truncated(
+                        attempt=_truncation_streak,
+                        api_stop_reason=reply_meta.get("api_stop_reason"),
+                        max_output_tokens=reply_meta.get("max_tokens"),
+                        message="",
+                    )
+                    self.messages.append({"role": "user", "content": trunc_feedback})
+                    continue
+                _truncation_streak = 0  # 收到完整回复即重置
                 
                 if parsed.response_type == "action":
                     if parsed.action_block is None:

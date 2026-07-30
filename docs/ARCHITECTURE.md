@@ -364,7 +364,7 @@ file type=read file_path="C:/demo.txt"
 - 落盘：`base/logger.py` 按 `session_context` 写入 `logs/<启动时间>/conversations/<id>/`
 - 推送：`websocket/log_bridge.py` 附加 `conversation_id`；前端 `logStore` 按会话分桶
 - 正文不嵌入 `session_id`（仅路由字段携带会话信息）
-- Raw log 默认开启：每次 LLM 调用成功后，把 provider 返回的完整文本及 request/model/profile/usage 等元数据写入轮转 `raw.log`，不截断、不解析，也不推送到桌面日志面板
+- Raw log 默认开启：每次 LLM 调用后，把 provider 返回的完整文本、provider 原始响应体（`raw_payload`）及健康元数据（`health`，含 `api_stop_reason`/`finish_state`/`truncated`/usage 等）写入轮转 `raw.log`，不推送到桌面日志面板；成功、空响应、拒绝、截断、报错均落盘
 - 可解析 session 的主请求写入会话目录；辅助 Agent 等无法从 request ID 解析 session 的请求可能写入进程级 `raw.log`
 - Raw 内容不脱敏、不加密，可能包含模型复述的命令、文件内容、路径、凭据或个人数据；清空/删除会话不会删除已有日志，可用 `LOG_RAW_ENABLED=false` 禁用
 

@@ -224,10 +224,21 @@ def main() -> int:
                 # 解析响应数据
                 reply_data = response.get("data", {})
                 reply = reply_data.get("content", "")
-                
+
+                # 把 API 层的健康信息一并传给协议解析，让截断判定更准确
+                reply_meta = {
+                    "truncated": reply_data.get("truncated"),
+                    "api_stop_reason": reply_data.get("api_stop_reason"),
+                    "finish_state": reply_data.get("finish_state"),
+                    "truncation_source": reply_data.get("truncation_source"),
+                    "truncation_hint": reply_data.get("truncation_hint"),
+                    "usage": reply_data.get("usage"),
+                    "max_tokens": reply_data.get("max_tokens"),
+                }
+
                 # 使用文本协议验证和处理响应
                 # validate_and_check_response 会解析 ACTION/FINAL 并处理
-                validation_result = conv_loop.validate_and_check_response(reply)
+                validation_result = conv_loop.validate_and_check_response(reply, reply_meta=reply_meta)
                 if validation_result == "continue":
                     continue
                 elif validation_result == "break":

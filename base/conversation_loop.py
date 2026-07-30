@@ -167,14 +167,21 @@ class ConversationLoop:
         管理对话历史长度
         
         使用 LLM 返回的精确 input_tokens 判断是否超出限制。
-        Desktop 模式：从 state.last_input_tokens 获取
+        Desktop 模式：优先用 state.last_context_tokens（含缓存命中的真实上下文规模）
         CLI 模式：需要在调用后检查
         """
         # Desktop 模式：检查 state 中的 token 统计
         if os.environ.get('SPORE_DESKTOP_MODE') == '1':
-            current_tokens = getattr(self.state, 'last_input_tokens', 0)
+            # last_input_tokens 在 Anthropic 口径下不含 cache_read/cache_creation，
+            # 命中缓存时会小到个位数，只看它压缩永远不会触发
+            current_tokens = getattr(self.state, 'last_context_tokens', 0) or getattr(
+                self.state, 'last_input_tokens', 0
+            )
             if current_tokens == 0:
-                # 还没有 token 统计，跳过
+                # API 没给可用的 token 统计（第三方中转常见）：退回本地估算，
+                # 否则上下文压缩这条防线在整个 Desktop 模式下等于不存在
+                current_tokens = self._estimate_context_tokens()
+            if current_tokens == 0:
                 return
         else:
             # CLI 模式：使用 tiktoken 估算当前 context token 数
@@ -203,6 +210,7 @@ class ConversationLoop:
                 # 重置 token 统计
                 self.state.last_input_tokens = 0
                 self.state.last_output_tokens = 0
+                self.state.last_context_tokens = 0
                 self.state.cumulative_input_tokens = 0
                 self.state.cumulative_output_tokens = 0
             else:
@@ -212,6 +220,27 @@ class ConversationLoop:
                     self.state.messages.pop(0)
             
             terminal.extra_line += 2
+
+    def _estimate_context_tokens(self) -> int:
+        """本地估算当前上下文 token 数。
+
+        API 不返回可用 usage（第三方中转很常见）时的兜底。tiktoken 缺失时按
+        字符数粗估——宁可粗糙，也好过压缩机制完全失效直到撞上下文上限。
+        """
+        try:
+            return count_tokens(self.state.messages)
+        except Exception:
+            pass
+        try:
+            chars = sum(
+                len(msg.get("content") or "")
+                for msg in self.state.messages
+                if isinstance(msg, dict) and isinstance(msg.get("content"), str)
+            )
+            # 中英混排经验值：约 2.5 字符/token
+            return int(chars / 2.5)
+        except Exception:
+            return 0
 
     def _check_and_handle_oversized_tool_result(self) -> bool:
         """
@@ -453,9 +482,18 @@ class ConversationLoop:
     def fix_incomplete_messages(self) -> None:
         """
         修复不完整的消息（文本协议版本）
-        
-        检查是否有 assistant 消息包含 ACTION 块但没有对应的 RESULT 响应
+
+        1. 清掉历史中的空消息 —— 空 assistant 消息会让之后每一轮请求都被 400 拒掉
+        2. 检查是否有 assistant 消息包含 ACTION 块但没有对应的 RESULT 响应
         """
+        dropped = self.state.drop_blank_messages()
+        if dropped:
+            log_error(
+                "HISTORY_BLANK_MESSAGES_DROPPED",
+                f"从对话历史中清理了 {dropped} 条空消息",
+                context={"remaining": len(self.state.messages)},
+            )
+
         for i in range(len(self.state.messages) - 1, -1, -1):
             msg = self.state.messages[i]
             if msg.get("role") == "assistant":
@@ -479,19 +517,175 @@ class ConversationLoop:
                         })
                         break
     
+    # 空回复的协议层重试上限。
+    # chat 进程内部已按 API 层重试过一次（_MAX_EMPTY_ATTEMPTS），但那是**同一份请求**
+    # 原样重发；空回复多半是"思考把输出额度吃光、一个正文块都没产出"，只有把
+    # format_empty_response 反馈注入历史、让请求内容真的变了，模型才有机会换个输出
+    # 方式。每次重试都要付全额 token（且会与 chat 进程的重试相乘），所以必须有界。
+    MAX_EMPTY_RESPONSE_RETRIES = 2
+
     def send_chat_request(
         self,
         conversation_id: Optional[str] = None,
         expected_epoch: Optional[int] = None,
     ) -> Optional[Dict]:
         """
-        发送聊天请求并获取响应
-        
+        发送聊天请求并获取响应（空回复在协议层做有界重试）
+
+        对调用方的契约不变：要么返回一条含正文的成功响应，要么返回 None
+        （中断 / API 错误 / 模型拒答 / 空回复重试耗尽）。空回复的重试之所以放在
+        这一层而不是交给调用方，是因为只有这里同时握着 interrupt_epoch 与对话历史：
+        重试前必须校验中断世代，注入的反馈也必须能在放弃本轮时原样撤掉。
+
         参数:
             conversation_id: 会话ID，用于绑定 request_id（Desktop 模式）
-        
+            expected_epoch: 期望的中断世代。与 state.interrupt_epoch 不一致说明本轮
+                已被用户中断，不再重试（CLI 不传，靠 Ctrl+C 的 KeyboardInterrupt 打断）。
+
         返回:
             响应字典，如果失败或中断返回None
+        """
+        # 新的用户轮次开始时清掉上一轮残留的连续截断计数
+        self._reset_round_streaks()
+
+        # 本方法注入历史的反馈消息（按对象身份记录）。放弃本轮时原样撤掉：
+        # 一轮连正文都没拿到、却在历史里留下"请重新输出"的反馈是纯噪音；Desktop 侧
+        # 的 _rollback_interrupted_round 本来也会把它回滚，CLI 与之保持一致。
+        injected_feedback: list = []
+        empty_attempt = 0
+
+        while True:
+            response = self._send_chat_request_once(
+                conversation_id=conversation_id,
+                expected_epoch=expected_epoch,
+                # 规则提醒只在首次尝试时追加：llm_reply_count 在重试期间不变，
+                # 每次重试都追加会把同一段提醒往历史里反复堆。
+                inject_rule_reminder=(empty_attempt == 0),
+            )
+
+            if response is None or response.get("status") == "cancelled":
+                print("Spore> 对话中断，请继续")
+                self._drop_injected_feedback(injected_feedback)
+                return None
+
+            status = response.get("status")
+
+            if status == "error":
+                error_msg = response.get('data')
+                print(f"Spore> [错误] {error_msg}")
+                log_error("LLM_API_ERROR", f"Chat process returned error: {error_msg}")
+                self._drop_injected_feedback(injected_feedback)
+                return None
+
+            # refusal：模型明确拒答，重发同样的历史只会拿到同样的拒答，不重试。
+            if status == "refusal":
+                self._log_no_usable_reply(status, response)
+                print("Spore> [提示] 模型拒绝回答本轮请求，请补充说明或换个问法后重试")
+                self._drop_injected_feedback(injected_feedback)
+                return None
+
+            # empty_response：一个正文块都没收到。绝不能把空内容写进历史（写进去
+            # 之后每一轮请求都会被 API 以"消息为空或无效"400 拒掉），改为注入
+            # @SPORE:RESULT 反馈后重发，让模型知道上一轮的输出丢了。
+            if status == "empty_response":
+                empty_attempt += 1
+                self._log_no_usable_reply(status, response, attempt=empty_attempt)
+
+                if empty_attempt > self.MAX_EMPTY_RESPONSE_RETRIES:
+                    print(
+                        f"Spore> [提示] 模型连续 {empty_attempt} 次未返回任何内容，已停止本轮。"
+                        f"建议提高 MAX_OUTPUT_TOKENS 或降低思考预算后重试"
+                    )
+                    self._drop_injected_feedback(injected_feedback)
+                    return None
+
+                # 中断优先于重试：重试会用新的 request_id，之前 interrupt 打下的
+                # tombstone 拦不住它，必须在这里显式停手。
+                if self._round_interrupted(expected_epoch):
+                    self._drop_injected_feedback(injected_feedback)
+                    return None
+
+                print(
+                    f"Spore> [提示] 模型未返回任何内容，正在重试"
+                    f"（{empty_attempt}/{self.MAX_EMPTY_RESPONSE_RETRIES}）..."
+                )
+                feedback = {
+                    "role": "user",
+                    "content": self.protocol_manager.format_empty_response(attempt=empty_attempt),
+                }
+                self.state.messages.append(feedback)
+                injected_feedback.append(feedback)
+                continue
+
+            # Desktop 模式：从响应中提取 usage 并更新 state 的 token 统计
+            if os.environ.get('SPORE_DESKTOP_MODE') == '1':
+                reply_data = response.get("data", {})
+                usage = reply_data.get("usage", {})
+                if usage:
+                    input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
+                    output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+                    # context_tokens 含缓存命中，是判断上下文规模的唯一可靠口径
+                    context_tokens = usage.get("context_tokens", 0) or input_tokens
+                    if input_tokens > 0 or output_tokens > 0:
+                        self.state.update_token_stats(input_tokens, output_tokens, context_tokens)
+
+            return response
+
+    def _round_interrupted(self, expected_epoch: Optional[int]) -> bool:
+        """本轮是否已被用户中断（仅 Desktop 传 expected_epoch；CLI 走 KeyboardInterrupt）。"""
+        if expected_epoch is None:
+            return False
+        return getattr(self.state, "interrupt_epoch", expected_epoch) != expected_epoch
+
+    def _drop_injected_feedback(self, injected: list) -> None:
+        """撤掉本轮注入的反馈消息。
+
+        只在反馈消息仍处于历史末尾（且是同一个对象）时弹出；中途若已追加了别的
+        消息就立即停手 —— 宁可在历史里留一条噪音，也不能误删真实内容。
+        """
+        while injected:
+            message = injected.pop()
+            if self.state.messages and self.state.messages[-1] is message:
+                self.state.messages.pop()
+            else:
+                break
+
+    def _log_no_usable_reply(
+        self,
+        status: str,
+        response: Dict[str, Any],
+        attempt: Optional[int] = None,
+    ) -> None:
+        """记录"没拿到可用正文"的诊断上下文；失败静默，不挡主流程。"""
+        try:
+            data = response.get("data") or {}
+            context = {
+                "api_stop_reason": data.get("api_stop_reason"),
+                "finish_state": data.get("finish_state"),
+                "usage": data.get("usage"),
+                "max_tokens": data.get("max_tokens"),
+            }
+            if attempt is not None:
+                context["protocol_retry_attempt"] = attempt
+                context["protocol_retry_limit"] = self.MAX_EMPTY_RESPONSE_RETRIES
+            log_error(
+                "LLM_NO_USABLE_REPLY",
+                f"Chat process returned status={status}",
+                context=context,
+            )
+        except Exception:
+            pass
+
+    def _send_chat_request_once(
+        self,
+        conversation_id: Optional[str] = None,
+        expected_epoch: Optional[int] = None,
+        inject_rule_reminder: bool = True,
+    ) -> Optional[Dict]:
+        """发起一次请求并等待响应，原样返回 chat 进程的结果（不解释 status）。
+
+        状态语义的处理全部留给 send_chat_request，这样"要么真实响应、要么 None"
+        的对外契约只有一个地方在维护。
         """
         # 每次请求前重新加载 system_prompt，确保动态内容（TODO、角色、目录等）是最新的
         from .prompt_loader import load_system_prompt
@@ -503,7 +697,7 @@ class ConversationLoop:
         # 检查是否需要注入规则提醒（防止长对话遗忘）
         # 基于 LLM 回复次数触发
         from .rule_reminder import should_remind, get_rule_reminder
-        if should_remind(self.state.llm_reply_count, self.config.rule_reminder_interval):
+        if inject_rule_reminder and should_remind(self.state.llm_reply_count, self.config.rule_reminder_interval):
             reminder = get_rule_reminder(
                 short=self.config.rule_reminder_short,
                 tool_names=current_tool_names,
@@ -576,28 +770,8 @@ class ConversationLoop:
                 if self._current_request_id == request_id:
                     self._current_request_id = None
 
-        if response is None or response.get("status") == "cancelled":
-            print("Spore> 对话中断，请继续")
-            return None
-        
-        if response.get("status") == "error":
-            error_msg = response.get('data')
-            print(f"Spore> [错误] {error_msg}")
-            log_error("LLM_API_ERROR", f"Chat process returned error: {error_msg}")
-            return None
-        
-        # Desktop 模式：从响应中提取 usage 并更新 state 的 token 统计
-        if os.environ.get('SPORE_DESKTOP_MODE') == '1':
-            reply_data = response.get("data", {})
-            usage = reply_data.get("usage", {})
-            if usage:
-                input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
-                output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
-                if input_tokens > 0 or output_tokens > 0:
-                    self.state.update_token_stats(input_tokens, output_tokens)
-        
         return response
-    
+
     def _execute_single_action(self, action: ParsedAction) -> Dict[str, Any]:
         """Execute one parsed tool call, emit a tool_result event, and return a structured status."""
         execution = self._execute_single_action_impl(action)
@@ -947,24 +1121,192 @@ class ConversationLoop:
             todo_write(tasks, session_id=self._conversation_id_for_context())
             self._emit_event("todo_update", {"tasks": tasks})
     
-    def validate_and_check_response(self, reply: str) -> Optional[str]:
+    # 连续截断上限：超过就停下来交还给用户，避免"截断→重发→再截断"无限烧 token
+    MAX_TRUNCATION_STREAK = 3
+
+    # 连续截断计数与它所属的用户轮次。
+    # 必须写成类属性：Desktop 的 SessionConversationLoop 不调用本类 __init__，
+    # 放在 __init__ 里对它等于不存在（这也是下面仍用 getattr 兜底的原因）。
+    _truncation_streak: int = 0
+    _streak_user_seq: Optional[int] = None
+
+    def _reset_round_streaks(self) -> None:
+        """用户开启新一轮对话时，清掉上一轮残留的连续截断计数。
+
+        _handle_truncated_reply 只在"收到完整回复"和"达到上限"两处重置计数。
+        若上一轮在计数未清零时因中断/API 错误提前结束，残留的计数会让新一轮第一次
+        截断就直接撞上限、白白终止本轮。以用户消息条数的变化作为新轮次的判据
+        （追加 RESULT / 反馈这类系统消息不会改变它）。诊断类逻辑，失败静默。
+        """
+        try:
+            seq = getattr(self.state, "user_message_count", None)
+            if seq is None:
+                return
+            if self._streak_user_seq != seq:
+                self._streak_user_seq = seq
+                self._truncation_streak = 0
+        except Exception:
+            pass
+
+    def _handle_truncated_reply(
+        self,
+        reply: str,
+        parsed: "ParsedResponse",
+        meta: Dict[str, Any],
+    ) -> str:
+        """处理被输出上限截断的回复。
+
+        关键点：
+        - 不执行其中的 ACTION。半截的 CONTENT 参数会把被砍断的内容写进文件。
+        - 保留这条不完整的助手回复。删掉它，模型只能从头重写整份内容，
+          必然再次撞上限；留着它，模型才能"接着上次的位置继续写"。
+        - 反馈用 OutputTruncated 而非 ProtocolError。报成协议错误会让模型以为
+          自己标识符写错了，从而原样重发同一份超长内容 —— 这正是死循环的成因。
+        - 连续截断到上限就停手，把决定权交还用户。
+        """
+        streak = getattr(self, "_truncation_streak", 0) + 1
+        self._truncation_streak = streak
+
+        log_error(
+            "LLM_REPLY_TRUNCATED",
+            f"LLM 回复被截断（连续第 {streak} 次）",
+            context={
+                "api_stop_reason": meta.get("api_stop_reason"),
+                "finish_state": meta.get("finish_state"),
+                "truncation_source": meta.get("truncation_source"),
+                "truncation_hint": meta.get("truncation_hint"),
+                "usage": meta.get("usage"),
+                "max_tokens": meta.get("max_tokens"),
+                "reply_length": len(reply or ""),
+            },
+        )
+
+        if parsed.reply_content:
+            safe_print(f"{_config.current_agent_name}> {parsed.reply_content}")
+
+        if streak >= self.MAX_TRUNCATION_STREAK:
+            safe_print(
+                f"{_config.current_agent_name}> [提示] 回复连续 {streak} 次被输出上限截断，已停止本轮。"
+                f"建议提高 MAX_OUTPUT_TOKENS，或把任务拆小后重试。"
+            )
+            self._truncation_streak = 0
+            self.state.add_assistant_message(reply)
+            auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
+            self.state.last_answer = ""
+            return "break"
+
+        result_text = self.protocol_manager.format_truncated(
+            attempt=streak,
+            api_stop_reason=meta.get("api_stop_reason"),
+            max_output_tokens=meta.get("max_tokens"),
+        )
+        # 助手回复写不进历史（空内容被 add_assistant_message 拒掉）时绝不能只追加
+        # RESULT：那会让历史里出现一条无主的反馈，模型完全不知道在说哪次输出。
+        # 正常路径下 reply 已被 validate_and_check_response 保证非空，这里只兜底。
+        if not self.state.add_assistant_message(reply):
+            log_error(
+                "TRUNCATED_REPLY_NOT_RECORDED",
+                "截断回复内容为空，未写入历史，本轮直接结束",
+                context={"api_stop_reason": meta.get("api_stop_reason")},
+            )
+            self._truncation_streak = 0
+            self.state.last_answer = ""
+            return "break"
+        self.state.messages.append({"role": "user", "content": result_text})
+        auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
+        return "continue"
+
+    def _log_truncated_final_accepted(self, reply: str, meta: Dict[str, Any]) -> None:
+        """API 报了截断、但回复被当成完整最终答案接受时留一条警告。
+
+        没有这条日志，"最终答案少了一截"在事后完全无从排查：协议层解析成功，
+        历史里也是一条正常的 final 回复，唯一的线索只有 API 的 stop_reason。
+        诊断类逻辑，失败静默。
+        """
+        try:
+            log_error(
+                "LLM_TRUNCATED_FINAL_ACCEPTED",
+                "回复被 API 标记为截断，但协议结构完整且解析出 STOP_REASON，已按最终答案接受；"
+                "若用户反馈最终答案末尾缺内容，优先怀疑这里",
+                context={
+                    "api_stop_reason": meta.get("api_stop_reason"),
+                    "finish_state": meta.get("finish_state"),
+                    "truncation_source": meta.get("truncation_source"),
+                    "truncation_hint": meta.get("truncation_hint"),
+                    "usage": meta.get("usage"),
+                    "max_tokens": meta.get("max_tokens"),
+                    "reply_length": len(reply or ""),
+                },
+            )
+        except Exception:
+            pass
+
+    def validate_and_check_response(
+        self,
+        reply: str,
+        reply_meta: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """
         验证响应并检查状态（文本协议版本）
-        
+
         使用 ProtocolManager 解析响应，检测 ACTION、STOP_REASON 或继续状态
         同时解析 TODO 块并更新任务状态
-        
+
         参数:
             reply: LLM响应内容
-        
+            reply_meta: chat 进程给出的健康信息（truncated / api_stop_reason /
+                finish_state / usage / max_tokens）。缺省表示未知，此时截断判定
+                退化为按文本特征推断。
+
         返回:
             如果需要中断循环返回 "break"，如果需要继续返回 "continue"，否则返回 None
         """
+        meta = reply_meta or {}
+
+        # 空回复：绝不能写进历史（写进去会让后续每一轮都被 400 拒掉），
+        # 也没有任何可解析内容，直接结束本轮交还用户。
+        if not reply or not reply.strip():
+            log_error(
+                "EMPTY_LLM_REPLY",
+                "LLM 返回空回复，已丢弃且未写入对话历史",
+                context={
+                    "api_stop_reason": meta.get("api_stop_reason"),
+                    "finish_state": meta.get("finish_state"),
+                    "usage": meta.get("usage"),
+                },
+            )
+            safe_print(f"{_config.current_agent_name}> [提示] 模型未返回任何内容，本轮已跳过，请重试或换个问法")
+            self.state.last_answer = ""
+            return "break"
+
         # 解析并更新 TODO（如果 LLM 回复中包含 TODO 协议块）
         self._update_todo_from_response(reply)
 
-        # 使用 ProtocolManager 解析响应
-        parsed = self.protocol_manager.parse_response(reply)
+        # 使用 ProtocolManager 解析响应（把 API 层的截断结论一并交给协议层，
+        # 否则未闭合的协议块会被误报成"标识符写错了"）
+        truncated_flag = meta.get("truncated") if "truncated" in meta else None
+        parsed = self.protocol_manager.parse_response(reply, truncated=truncated_flag)
+
+        # 截断处理必须在 ACTION 执行之前：半截的 CONTENT 块一旦被当作正常参数执行，
+        # 会把被砍断的内容真的写进文件。
+        is_truncated = bool(parsed.truncated) or (
+            parsed.protocol_error is not None
+            and parsed.protocol_error.code == self.protocol_manager.TRUNCATED_OUTPUT_CODE
+        )
+        if is_truncated and parsed.response_type != "final":
+            return self._handle_truncated_reply(reply, parsed, meta)
+        if is_truncated:
+            # final 是唯一的例外：API 报了截断，但回复里干净地解析出了 STOP_REASON。
+            # _scan_protocol 对未闭合的块一律报错（missing_end_marker /
+            # invalid_stop_reason），能走到 final 说明协议结构本身是完整的，
+            # 把它当最终答案接受、而不是逼模型为一条结构完整的回复重跑一轮，是合理的。
+            # 残留风险：单行 STOP_REASON= 的自然语言原因若正好在行中被砍断，
+            # 正则仍能匹配（末尾以 $ 收尾），用户看到的最终答案就会少一小截 ——
+            # 所以这里必须留一条警告日志，否则事后无从定位。
+            self._log_truncated_final_accepted(reply, meta)
+
+        # 正常回复：重置连续截断计数
+        self._truncation_streak = 0
 
         # 特殊值，表示上次有 ACTION
         ACTION_STATE_MARKER = "__ACTION__"
@@ -1057,7 +1399,10 @@ class ConversationLoop:
                     self.retriever.record_task_execution(
                         task_type="general_task",
                         user_query=self._task_start_query,
-                        output_data={"final_reply": display_text or parsed.stop_reason_text},
+                        # ParsedResponse 上没有 stop_reason_text 字段，写它会在
+                        # display_text 为空时抛 AttributeError（被下面的 except 吞掉，
+                        # 表现为这条经验静默丢失）。终止原因的正确字段是 final_content。
+                        output_data={"final_reply": display_text or parsed.final_content or ""},
                         outcome="success",
                         tool_calls=tool_calls,
                         salience=0.7  # 默认显著性
@@ -1139,10 +1484,13 @@ class ConversationLoop:
             self.state.last_answer = current_answer
             
             # 添加 assistant 消息（使用 add_assistant_message 增加计数）
-            self.state.add_assistant_message(reply)
+            recorded = self.state.add_assistant_message(reply)
 
-            # 无工具可拼 RESULT 时，仍把软警告回给 LLM
-            if parsed.protocol_warning:
+            # 无工具可拼 RESULT 时，仍把软警告回给 LLM。
+            # 只有助手回复真的写进历史才追加：否则历史里会多出一条无主的 user 消息，
+            # 与前一条 user 消息连在一起，模型也看不懂在警告哪次输出。
+            # （reply 非空已由上方空回复分支保证，这里是兜底。）
+            if parsed.protocol_warning and recorded:
                 self.state.messages.append({
                     "role": "user",
                     "content": f"[协议警告] {parsed.protocol_warning}",

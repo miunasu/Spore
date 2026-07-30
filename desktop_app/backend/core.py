@@ -406,7 +406,17 @@ def delete_session(session_id: str) -> Dict[str, Any]:
     # 注意：不清除该会话的对话点快照。会话的短记忆（history/autosave/session_*.mem）
     # 仍在最近 N 会话队列里、可被重新加载恢复，checkpoint 跟随短记忆的生命周期：
     # 短记忆被队列淘汰或手动删除时才联动清除（见 memory_manager._prune_autosaves_locked）。
-    
+
+    # 日志与会话生命周期绑定：会话删除后联动清除对应的对话日志目录。
+    # default 会话不删日志（仅清空状态，日志在本次进程生命周期内继续有效）。
+    if success and session_id != "default":
+        try:
+            from base.logger import delete_conversation_log_dir
+            delete_conversation_log_dir(session_id)
+        except Exception as e:
+            from base.logger import log_error
+            log_error("SESSION_LOG_CLEANUP_ERROR", f"清除会话 {session_id} 日志目录失败: {e}", e)
+
     # 如果删除的是当前会话，更新 CLI handler 引用
     if success:
         current = _state.current

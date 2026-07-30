@@ -176,6 +176,9 @@ class ParsedResponse:
     protocol_error: Optional[ProtocolError] = None
     # Soft protocol notice (e.g. content outside blocks). Not a hard failure.
     protocol_warning: Optional[str] = None
+    # True when the reply was cut off by the output cap rather than mis-written.
+    # Callers must not treat a truncated reply as a normal turn.
+    truncated: bool = False
 
 
 PROTOCOL_TEMPLATE = """
@@ -577,20 +580,71 @@ class ProtocolManager:
 
         return "".join(parts).strip()
 
-    def parse_response(self, response: str) -> ParsedResponse:
+    # Protocol errors that a truncated reply produces as a side effect.
+    # Reporting these as "you wrote the marker wrong" makes the model re-send the
+    # same oversized content, which hits the same cap again — an infinite loop.
+    _TRUNCATION_MASKED_CODES = frozenset({"missing_end_marker", "invalid_stop_reason"})
+
+    TRUNCATED_OUTPUT_CODE = "truncated_output"
+    TRUNCATED_OUTPUT_MESSAGE = (
+        "上一轮回复在输出上限处被截断，标识符本身没写错，不要原样重发同一份内容。"
+        "请改为分批产出：先输出/写入前一部分，再用追加方式补齐剩余部分，"
+        "单次输出规模明显减小。"
+    )
+
+    def _detect_truncation(self, response: str) -> bool:
+        """仅凭回复文本判断是否被截断（调用方未提供 API 信号时的兜底）。"""
+        try:
+            from ..response_health import looks_truncated
+
+            hint = looks_truncated(response)
+            return bool(hint and hint.confidence == "high")
+        except Exception:
+            return False
+
+    def parse_response(
+        self,
+        response: str,
+        truncated: Optional[bool] = None,
+    ) -> ParsedResponse:
+        """解析回复。
+
+        Args:
+            response: LLM 回复原文
+            truncated: 调用方从 API 字段得到的截断结论。None 表示未知，
+                此时退化为按文本特征自行判断。
+        """
         if not response:
             return ParsedResponse(response_type="continue", raw_response="")
 
         blocks, error, outside_content = self._scan_protocol(response)
         if error:
+            is_truncated = bool(truncated) if truncated is not None else False
+            if error.code in self._TRUNCATION_MASKED_CODES and (
+                is_truncated or self._detect_truncation(response)
+            ):
+                # 未闭合的块是截断的结果，不是模型写错了标识符：
+                # 必须按截断反馈，否则模型会重发同样超长的内容再次撞上限
+                return ParsedResponse(
+                    response_type="protocol_error",
+                    raw_response=response,
+                    protocol_error=ProtocolError(
+                        self.TRUNCATED_OUTPUT_CODE, self.TRUNCATED_OUTPUT_MESSAGE
+                    ),
+                    truncated=True,
+                )
             return ParsedResponse(
                 response_type="protocol_error",
                 raw_response=response,
                 protocol_error=error,
+                truncated=is_truncated,
             )
 
         outside_text = (outside_content or "").strip()
         protocol_warning = self.CONTENT_OUTSIDE_WARNING if outside_text else None
+        # 解析成功的回复只采信 API 明确给出的截断结论：文本弱特征（例如 REPLY 里
+        # 恰好有奇数个代码围栏）会把正常回复误判成截断。
+        is_truncated = bool(truncated)
 
         final_blocks = [block for block in blocks if block["name"] == "STOP_REASON"]
         final_pos = final_blocks[0]["start"] if final_blocks else -1
@@ -604,6 +658,7 @@ class ProtocolManager:
                 response_type="protocol_error",
                 raw_response=response,
                 protocol_error=ProtocolError("multiple_todo_blocks", "同一轮回复中只能包含一个 TODO 块"),
+                truncated=is_truncated,
             )
 
         if len(action_blocks) > 1:
@@ -611,6 +666,7 @@ class ProtocolManager:
                 response_type="protocol_error",
                 raw_response=response,
                 protocol_error=ProtocolError("multiple_action_blocks", "同一轮回复中只能包含一个 ACTION 块"),
+                truncated=is_truncated,
             )
 
         if action_blocks and has_final:
@@ -618,6 +674,7 @@ class ProtocolManager:
                 response_type="protocol_error",
                 raw_response=response,
                 protocol_error=ProtocolError("action_with_final", "ACTION 回复中禁止出现 @SPORE:STOP_REASON ="),
+                truncated=is_truncated,
             )
 
         reply_contents = [block["content"] for block in reply_blocks if block["content"]]
@@ -640,6 +697,7 @@ class ProtocolManager:
                     response_type="protocol_error",
                     raw_response=response,
                     protocol_error=ProtocolError("invalid_action_block", self._invalid_action_message(mode)),
+                    truncated=is_truncated,
                 )
 
             return ParsedResponse(
@@ -650,6 +708,7 @@ class ProtocolManager:
                 action_block=parsed_block,
                 raw_response=response,
                 protocol_warning=protocol_warning,
+                truncated=is_truncated,
             )
 
         if has_final:
@@ -667,6 +726,7 @@ class ProtocolManager:
                 final_content=final_content,
                 raw_response=response,
                 protocol_warning=protocol_warning,
+                truncated=is_truncated,
             )
 
         return ParsedResponse(
@@ -675,6 +735,7 @@ class ProtocolManager:
             reply_content=reply_content,
             raw_response=response,
             protocol_warning=protocol_warning,
+            truncated=is_truncated,
         )
 
     def _action_name_to_mode(self, name: str) -> ActionMode:
@@ -705,6 +766,25 @@ class ProtocolManager:
 
     def format_parse_error(self, error_message: str) -> str:
         return self.result_formatter.format_parse_error(error_message)
+
+    def format_truncated(
+        self,
+        attempt: int = 1,
+        api_stop_reason: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
+        message: Optional[str] = None,
+    ) -> str:
+        """回复被输出上限截断时给 LLM 的反馈（不是协议错误）。"""
+        return self.result_formatter.format_truncated(
+            message or self.TRUNCATED_OUTPUT_MESSAGE,
+            attempt=attempt,
+            api_stop_reason=api_stop_reason,
+            max_output_tokens=max_output_tokens,
+        )
+
+    def format_empty_response(self, attempt: int = 1) -> str:
+        """模型没有返回任何正文时给 LLM 的反馈。"""
+        return self.result_formatter.format_empty_response(attempt=attempt)
 
 
     def append_protocol_warning(self, result_text: str, warning: Optional[str] = None) -> str:

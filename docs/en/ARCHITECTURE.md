@@ -364,7 +364,7 @@ File-route sandbox: only `output` / `skills` / `prompt` / `history` / `character
 - Persistence: `base/logger.py` writes to `logs/<startup time>/conversations/<id>/` based on `session_context`
 - Push: `websocket/log_bridge.py` attaches `conversation_id`; the frontend `logStore` buckets logs by session
 - The body does not embed `session_id` (only routing fields carry session information)
-- Raw logging is enabled by default: after each successful LLM call, the provider's complete response text plus request/model/profile/usage metadata is written to a rotating `raw.log`, without truncation or parsing and without being pushed to the desktop log panel
+- Raw logging is enabled by default: after each LLM call (success, empty response, refusal, truncation, or error), the provider's complete response text, raw provider response body (`raw_payload`), and health metadata (`health`: `api_stop_reason`, `finish_state`, `truncated`, usage, etc.) are written to a rotating `raw.log`; not pushed to the desktop log panel
 - Main requests whose session can be parsed from their request ID are written under that conversation; helper-Agent requests that cannot be resolved this way may go to the process-level `raw.log`
 - Raw content is neither redacted nor encrypted and may include commands, file contents, paths, credentials, or personal data repeated by the model. Clearing or deleting a session does not remove existing logs; use `LOG_RAW_ENABLED=false` to disable them
 

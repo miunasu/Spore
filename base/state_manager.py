@@ -39,7 +39,11 @@ class ConversationState:
         self.last_output_tokens: int = 0  # 上次请求的输出 token
         self.cumulative_input_tokens: int = 0  # 累计输入 token（用于算钱）
         self.cumulative_output_tokens: int = 0  # 累计输出 token（用于算钱）
-        
+        # 上次请求的真实上下文规模（含缓存命中部分）。
+        # Anthropic 的 input_tokens 不含 cache_read/cache_creation，只看它会把
+        # 上下文规模低估到个位数，上下文压缩永远不触发。
+        self.last_context_tokens: int = 0
+
         # 上下文处理模式（每个对话独立，默认从ENV配置读取）
         config = get_config()
         self.context_mode: str = config.context_mode
@@ -59,11 +63,31 @@ class ConversationState:
         self.user_message_count += 1
 
     
-    def add_assistant_message(self, content: str) -> None:
-        """添加助手消息"""
+    def add_assistant_message(self, content: str) -> bool:
+        """添加助手消息。
+
+        空内容一律拒绝写入：空的 assistant 消息会让后续每一次请求都被 API 以
+        "消息为空或无效"400 拒掉，且历史一旦被污染，后面所有轮次连带失败。
+        这里是最后一道闸门，宁可丢掉这一轮，也不能污染历史。
+
+        Returns:
+            True 表示已写入；False 表示内容为空被拒绝。
+        """
+        if not isinstance(content, str) or not content.strip():
+            return False
         self.messages.append({"role": "assistant", "content": content})
         self.llm_reply_count += 1
-    
+        return True
+
+    def drop_blank_messages(self) -> int:
+        """清掉历史里所有空内容消息，返回清理条数（历史卫生兜底）。"""
+        before = len(self.messages)
+        self.messages = [
+            msg for msg in self.messages
+            if isinstance(msg, dict) and isinstance(msg.get("content"), str) and msg["content"].strip()
+        ]
+        return before - len(self.messages)
+
     def clear_all(self) -> None:
         """清除所有状态"""
         
@@ -77,6 +101,7 @@ class ConversationState:
         # 清除 token 统计
         self.last_input_tokens = 0
         self.last_output_tokens = 0
+        self.last_context_tokens = 0
         self.cumulative_input_tokens = 0
         self.cumulative_output_tokens = 0
         # 清除 TODO 列表
@@ -98,16 +123,25 @@ class ConversationState:
         self.save_mode = not self.save_mode
         return self.save_mode
     
-    def update_token_stats(self, input_tokens: int, output_tokens: int) -> None:
+    def update_token_stats(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        context_tokens: Optional[int] = None,
+    ) -> None:
         """
         更新 token 统计（Desktop 模式专用）
-        
+
         Args:
-            input_tokens: 本次请求的输入 token 数（完整 context）
+            input_tokens: 本次请求的输入 token 数（provider 口径，可能不含缓存命中）
             output_tokens: 本次请求的输出 token 数
+            context_tokens: 真实上下文规模（含缓存命中）。缺省时退回 input_tokens。
         """
+        input_tokens = input_tokens or 0
+        output_tokens = output_tokens or 0
         self.last_input_tokens = input_tokens
         self.last_output_tokens = output_tokens
+        self.last_context_tokens = max(context_tokens or 0, input_tokens)
         self.cumulative_input_tokens += input_tokens  # 累加所有 input（用于算钱）
         self.cumulative_output_tokens += output_tokens  # 累加所有 output（用于算钱）
 

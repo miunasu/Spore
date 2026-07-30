@@ -71,6 +71,53 @@ class ResultFormatter:
     def format_parse_error(self, error_message: str) -> str:
         return f"{self.RESULT_MARKER}\n[解析错误] {error_message}{self._get_todo_block()}"
 
+    def format_truncated(
+        self,
+        message: str,
+        attempt: int = 1,
+        api_stop_reason: Optional[str] = None,
+        max_output_tokens: Optional[int] = None,
+    ) -> str:
+        """回复被输出上限截断时给 LLM 的反馈。
+
+        与 ProtocolError 区分开：截断不是模型写错了协议，反馈成协议错误会让模型
+        原样重发同一份超长内容，再次撞上限，形成死循环。这里明确要求缩小单次
+        输出规模，并随重试次数升级措辞。
+        """
+        payload = {
+            "Status": "OutputTruncated",
+            "code": "truncated_output",
+            "message": message,
+            "attempt": attempt,
+            "api_stop_reason": api_stop_reason,
+            "max_output_tokens": max_output_tokens,
+            "how_to_recover": [
+                "不要重复输出上一轮已经产出的部分",
+                "把内容拆成多次输出：先写入第一部分，再用追加方式补齐后续部分",
+                "单次输出的规模要明显小于上一轮",
+            ],
+        }
+        if attempt >= 2:
+            payload["how_to_recover"].insert(
+                0,
+                "已经连续被截断，必须换策略：把本次输出量至少减半，或改为先只输出目录/大纲",
+            )
+        return f"{self.RESULT_MARKER}\n{json.dumps(payload, ensure_ascii=False, indent=2)}{self._get_todo_block()}"
+
+    def format_empty_response(self, attempt: int = 1) -> str:
+        """模型一个字都没返回时给出的反馈（不写入对话历史的替代品）。"""
+        payload = {
+            "Status": "EmptyResponse",
+            "code": "empty_response",
+            "message": "上一轮没有收到任何正文内容，请重新输出完整的协议块回复。",
+            "attempt": attempt,
+            "how_to_recover": [
+                "直接重新输出这一轮的回复，使用完整的 Spore 协议块",
+                "先输出较短的内容确保能正常返回，再逐步补齐细节",
+            ],
+        }
+        return f"{self.RESULT_MARKER}\n{json.dumps(payload, ensure_ascii=False, indent=2)}{self._get_todo_block()}"
+
     def format_protocol_error(self, code: str, message: str) -> str:
         payload = {
             "Status": "ProtocolError",

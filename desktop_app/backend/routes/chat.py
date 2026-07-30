@@ -353,8 +353,18 @@ def run_single_round(
                 _rollback_interrupted_round()
                 return _result("interrupted")
 
+            reply_meta = {
+                "truncated": reply_data.get("truncated"),
+                "api_stop_reason": reply_data.get("api_stop_reason"),
+                "finish_state": reply_data.get("finish_state"),
+                "truncation_source": reply_data.get("truncation_source"),
+                "truncation_hint": reply_data.get("truncation_hint"),
+                "usage": reply_data.get("usage"),
+                "max_tokens": reply_data.get("max_tokens"),
+            }
+
             with conversation_context(conversation_id):
-                result = conv_loop.validate_and_check_response(reply)
+                result = conv_loop.validate_and_check_response(reply, reply_meta=reply_meta)
 
             # 覆盖 response 刚通过检查、用户随即点 Stop 的临界窗口。
             if target_state.interrupt_epoch != request_epoch:

@@ -23,7 +23,6 @@ from base.logger import log_error
 from base.state_manager import ConversationState
 from base.cli_commands import CLICommandHandler
 from base.conversation_loop import ConversationLoop
-from base.rule_reminder import should_remind, get_rule_reminder
 from base.agent_types import get_tools_for_mode
 from AutoAgent import select_context_mode, get_mode_description
 
@@ -188,17 +187,25 @@ def main() -> int:
         
         # 添加用户消息
         state.add_user_message(actual_input)
-        
-        # 检查是否需要注入规则提醒（防止长对话遗忘）
-        # 基于 LLM 回复次数触发，而不是用户消息次数
-        if should_remind(state.llm_reply_count, config.rule_reminder_interval):
-            reminder = get_rule_reminder(
-                short=config.rule_reminder_short,
-                tool_names=current_tools,
+
+        # 用户发消息快照点（CLI）：回到用户刚发送时的文件/对话状态
+        try:
+            from base.backup_manager import get_backup_manager
+            from base.session_context import get_current_conversation_id
+            _cp_session = get_current_conversation_id() or "default"
+            get_backup_manager().create_user_message_checkpoint(
+                session_id=_cp_session,
+                message_count=len(state.messages),
+                user_preview=actual_input,
+                llm_reply_count=getattr(state, "llm_reply_count", 0) or 0,
             )
-            # 将提醒追加到最后一条用户消息中
-            if state.messages and state.messages[-1]["role"] == "user":
-                state.messages[-1]["content"] += f"\n\n{reminder}"
+        except Exception as checkpoint_err:
+            from base.logger import log_error as _log_error
+            _log_error(
+                "CHECKPOINT_ERROR",
+                f"创建用户消息对话点失败: {checkpoint_err}",
+                checkpoint_err,
+            )
         
         # 进入对话循环（文本协议模式）
         try:

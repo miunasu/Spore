@@ -59,6 +59,9 @@ output/
 .spore_config_profiles.json
 tool_policy.json
 
+# 运行时数据（备份、Learning 情景库等）
+.spore/
+
 # 测试
 .pytest_cache/
 .coverage
@@ -97,3 +100,10 @@ desktop_app/frontend/pnpm-lock.yaml
 
 # PyInstaller spec 生成的文件
 *.spec.bak
+
+# 本地维护文档与 learning 测试（不纳入版本库）
+CHANGELOG.md
+CHANGELOG_zh.md
+learning/*.md
+learning/test_*.py
+learning/cli_test.py

@@ -45,6 +45,7 @@ interface ConfigProfile {
 interface CheckpointInfo {
   id: string;
   ts: string;
+  kind?: 'user_message' | 'action' | string;
   message_count: number;
   llm_reply_count: number;
   reply_preview?: string;
@@ -421,6 +422,18 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
       { key: 'LOG_LLM_VALIDATION_FILENAME', label: 'commandMenu.env.LOG_LLM_VALIDATION_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_LLM_VALIDATION_FILENAME.ph' },
       { key: 'LOG_TOOL_EXECUTION_FILENAME', label: 'commandMenu.env.LOG_TOOL_EXECUTION_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_TOOL_EXECUTION_FILENAME.ph' },
       { key: 'LOG_GENERAL_FILENAME', label: 'commandMenu.env.LOG_GENERAL_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_GENERAL_FILENAME.ph' },
+      {
+        key: 'LOG_RAW_ENABLED',
+        label: 'commandMenu.env.LOG_RAW_ENABLED.label',
+        type: 'select',
+        options: [
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
+        ],
+        placeholder: 'commandMenu.env.LOG_RAW_ENABLED.ph',
+        description: 'commandMenu.env.LOG_RAW_ENABLED.desc',
+      },
+      { key: 'LOG_RAW_FILENAME', label: 'commandMenu.env.LOG_RAW_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_RAW_FILENAME.ph' },
       { key: 'LOG_MONITOR_LOCK_FILENAME', label: 'commandMenu.env.LOG_MONITOR_LOCK_FILENAME.label', type: 'text', placeholder: 'commandMenu.env.LOG_MONITOR_LOCK_FILENAME.ph' },
       { key: 'LOG_MONITOR_CHECK_INTERVAL', label: 'commandMenu.env.LOG_MONITOR_CHECK_INTERVAL.label', type: 'text', placeholder: 'commandMenu.env.LOG_MONITOR_CHECK_INTERVAL.ph' },
       {
@@ -685,6 +698,24 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
         type: 'number',
         description: 'commandMenu.env.SECURITY_INTENT_TIMEOUT.desc',
         placeholder: 'commandMenu.env.SECURITY_INTENT_TIMEOUT.ph',
+      },
+      {
+        key: 'SECURITY_AGENT_SESSION_CONTEXT',
+        label: 'commandMenu.env.SECURITY_AGENT_SESSION_CONTEXT.label',
+        type: 'select',
+        options: [
+          { value: 'true', label: 'commandMenu.env.SECURITY_AGENT_SESSION_CONTEXT.opts.on' },
+          { value: 'false', label: 'commandMenu.env.SECURITY_AGENT_SESSION_CONTEXT.opts.off' },
+        ],
+        description: 'commandMenu.env.SECURITY_AGENT_SESSION_CONTEXT.desc',
+        placeholder: 'commandMenu.env.SECURITY_AGENT_SESSION_CONTEXT.ph',
+      },
+      {
+        key: 'SECURITY_SESSION_CONTEXT_MAX_COMMANDS',
+        label: 'commandMenu.env.SECURITY_SESSION_CONTEXT_MAX_COMMANDS.label',
+        type: 'number',
+        description: 'commandMenu.env.SECURITY_SESSION_CONTEXT_MAX_COMMANDS.desc',
+        placeholder: 'commandMenu.env.SECURITY_SESSION_CONTEXT_MAX_COMMANDS.ph',
       },
     ],
   },
@@ -1425,7 +1456,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     setBackupError(null);
     setFileHistory(null);
     try {
-      const res = await backupApi.listTrackedFiles();
+      const res = await backupApi.listTrackedFiles(activeConversationId || undefined);
       setTrackedFiles(res.files || []);
     } catch (err) {
       setBackupError(extractApiError(err, t('commandMenu.err.loadTrackedFiles')));
@@ -1495,7 +1526,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     setBackupLoading(true);
     setBackupError(null);
     try {
-      const res = await backupApi.getFileHistory(path);
+      const res = await backupApi.getFileHistory(path, activeConversationId || undefined);
       setFileHistory({
         path: res.path,
         has_baseline: res.has_baseline,
@@ -1514,7 +1545,11 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     setBackupBusy(true);
     setBackupError(null);
     try {
-      const res = await backupApi.restoreFile({ path, version_id: versionId });
+      const res = await backupApi.restoreFile({
+        path,
+        version_id: versionId,
+        conversation_id: activeConversationId || undefined,
+      });
       await loadFileHistory(path);
       setModalContent({
         title: t('commandMenu.restore.successTitle'),
@@ -2568,6 +2603,11 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
                           <div className="text-sm text-spore-text font-medium">
                             {cp.id}
                             <span className="ml-2 text-xs text-spore-muted font-normal">{cp.ts}</span>
+                            <span className="ml-2 text-xs text-spore-highlight font-normal">
+                              {cp.kind === 'user_message'
+                                ? t('commandMenu.backup.kindUser')
+                                : t('commandMenu.backup.kindAction')}
+                            </span>
                           </div>
                           <div
                             className="text-xs text-spore-text/80 mt-1 line-clamp-2"

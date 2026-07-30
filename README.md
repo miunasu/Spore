@@ -11,8 +11,6 @@
 
 </div>
 
-> **Note on language:** Spore's desktop UI is currently in Chinese; English localization (i18n) is on the roadmap. The AI agent itself replies in **the language you write in** — ask in English and it answers in English. This README and the core docs are in English.
-
 ---
 
 <div align="center">
@@ -94,7 +92,7 @@ Most agents are built for people who type commands. Spore flips this: it's first
 - **Browser-style tabs** — manage multiple conversations and open files like web pages; tabs rename and close. A mental model everyone already knows, zero learning curve.
 - **Three-pane resizable layout** — logs on the left, chat in the middle, files on the right; side panes hide and resize, and the layout is remembered. As powerful as an IDE, simpler than one.
 - **Tech translated into plain words** — instead of a wall of PowerShell, you see "installing dependencies," "modifying config," "querying files." You don't read the command; you read what it's doing.
-- **Native Windows integration** — the built-in file manager copy-pastes files with Explorer and accepts drag-and-drop for editing. The feel of a real desktop app, not a wrapped web page.
+- **Native Windows integration** — copy files in Windows Explorer and paste them directly into the chat input. They become deduplicated path attachments that you can remove before sending; Spore references the file paths rather than pasting file contents. The built-in file manager also accepts drag-and-drop for editing.
 - **All settings are graphical** — pick your SDK, enter your key, configure models, adjust tool permissions, all by clicking. No config files by hand.
 - **Modern native look** — custom title bar, borderless window, Mica translucency. Visually a contemporary Windows application.
 
@@ -114,10 +112,12 @@ Host-level capability without a safety net is a hazard. Spore's safety system di
 
 Git only protects code repos — it can't save system config, data files, deleted directories, or anything not under Git. Spore has a built-in, independent backup-and-restore system:
 
-- Writes / edits / deletes are versioned **only when content actually changes** (content-addressed + binary delta — very low cost);
+- Writes / edits / deletes are versioned **only when content actually changes** (content-addressed + binary delta — very low cost), with each session keeping its own version chain and metadata;
 - Deleted files can be recovered from history; wrong edits roll back to any version;
-- `rewind` can **roll back files, conversation history, and TODOs together**, undoing an entire "that step was wrong" in one shot;
+- `user_message` and `action` checkpoints mark the two rewind boundaries; `rewind` can **roll back files, conversation history, and TODOs together**, undoing an entire "that step was wrong" in one shot;
 - Even the "restore" action itself is versioned — so a restore can be undone again.
+
+The backup chain and metadata are session-scoped, but the physical filesystem is still shared. This prevents sessions from mixing up their recovery records; it is not complete filesystem isolation between sessions.
 
 ## 🧠 No model lock-in, no vendor lock-in
 
@@ -131,7 +131,9 @@ A classic cost-saving combo: the main agent on the strongest model, the security
 
 ## 🪟 Watch it work from the corner of your desktop: Mini floating window
 
-Switch to a **380 × 520 always-on-top Mini window** with one click — it lives in the corner like a mini music player, out of the way of your IDE, browser, or docs. It keeps only what matters at runtime: the latest replies, current activity and risk status, high-risk confirmations, and quick input. The input bar appears when your mouse nears the bottom, and leaving Mini mode restores the window's original size, position, and always-on-top state.
+Switch to a **380 × 520 always-on-top Mini window** with one click — it lives in the corner like a mini music player, out of the way of your IDE, browser, or docs. Its compact flow shows the latest reply, command-intent footnotes, Agent cards, high-risk confirmations, and the input at the bottom. Leaving Mini mode restores the window's original size, position, and always-on-top state.
+
+On Windows, Mini supports native snapping on all four sides: move it within 40 px of a work-area edge and it hides with an 8 px strip left visible; a 12 px edge hot zone brings it back, and it hides again 650 ms after the pointer leaves. The title-bar snapping switch is on by default for each launch but is not persisted. Native edge snapping is unavailable on non-Windows platforms.
 
 **This is the product philosophy in one shot:** you write docs on your main screen while Spore tidies files in the corner; a confirmation pops up, you click, it continues.
 
@@ -154,13 +156,14 @@ Spore is open source under **AGPL-3.0**. For an agent that can reach a real host
 
 ## 🧩 Not just chat — a local automation engine too
 
-The desktop backend also serves local HTTP and WebSocket. Even without the GUI, you can wire it into your own systems: submit tasks, read history, manage sessions, receive structured events, invoke rollback. It binds to `127.0.0.1:8765` (HTTP) and `127.0.0.1:8766` (WebSocket) by default — a fit for a local automation layer, an intranet agent service, or a desktop-workflow backend.
+The desktop backend also serves local HTTP and WebSocket. Even without the GUI, you can wire it into your own systems: submit tasks, read history, manage sessions, receive structured events, invoke rollback. REST binds to `127.0.0.1:8765` by default and can be changed with `DESKTOP_API_PORT`; the frontend WebSocket client is currently fixed to `127.0.0.1:8766`. It is a fit for a local automation layer, an intranet agent service, or a desktop-workflow backend.
 
 ## 🧠 Runs long without "forgetting" or "cross-talk"
 
 - Context is compressed automatically as it nears the limit — long conversations don't collapse;
 - Short-term memory auto-saves, so you can pick up where you left off after reopening;
-- Sessions are fully isolated: each has its own conversation loop, logs, task identity, and execution lock — multiple tabs never interfere;
+- Learning episodic memory can add up to three relevant past episodes before a request, records successful tasks, and falls back gracefully when embeddings are unavailable;
+- Session runtimes are isolated: each has its own conversation loop, logs, task identity, and execution lock. Backup metadata is also session-scoped, while the underlying filesystem remains shared;
 - Stop actually stops, refresh keeps the task alive — these "obvious" experiences are backed by a whole engineering layer for concurrency and interruption.
 
 ---
@@ -298,6 +301,10 @@ Independently configurable profiles: main agent, sub-agent, Supervisor, ModeSele
 
 Multi-layer continuity: in-memory current-session messages, auto-saved short-term memory for recent sessions, manually saved/renamed/loaded history files, conversation checkpoints, mid-tool-result trimming in economy mode, and compression management as context nears the limit. Running tasks themselves are not persisted across processes.
 
+Learning episodic memory retrieves at most three relevant past episodes before a request and records successful tasks afterward. If the embedding service is unavailable, retrieval degrades gracefully instead of blocking the task. Episodic consolidation is not automatic.
+
+Complete LLM replies are written to each session's `raw.log` by default (`LOG_RAW_ENABLED=true`). These logs can contain prompts, model output, paths, tool context, and other sensitive information; protect or disable them as appropriate. See the [Configuration guide](docs/en/CONFIGURATION.md) for paths and controls.
+
 ## 7. Safety design
 
 Implemented in:
@@ -328,7 +335,7 @@ Backed by whitelist, evaluation cache, audit log (`.spore/security_audit.jsonl`)
 
 ## 8. Backup & rewind
 
-The recovery system is independent of Git, using content addressing and version records: content hashes are compared before/after and saved only on real change; view versions, restore to a version, or step back; deleted files enter the recovery chain; incremental versions use `bsdiff4`; full anchors every N versions cap the reconstruction chain; restores are themselves versioned. Conversation-point rewind restores files, message history, and TODOs together, carries session identity, and won't harm other sessions.
+The recovery system is independent of Git, using content addressing and version records: content hashes are compared before/after and saved only on real change; view versions, restore to a version, or step back; deleted files enter the recovery chain; incremental versions use `bsdiff4`; full anchors every N versions cap the reconstruction chain; restores are themselves versioned. Each session has its own backup version chain and metadata, with `user_message` and `action` as the two checkpoint types. Conversation-point rewind uses that session identity when restoring files, message history, and TODOs. The physical filesystem remains shared, so this session-scoped recovery bookkeeping must not be read as complete filesystem isolation.
 
 Common CLI commands:
 
@@ -365,6 +372,8 @@ The backend can act as a local agent service:
 - `POST /api/chat/interrupt` — interrupt the current main task;
 - session create/switch/delete, history read, memory management, config update;
 - WebSocket pushes `task_started`, `round_reply`, `tool_call`, `tool_result`, `todo_update`, `task_finished`, and more.
+
+REST uses `127.0.0.1:8765` by default and honors `DESKTOP_API_PORT`. The frontend WebSocket client currently remains fixed to `ws://127.0.0.1:8766`, so changing the REST port does not move that frontend connection.
 
 Endpoints bind to loopback by default. If you expose them to a LAN or the internet, assess auth, network boundary, permissions, and auditing yourself.
 

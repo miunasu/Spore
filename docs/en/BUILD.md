@@ -30,6 +30,7 @@ Installer output:
 - Windows 10/11 x64
 - Python ≥ 3.10 (the build environment actually uses 3.13)
 - [uv](https://github.com/astral-sh/uv)
+- PyInstaller (a build tool, no longer a runtime dependency in `pyproject.toml`; install it explicitly in a clean environment, for example with `uv pip install pyinstaller`)
 - Node.js 18+ or 20 LTS
 - Rust (`rustup`, MSVC toolchain)
 - Visual Studio Build Tools (C++ desktop development)
@@ -46,7 +47,7 @@ build_installer.bat
 
 The script has 6 stages:
 
-1. **PyInstaller backend (onefile)**: cleans old artifacts; automatically runs `uv sync` if `.venv` lacks pyinstaller (or set `FORCE_UV_SYNC=1` to force it); runs `uv run pyinstaller spore_backend.spec --noconfirm`, producing `dist/spore_backend.exe`
+1. **PyInstaller backend (onefile)**: cleans old artifacts; attempts `uv sync` if `.venv` lacks pyinstaller (or set `FORCE_UV_SYNC=1` to force it); runs `uv run pyinstaller spore_backend.spec --noconfirm`, producing `dist/spore_backend.exe`. PyInstaller is no longer a runtime dependency in `pyproject.toml`, so this automatic `uv sync` alone will not install it in a clean environment; install it explicitly first
 2. **Tauri sidecar**: copies it to `desktop_app/frontend/src-tauri/binaries/spore_backend-x86_64-pc-windows-msvc.exe` (Tauri `externalBin` requires the platform-triple suffix)
 3. **Resource sync**: copies `prompt/`, `skills/`, `characters/`, `.env` into `src-tauri/`; downloads and SHA256-verifies **ripgrep 14.1.1** (cached in `.tool-cache/ripgrep/`), copies `rg.exe`
 4. **Frontend + Tauri build**: cleans the Vite cache; runs `npm install` if `node_modules` is missing (or `FORCE_NPM_INSTALL=1`); `npm run tauri build` produces the NSIS installer
@@ -63,6 +64,7 @@ On failure, troubleshoot based on the failing stage; if any stage fails, the scr
 
 ```bash
 uv sync
+uv pip install pyinstaller    # Required in a clean environment; not a project runtime dependency
 uv run pyinstaller spore_backend.spec --noconfirm
 ```
 
@@ -101,14 +103,15 @@ npm run dev                   # Vite http://localhost:1420
 npm run tauri dev
 ```
 
-Default API: `http://127.0.0.1:8765`, WebSocket: `ws://127.0.0.1:8766` (port + 1).
+Default API: `http://127.0.0.1:8765`; WebSocket: `ws://127.0.0.1:8766`. The REST port is read dynamically from `DESKTOP_API_PORT`, while the current WebSocket client URL remains fixed at `8766`.
 
 ---
 
 ## Packaging Structure Notes
 
-- **Backend**: PyInstaller **onefile** (`spore_backend.spec`), entry point `main_entry.py`, `console=False`; the spec's `datas` is empty — resources are not bundled into the exe
-- **Resources**: carried by Tauri `resources`: `prompt/**`, `skills/**`, `characters/**`, `.env`, `rg.exe`; located at runtime via `SPORE_RESOURCE_DIR`
+- **Backend**: PyInstaller **onefile** (`spore_backend.spec`), entry point `main_entry.py`, `console=False`; the spec's `datas` includes `learning/schema.sql`, which the frozen backend reads from `learning/schema.sql` in PyInstaller's extraction directory
+- **Resources**: Tauri `resources` carries `prompt/**`, `skills/**`, `characters/**`, `.env`, and `rg.exe`, located via `SPORE_RESOURCE_DIR`; `learning/schema.sql` is embedded in the backend onefile instead of being read from the Tauri resource root
+- **Frozen paths**: packaged configuration, the Learning database, and other writable runtime data use `Path.cwd()` as the runtime root; Python modules are extracted to the onefile temporary directory, and `schema.sql` is read relative to its module
 - **Process hosting**: Tauri `main.rs` launches the backend as a sidecar, injecting `SPORE_DESKTOP_MODE=1` and `SPORE_RESOURCE_DIR`, and uses a Windows Job Object to ensure the entire child-process tree exits when the window closes
 - **Working directory**: after installation, `main.rs` and `resource_manager` ensure the cwd is correct and create writable directories (`output/`, `history/`, `logs/`, `note.txt`)
 - **Hidden imports**: if a module is missing at runtime, add it to `hiddenimports` in `spore_backend.spec`
@@ -144,6 +147,7 @@ Complete `hiddenimports`: `base` and its subpackages, `AutoAgent`, `desktop_app`
 2. Whether the network can fetch ripgrep  
 3. Delete `.tool-cache/ripgrep/` and retry  
 4. Whether `uv sync` succeeded  
+5. Whether PyInstaller was explicitly installed in a clean `.venv`; when `.venv\Scripts\pyinstaller.exe` is missing the script runs `uv sync`, but the current `pyproject.toml` does not declare PyInstaller, so it can still fail at `uv run pyinstaller`
 
 ### Installer size
 

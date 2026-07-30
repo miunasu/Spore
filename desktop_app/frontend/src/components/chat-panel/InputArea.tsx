@@ -7,7 +7,6 @@ import { invoke } from '@tauri-apps/api/tauri';
 import { useChatStore } from '../../stores/chatStore';
 import { CommandMenu } from './CommandMenu';
 import { ConfirmBar } from './ConfirmBar';
-import { AgentActivityBar } from './AgentActivityBar';
 import { useT } from '../../i18n';
 
 interface InputAreaProps {
@@ -170,10 +169,6 @@ export const InputArea: React.FC<InputAreaProps> = ({ mini = false }) => {
 
   return (
     <div>
-      {/* Agent 活动提示（非阻塞：命令意图 / 安全扫描）；
-          mini 模式下由 MiniModeView 常驻渲染，这里不重复 */}
-      {!mini && <AgentActivityBar />}
-
       {/* 确认栏（阻塞：删除 / 高危操作确认） */}
       <ConfirmBar />
 

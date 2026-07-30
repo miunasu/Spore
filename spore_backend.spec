@@ -21,6 +21,10 @@ a = Analysis(
         # onefile mode: no need to include resource files
         # prompt/skills/characters are packaged by Tauri resources mechanism
         # Backend locates them via SPORE_RESOURCE_DIR environment variable
+
+        # learning/schema.sql must be bundled: episode_store._init_database() reads it
+        # via Path(__file__).parent / "schema.sql" at runtime inside the extracted temp dir
+        ('learning/schema.sql', 'learning'),
     ],
     hiddenimports=[
         'base',

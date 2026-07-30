@@ -59,14 +59,20 @@ continue               - 加载最近一份历史并继续
 
 ```
 rollback <文件路径> [--to <版本号>|--steps <N>]  - 文件级回滚到指定版本 / 后退 N 个版本
-filehistory [<文件路径>]                        - 查看文件版本历史
-checkpoints                                     - 列出当前会话的对话点检查点
+filehistory [<文件路径>]                        - 查看当前 session 的文件历史；不带路径列出当前 session 跟踪的文件
+checkpoints                                     - 列出当前 session 的两类对话点检查点
 rewind [<checkpoint_id>|--turns <N>]            - 回滚到对话点（文件+对话历史+TODO 一起恢复）
 ```
 
 - Agent 每次写/删文件前自动留底（`.spore/`，bsdiff4 增量存储）
-- `rewind` 是「时间机器」：把工作区文件和对话上下文一起退回到某轮任务开始前
+- 对话点有两类：发送用户消息时立即创建的 `user_message` 点，可回到「消息已发送、Agent 尚未操作」；仅在某条 LLM 回复实际改动文件时创建的 `action` 点，可回到该回复之前
+- `filehistory` / `rollback` 和 `checkpoints` / `rewind` 都以当前 session 为范围；`rewind` 还会截断该 session 的对话历史并清空 TODO
+- 会话隔离的是备份元数据和版本链，不是工作区副本。多个 session 仍操作同一批物理文件；若并发修改同一路径，`rollback` 或 `rewind` 写回旧内容时可能覆盖另一 session 的结果，回滚前应先停止相关任务并确认文件现状
 - 总开关与限额见 [CONFIGURATION.md](CONFIGURATION.md)「备份与回滚」
+
+### Learning
+
+Learning 无需 CLI 命令：启用后，系统会在任务开始时自动检索相关历史经验，并在任务结束时自动记录本次执行。当前 CLI **没有**手动触发 consolidation 的命令；`learning/consolidation.py` 中的 consolidation 能力不是 CLI 命令面的一部分。
 
 ### 安全白名单（v4.0）
 
@@ -136,9 +142,10 @@ User> rollback output/report.md --to 2
 [已回滚] output/report.md → v2
 
 User> checkpoints
-[检查点] 1. cp_xxxx 2026-07-20 14:20 "整理报告结构"
+[对话点快照] cp_0001 [用户消息] "整理报告结构"
+[对话点快照] cp_0002 [文件改动] "正在调整章节顺序"
 User> rewind --turns 1
-[已回滚] 文件与对话历史已恢复到上一轮任务开始前
+[已回滚] 文件与对话历史已恢复到上一对话点
 ```
 
 ### 切换模式
@@ -201,7 +208,7 @@ CLI 与桌面共用同一套 IPC 架构：
 | 危险操作确认 | 终端确认 + 命令拦截 | WebSocket 确认栏 + 安全弹窗 |
 | 实时面板 | 日志终端 | 日志 / TODO / Agent 监控 / 文件树 / Mini 模式 |
 | 配置档案 | 手改 `.env` | GUI + profiles |
-| 备份回滚 | `rollback` / `rewind` 命令 | 设置菜单「备份/回滚」可视化操作 |
+| 备份回滚 | 当前 session 的 `filehistory` / `rollback` / `checkpoints` / `rewind` 命令 | 设置菜单「备份/回滚」可视化操作 |
 
 更多：
 

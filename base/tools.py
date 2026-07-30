@@ -67,9 +67,11 @@ def _coerce_path_list(raw: str) -> List[str]:
         return parsed if isinstance(parsed, list) else [raw]
     except json.JSONDecodeError:
         pass
-    # 单反斜杠转义后重试（F:\Soul... -> F:\\Soul...）
+    # 单反斜杠转义后重试：只转义未被转义的单反斜杠，避免已转义路径被二次翻倍
     try:
-        parsed = json.loads(text.replace("\\", "\\\\"))
+        import re as _re
+        escaped = _re.sub(r'\\(?!\\)', r'\\\\', text)
+        parsed = json.loads(escaped)
         if isinstance(parsed, list):
             return parsed
     except json.JSONDecodeError:

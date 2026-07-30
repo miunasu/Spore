@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::fs;
 use tauri::Manager;
 
+mod edge_snap;
+
 #[cfg(target_os = "windows")]
 use std::ptr::null_mut;
 
@@ -229,6 +231,35 @@ fn paste_paths_to_directory(payload: FileClipboardPayload, target_dir: PathBuf) 
     }
 
     Ok(pasted_paths)
+}
+
+/// 从 .env 文件读取 DESKTOP_API_PORT，供前端动态获取后端端口
+#[tauri::command]
+fn get_api_port(state: tauri::State<AppState>) -> u16 {
+    let env_path = state.spore_root.join(".env");
+    if let Ok(content) = fs::read_to_string(&env_path) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("DESKTOP_API_PORT=") {
+                if let Ok(port) = rest.trim().parse::<u16>() {
+                    return port;
+                }
+            }
+        }
+    }
+    8765
+}
+
+#[tauri::command]
+fn configure_edge_snap(
+    window: tauri::Window,
+    mini_mode: bool,
+    enabled: bool,
+) -> Result<(), String> {
+    edge_snap::configure(&window, mini_mode, enabled)
 }
 
 #[tauri::command]
@@ -996,6 +1027,8 @@ fn main() {
             spore_root: spore_root.clone(),
         })
         .invoke_handler(tauri::generate_handler![
+            get_api_port,
+            configure_edge_snap,
             set_file_clipboard,
             get_file_clipboard,
             paste_file_clipboard
@@ -1011,7 +1044,8 @@ fn main() {
             }
             
             let window = app.get_window("main").unwrap();
-            
+            edge_snap::start(window.clone());
+
             #[cfg(target_os = "windows")]
             {
                 use window_vibrancy::apply_mica;
@@ -1021,8 +1055,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(|event| {
-            if let tauri::WindowEvent::Destroyed = event.event() {
-                stop_backend();
+            match event.event() {
+                tauri::WindowEvent::Moved(_) if event.window().label() == "main" => {
+                    edge_snap::window_moved(event.window());
+                }
+                tauri::WindowEvent::Destroyed => {
+                    edge_snap::shutdown();
+                    stop_backend();
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

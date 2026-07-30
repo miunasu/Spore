@@ -5,19 +5,37 @@ Chat 进程模块 - 独立进程负责与 LLM 通信
 import multiprocessing as mp
 from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, Future
+import re
 import threading
 import signal
 import time
 import uuid
 
 from .client import load_openai_client, load_anthropic_client
-from .logger import log_error
+from .logger import log_error, log_raw_response
 from .config import get_config
 from . import config as _config
 
 if TYPE_CHECKING:
     from openai import OpenAI
     from anthropic import Anthropic
+
+# request_id 格式：{conversation_id}_{uuid}
+_REQUEST_ID_CONV_RE = re.compile(
+    r"^(?P<cid>.+)_(?P<uuid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+)
+
+
+def conversation_id_from_request_id(request_id: Optional[str]) -> Optional[str]:
+    """从 request_id 反解对话 ID（chat 进程内没有 conversation contextvar）。"""
+    if not request_id:
+        return None
+    match = _REQUEST_ID_CONV_RE.match(request_id)
+    if not match:
+        return None
+    cid = (match.group("cid") or "").strip()
+    return cid or None
+
 
 # 向后兼容的全局变量
 _current_conversation_id: Optional[str] = None
@@ -108,18 +126,33 @@ class ChatProcess:
         全部失败后返回最后一次的错误。
         """
         last_result = None
+        total_attempts = len(self._RETRY_DELAYS)
         for attempt, delay in enumerate(self._RETRY_DELAYS):
             if delay > 0:
-                # 显示重试进度到 Desktop error 日志
-                log_error(
-                    "LLM_API_RETRY_PROGRESS",
-                    f"请求失败，{delay}秒后进行第 {attempt + 1} 次重试..."
-                )
+                # 第 attempt 次失败后的下一次重试（attempt 从 0 计，展示为第 attempt+1 次重试）
+                progress_msg = f"请求失败，{delay}秒后进行第 {attempt + 1} 次重试..."
+                log_error("LLM_API_RETRY_PROGRESS", progress_msg)
+                # 经 IPC 推送进度，供 Desktop 前端 system 日志展示（chat 进程自身 log 到不了主进程 WS）
+                try:
+                    self.response_queue.put({
+                        "request_id": request_id,
+                        "status": "progress",
+                        "data": {
+                            "event": "llm_retry",
+                            "attempt": attempt + 1,
+                            "total": total_attempts,
+                            "delay": delay,
+                            "message": progress_msg,
+                        },
+                    })
+                except Exception:
+                    pass
                 time.sleep(delay)
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
             result = self._do_single_llm_call(request_id, request_data)
             if result["status"] != "error":
+                self._log_raw_response(request_id, request_data, result)
                 return result
             last_result = result
             # 如果是被取消的，不重试
@@ -127,9 +160,39 @@ class ChatProcess:
                 return result
             log_error(
                 "LLM_API_RETRY",
-                f"API call failed (attempt {attempt + 1}/{len(self._RETRY_DELAYS)}): {result.get('data', '')}"
+                f"API call failed (attempt {attempt + 1}/{total_attempts}): {result.get('data', '')}"
             )
         return last_result
+
+    def _log_raw_response(self, request_id: str, request_data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """收到 LLM 回复后立即把原文完整写入对应会话的 raw 日志（仅落盘）。
+
+        由 LOG_RAW_ENABLED 控制；失败静默，绝不影响正常回复流程。
+        """
+        try:
+            if not getattr(self.config, "log_raw_enabled", False):
+                return
+            if result.get("status") != "success":
+                return
+            data = result.get("data")
+            if not isinstance(data, dict):
+                return
+            metadata = {
+                "request_id": request_id,
+                "conversation_id": conversation_id_from_request_id(request_id),
+                "model": request_data.get("model"),
+                "role": data.get("role"),
+                "sub_agent": bool(request_data.get("use_sub_agent_config")),
+                "agent_profile": request_data.get("agent_profile"),
+                "usage": data.get("usage"),
+            }
+            log_raw_response(
+                data.get("content") or "",
+                conversation_id=conversation_id_from_request_id(request_id),
+                metadata=metadata,
+            )
+        except Exception:
+            pass
 
     def _do_single_llm_call(self, request_id: str, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """

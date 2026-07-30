@@ -95,7 +95,7 @@ The skill directory summary in the system prompt is scanned and assembled by `pr
 1. Create the directory: `skills/your-skill/`
 2. Write `SKILL.md` (name/description + actionable instructions)
 3. If scripts are needed: put them in `scripts/`, parameterize them, and support `--help`
-4. Write extra dependencies into `requirements.txt` and install them yourself in the runtime environment
+4. Write extra dependencies into `requirements.txt` and install them yourself in the runtime environment; Spore discovers and reads skills but does not automatically install their external dependencies
 5. Launch Spore and, in conversation, ask it to "query the your-skill skill" to verify `skill_query`
 
 CLI self-check:
@@ -106,7 +106,15 @@ User> skills
 
 This prints the feature summaries of the discovered skills. On the desktop, the "skills" page in the right column also lets you browse the skill directories directly.
 
-> Tip: for the desktop installed edition, the skills directory lives under `skills/` in the installation directory (located via `SPORE_RESOURCE_DIR`); drop new skill packages into that directory to have them discovered.
+> Tip: in the installed desktop edition, the skills directory is `skills/` under the resource root (normally located through `SPORE_RESOURCE_DIR`); source runs normally use `skills/` under the repository root. If a deployment supplies `SKILLS_DIR`, resolve skills and scripts from that directory.
+
+### Path and Dependency Conventions
+
+- Write script and resource paths in `SKILL.md` relative to the current skill directory, such as `scripts/tool.py` and `references/notes.md`
+- For commands intended to run from the repository root, use `skills/<skill-name>/...`; at runtime, use `SKILLS_DIR` when provided or `skills/` under `SPORE_RESOURCE_DIR` in the installed desktop edition
+- Never put development-machine absolute paths, such as drive-letter paths or personal home directories, in skill documentation or script defaults
+- Example inputs and outputs should use clear placeholder relative paths, such as `examples/input.docx` and `output/result.docx`
+- `requirements.txt` only declares dependencies; Spore does not automatically run `pip`, `npm`, or system package installation
 
 ---
 
@@ -116,7 +124,7 @@ This prints the feature summaries of the discovered skills. On the desktop, the 
 2. **Scripts run independently**: do not depend on Spore's internal imports  
 3. **Readable error messages**: non-zero exit code + stderr explanation  
 4. **Use little context**: put details in references and keep SKILL.md a concise, searchable structure  
-5. **Write absolute paths or clearly relative to the working directory**: the agent's host operations are based on cwd  
+5. **Resolve paths relative to the skill directory or a declared resource root**: prefer skill-relative paths; when crossing skill boundaries, use `SKILLS_DIR` / `SPORE_RESOURCE_DIR` explicitly instead of development-machine absolute paths
 
 ---
 

@@ -400,7 +400,7 @@ class CLICommandHandler:
             return "default"
 
     def _handle_rollback_command(self, user_input: str) -> None:
-        """处理文件级回滚: rollback <文件路径> [--to <版本号>|--steps <N>]"""
+        """处理文件级回滚: rollback <文件路径> [--to <版本号>|--steps <N>]（当前会话）"""
         from .backup_manager import get_backup_manager
 
         parts = user_input.strip().split()
@@ -437,7 +437,12 @@ class CLICommandHandler:
             return
         file_path = " ".join(path_parts)
 
-        result = get_backup_manager().restore_file(file_path, version_id=version_id, steps=steps)
+        result = get_backup_manager().restore_file(
+            file_path,
+            version_id=version_id,
+            steps=steps,
+            session_id=self._current_session_id(),
+        )
         if result.get("ok"):
             if result.get("deleted"):
                 print(f"[回滚成功] 文件已恢复到 v{result['restored_to_version']}（该版本文件不存在，已删除）")
@@ -447,29 +452,30 @@ class CLICommandHandler:
             print(f"[错误] {result.get('error')}")
 
     def _handle_filehistory_command(self, user_input: str) -> None:
-        """处理文件备份历史: filehistory [<文件路径>]"""
+        """处理文件备份历史: filehistory [<文件路径>]（当前会话）"""
         from .backup_manager import get_backup_manager
 
         bm = get_backup_manager()
+        session_id = self._current_session_id()
         arg = user_input.strip()[len("filehistory"):].strip()
 
         if not arg:
-            files = bm.list_tracked_files()
+            files = bm.list_tracked_files(session_id=session_id)
             if not files:
-                print("[提示] 尚无被跟踪的文件备份")
+                print("[提示] 当前会话尚无被跟踪的文件备份")
                 return
-            print(f"\n[被跟踪的文件] 共 {len(files)} 个:")
+            print(f"\n[当前会话被跟踪的文件] 共 {len(files)} 个:")
             for f in files:
                 print(f"  - {f}")
             print("使用 'filehistory <文件路径>' 查看版本历史\n")
             return
 
-        result = bm.get_history(arg)
+        result = bm.get_history(arg, session_id=session_id)
         if not result.get("ok"):
             print(f"[错误] {result.get('error')}")
             return
 
-        print(f"\n[备份历史] {result['path']}")
+        print(f"\n[备份历史] {result['path']}  (会话={session_id})")
         print(f"  baseline: {'有' if result['has_baseline'] else '无（文件由 Agent 创建）'}")
         for v in result["versions"]:
             deleted = "（删除）" if v["store"] == "delete" else ""
@@ -488,7 +494,14 @@ class CLICommandHandler:
         print(f"\n[对话点快照] 共 {len(checkpoints)} 个:")
         for cp in checkpoints:
             n_files = len(cp.get("files", {}))
-            print(f"  {cp['id']}  {cp['ts']}  消息数={cp['message_count']}  跟踪文件={n_files}")
+            kind = cp.get("kind", "action")
+            kind_label = "用户消息" if kind == "user_message" else "文件改动"
+            preview = (cp.get("reply_preview") or "").strip()
+            extra = f"  {preview}" if preview else ""
+            print(
+                f"  {cp['id']}  {cp['ts']}  [{kind_label}]  "
+                f"消息数={cp['message_count']}  跟踪文件={n_files}{extra}"
+            )
         print("使用 'rewind <checkpoint_id>' 回滚到指定对话点\n")
 
     def _handle_rewind_command(self, user_input: str) -> None:

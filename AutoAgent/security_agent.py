@@ -171,6 +171,100 @@ _CLAIM_TTL = 600
 _analyze_semaphore = threading.BoundedSemaphore(2)
 _SEMAPHORE_WAIT_TIMEOUT = 90
 
+# ===========================================================================
+# 会话命令历史（session context 模式）
+# session_id -> 按时间顺序排列的已分析命令列表
+# ===========================================================================
+_session_history: Dict[str, List[str]] = {}
+_session_history_lock = threading.Lock()
+
+
+def _get_session_history(session_id: Optional[str]) -> List[str]:
+    """返回指定 session 的历史命令列表（副本）；session_id 为 None 时返回空列表。"""
+    if not session_id:
+        return []
+    with _session_history_lock:
+        return list(_session_history.get(session_id, []))
+
+
+def _append_session_history(session_id: Optional[str], command: str) -> None:
+    """将命令追加到 session 历史；超出上限时丢弃最旧的条目。"""
+    if not session_id or not command:
+        return
+    config = get_config()
+    max_cmds = getattr(config, "security_session_context_max_commands", 20)
+    with _session_history_lock:
+        history = _session_history.setdefault(session_id, [])
+        if command not in history:  # 避免重复记录同一命令（批量追加时可能重入）
+            history.append(command)
+        if len(history) > max_cmds:
+            # 从头部截断，保留最近的 max_cmds 条
+            _session_history[session_id] = history[-max_cmds:]
+
+
+def _append_session_history_batch(session_id: Optional[str], commands: List[str]) -> None:
+    """批量将命令列表追加到 session 历史。"""
+    for cmd in commands:
+        _append_session_history(session_id, cmd)
+
+
+def clear_session_history(session_id: str) -> None:
+    """清除指定 session 的历史（会话结束时由外部调用，可选）。"""
+    with _session_history_lock:
+        _session_history.pop(session_id, None)
+
+
+def _build_context_user_message_single(history: List[str], command: str) -> str:
+    """
+    构造带历史上下文的单条命令分析消息。
+
+    格式：
+        会话历史命令:
+        ```
+        1. cmd1
+        2. cmd2
+        ```
+
+        当前命令:
+        ```
+        current_cmd
+        ```
+    """
+    if not history:
+        return f"命令:\n```\n{command}\n```"
+    history_lines = "\n".join(f"{i}. {cmd}" for i, cmd in enumerate(history, 1))
+    return (
+        f"会话历史命令:\n```\n{history_lines}\n```\n\n"
+        f"当前命令:\n```\n{command}\n```"
+    )
+
+
+def _build_context_user_message_batch(history: List[str], commands: List[str]) -> str:
+    """
+    构造带历史上下文的批量命令分析消息。
+
+    格式：
+        会话历史命令:
+        ```
+        1. cmd1
+        2. cmd2
+        ```
+
+        待分析命令列表:
+        ```
+        1. cmd_a
+        2. cmd_b
+        ```
+    """
+    current_lines = "\n".join(f"{i}. {cmd}" for i, cmd in enumerate(commands, 1))
+    if not history:
+        return f"命令列表:\n```\n{current_lines}\n```"
+    history_lines = "\n".join(f"{i}. {cmd}" for i, cmd in enumerate(history, 1))
+    return (
+        f"会话历史命令:\n```\n{history_lines}\n```\n\n"
+        f"待分析命令列表:\n```\n{current_lines}\n```"
+    )
+
 
 def _cache_put(normalized: str, result: Dict[str, Any]) -> None:
     with _cache_lock:
@@ -255,17 +349,28 @@ def _language_directive(config) -> str:
     )
 
 
-def _analyze_intent(command: str) -> Optional[Dict[str, Any]]:
-    """调用 LLM 分析单条命令的意图 + 恶意研判，返回结构化结果。"""
+def _analyze_intent(command: str, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """调用 LLM 分析单条命令的意图 + 恶意研判，返回结构化结果。
+
+    当 config.security_agent_session_context 为 True 且提供了 session_id 时，
+    会将该 session 的历史命令作为上下文随当前命令一起发给 LLM。
+    """
     config = get_config()
     system_prompt = load_agent_type_prompt("security_intent")
     if not system_prompt:
         return None
     system_prompt += _language_directive(config)
 
+    use_context = getattr(config, "security_agent_session_context", False) and bool(session_id)
+    if use_context:
+        history = _get_session_history(session_id)
+        user_content = _build_context_user_message_single(history, command)
+    else:
+        user_content = f"命令:\n```\n{command}\n```"
+
     try:
         request_id = _ipc_manager.send_chat_request(
-            messages=[{"role": "user", "content": f"命令:\n```\n{command}\n```"}],
+            messages=[{"role": "user", "content": user_content}],
             model=config.resolve_agent_llm("security")["model"],
             system=system_prompt,
             agent_profile="security",
@@ -293,11 +398,15 @@ def _analyze_intent(command: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _analyze_intent_batch(commands: List[str]) -> Dict[int, Dict[str, Any]]:
+def _analyze_intent_batch(
+    commands: List[str], session_id: Optional[str] = None
+) -> Dict[int, Dict[str, Any]]:
     """
     一次 LLM 调用批量研判多条命令，返回 {输入序号(1-based): 结果}。
 
     回复解析为 JSON 数组，按 index 字段对号；缺失/越界/无 intent 的条目跳过。
+    当 config.security_agent_session_context 为 True 且提供了 session_id 时，
+    会将该 session 的历史命令作为上下文随当前命令列表一起发给 LLM。
     """
     config = get_config()
     system_prompt = load_agent_type_prompt("security_intent")
@@ -305,10 +414,16 @@ def _analyze_intent_batch(commands: List[str]) -> Dict[int, Dict[str, Any]]:
         return {}
     system_prompt += _language_directive(config)
 
-    numbered = "\n".join(f"{i}. {cmd}" for i, cmd in enumerate(commands, 1))
+    use_context = getattr(config, "security_agent_session_context", False) and bool(session_id)
+    if use_context:
+        history = _get_session_history(session_id)
+        user_content = _build_context_user_message_batch(history, commands)
+    else:
+        numbered = "\n".join(f"{i}. {cmd}" for i, cmd in enumerate(commands, 1))
+        user_content = f"命令列表:\n```\n{numbered}\n```"
     try:
         request_id = _ipc_manager.send_chat_request(
-            messages=[{"role": "user", "content": f"命令列表:\n```\n{numbered}\n```"}],
+            messages=[{"role": "user", "content": user_content}],
             model=config.resolve_agent_llm("security")["model"],
             system=system_prompt,
             agent_profile="security",
@@ -661,6 +776,8 @@ def analyze_commands_async(
         with _cache_lock:
             cached = _intent_cache.get(normalized)
         if cached is not None:
+            # 缓存命中：命令已被执行，追加到 session 历史
+            _append_session_history(session_id, command)
             _handle_intent_result(emit, command, cached, True, session_id, interrupt_epoch)
         else:
             misses.append((command, normalized))
@@ -673,10 +790,12 @@ def analyze_commands_async(
             return
         try:
             if len(misses) == 1:
-                result = _analyze_intent(misses[0][0])
+                result = _analyze_intent(misses[0][0], session_id=session_id)
                 results = {1: result} if result else {}
             else:
-                results = _analyze_intent_batch([cmd for cmd, _ in misses])
+                results = _analyze_intent_batch(
+                    [cmd for cmd, _ in misses], session_id=session_id
+                )
         finally:
             _analyze_semaphore.release()
 
@@ -685,6 +804,8 @@ def analyze_commands_async(
             if not result:
                 continue
             _cache_put(normalized, result)
+            # 将已分析命令追加到 session 历史（无论恶意与否都记录）
+            _append_session_history(session_id, command)
             _handle_intent_result(emit, command, result, False, session_id, interrupt_epoch)
 
     threading.Thread(target=_worker, daemon=True, name="security_agent_batch").start()
@@ -721,6 +842,8 @@ def analyze_command_async(
     with _cache_lock:
         cached = _intent_cache.get(normalized)
     if cached is not None:
+        # 命令已被执行，追加到 session 历史
+        _append_session_history(session_id, command)
         _handle_intent_result(emit, command, cached, True, session_id, interrupt_epoch)
         return
 
@@ -729,12 +852,14 @@ def analyze_command_async(
             log_info("SECURITY_AGENT", f"意图研判排队超时，跳过: {command[:80]}")
             return
         try:
-            result = _analyze_intent(command)
+            result = _analyze_intent(command, session_id=session_id)
         finally:
             _analyze_semaphore.release()
         if not result:
             return
         _cache_put(normalized, result)
+        # 将已分析命令追加到 session 历史（无论恶意与否都记录）
+        _append_session_history(session_id, command)
         _handle_intent_result(emit, command, result, False, session_id, interrupt_epoch)
 
     threading.Thread(target=_worker, daemon=True, name="security_agent").start()

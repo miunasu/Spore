@@ -38,7 +38,8 @@ This document describes the actual code architecture of **Spore 4.0**. The entry
 │  ├─ ProtocolManager + ActionParser                                  │
 │  ├─ Tools + ToolPolicy (session/global filtering + runtime guard)   │
 │  ├─ SecurityGuard (interception / risk assessment / circuit break)  │
-│  ├─ BackupManager (file versions + conversation checkpoints)        │
+│  ├─ BackupManager (session-scoped files + user/action checkpoints)  │
+│  ├─ Learning (episodic retrieval/record, optional degrade)          │
 │  ├─ ModeSelector / CharacterManager / TodoManager / RuleReminder    │
 │  └─ multi_agent_dispatch → AgentProcessManager / SubAgentThread     │
 └─────────────┬───────────────────────────────────────────────────────┘
@@ -158,8 +159,8 @@ Spore/
 ### 3. Desktop Path
 
 1. FastAPI lifespan: `initialize_desktop_backend()` (reuses the main initialization)
-2. Start the standalone WebSocket push process (port = HTTP + 1) and wire up the log / TODO / Agent monitoring / confirmation bridges
-3. Each session maintains an independent `ConversationLoop` via `ConversationLoopManager`
+2. Start the standalone WebSocket push process: the backend derives its port as REST + 1, while the current React client still uses the fixed address `ws://127.0.0.1:8766`
+3. `ConversationLoopManager` maintains an independent `ConversationState` and `SessionConversationLoop` for each session
 4. **Backend self-driven task loop**: after the frontend submits a task with `POST /api/task/submit`, the backend automatically advances round by round inside a thread pool until a terminal state; the frontend only consumes the WebSocket `task_event` stream (`task_started / round_reply / tool_call / tool_result / todo_update / task_finished`, plus the asynchronous side-channel events `command_intent / security_malicious / security_remediation`). Closing the frontend page or switching tabs therefore does not affect task execution.
 
 ---
@@ -173,6 +174,13 @@ Spore/
 | `ConversationState` | `base/state_manager.py` | Per-session messages, tokens, TODOs, context_mode, interrupt_epoch, session-level tool policy |
 | `MultiSessionManager` | Same file | Multi-session creation / switching / deletion (desktop) |
 | `session_context` | `base/session_context.py` | ContextVar binding conversation_id / task_source / task_epoch |
+
+Desktop session isolation does not depend on the currently selected UI tab:
+
+- Each session's `SessionConversationLoop` is permanently bound to its own `ConversationState` and owns a separate reentrant execution lock; complete rounds are serialized within one session, while different sessions can run concurrently
+- Main LLM request IDs use `{conversation_id}_{uuid}`; IPC matches and logically cancels the exact request ID, while `interrupt_epoch` discards late results after interruption
+- `conversation_context` binds logs, TODOs, confirmations, tool policy, and sub-Agent side channels to the requesting session, and `copy_context()` propagates the binding into parallel tools
+- Cancellation is application-level logical cancellation and does not guarantee termination of a provider request already sent over the network
 
 ### Conversation Loop `ConversationLoop`
 
@@ -283,16 +291,39 @@ Two parts: **static command interception** (always available) and **security-age
      - **Asynchronous intent analysis**: generates a plain-language intent explanation (`command_intent` event, shown as a footnote in the frontend)
      - **Malicious circuit break**: when a command is judged malicious, it writes the audit record, **interrupts the current session** (epoch bump + sub-Agent termination), and pushes `security_malicious`
      - **Remediation advice**: after a circuit break, generates `security_remediation` (including `auto_fix_prompt`); the frontend modal offers "handle manually" or "auto-fix" (executed in a new session)
+     - **Optional session command context**: `SECURITY_AGENT_SESSION_CONTEXT` is off by default; when enabled, the current command and up to `SECURITY_SESSION_CONTEXT_MAX_COMMANDS` (default 20) recently and successfully adjudicated commands from the same session are sent to the security model
+     - Complete command history is held in process memory. Even with context disabled, full mode collects successfully adjudicated commands but does not include prior history in later requests. `clear_session_history()` exists but is not yet connected to the new-conversation, memory-clear, reset, or session-deletion lifecycle; only process exit naturally releases it
 3. The user-facing text language follows `SYSTEM_LANGUAGE`.
 
 ### Backup and Rollback (v4.0) `base/backup_manager.py`
 
-A two-layer "time machine" whose data lives in `.spore/`:
+A two-layer "time machine" whose data is **session-scoped** under `.spore/`:
 
-- **File level**: the Agent automatically snapshots every file before writing/deleting it (baseline + `bsdiff4` incremental patches, deduplicated by content hash); `rollback <file> [--to <version>|--steps N]`, `filehistory` to inspect / restore
-- **Conversation checkpoints**: file and conversation state are recorded at the start of every task round; `rewind [<checkpoint_id>|--turns N]` restores **files + conversation history + TODOs** to that point in one step
-- On the desktop, this maps to `/api/backup/*` and the "Backup/Rollback" page in the settings menu
+- **File level (session-isolated)**: files actually changed by `file write/delete` or `edit` through the main `ConversationLoop` are snapshotted (baseline + `bsdiff4` incremental patches); shell-command and direct sub-Agent writes are not guaranteed to be captured
+  - Versions: `.spore/backups/<session_id>/<path_hash>/baseline.full` + `vNNNN.patch|full`
+  - Metadata: `.spore/metadata/<session_id>_file_history.json`
+  - CLI `rollback` / `filehistory` operate on the current session only. The desktop `/api/backup/files*` `conversation_id` is optional; when omitted it resolves to the backend's current session rather than being inferred from a running task, so callers should pass it explicitly
+- **Conversation checkpoints (two kinds)**:
+  1. `user_message`: created after a user message is queued; wired into CLI and direct `/api/chat/send`, but not yet created by the current desktop `/api/task/submit` main path
+  2. `action`: created when an ACTION in an LLM reply first succeeds in recording a file version, allowing rewind to before that reply
+  - `rewind [<checkpoint_id>|--turns N]` restores **files + conversation history + TODOs** together
+  - Storage: `.spore/checkpoints/<session_id>.json`
+- Desktop maps to `/api/backup/*` and the settings "Backup/Rollback" page (checkpoints and file backups are bound to the active session)
+- Version chains and metadata are session-isolated, but all sessions still operate on the same physical workspace files. Rollback currently has no cross-session conflict detection; when sessions modify the same path, `rollback`, `rewind`, or file restore can overwrite newer work from another session
 - Switches and limits: `BACKUP_ENABLED` / `BACKUP_DIR` / `BACKUP_MAX_FILE_BYTES` / `BACKUP_MAX_DELETE_FILES`
+
+### Learning (episodic memory) `learning/`
+
+- `EpisodeStore` uses SQLite (schema in `learning/schema.sql`), with episodes and embeddings in separate tables; the database is shared across sessions
+- `ConversationLoop` / Desktop `SessionConversationLoop` attempt to initialize `EpisodicRetriever`
+- Before an LLM request, an embedding is generated for the last user-role message; the latest 100 `general_task` episodes are scored by recency, cosine similarity, and salience, and up to 3 are injected
+- When a task successfully ends with `STOP_REASON`, its query, tool calls, and outcome are recorded as a success episode when possible
+- Embeddings use an OpenAI-compatible `/v1/embeddings` endpoint. Empty dedicated `EMBEDDING_*` settings fall back to `OPENAI_API_KEY` / `OPENAI_API_URL`; the default model is `text-embedding-3-small`
+- Missing embedding configuration, timeout, or API failure is caught by the caller so the main conversation continues. This is not a local embedding or FTS fallback, and an embedding failure while recording skips the entire episode
+- **DB path follows runtime root**: default `<runtime_root>/.spore/memory/episodic.db`
+  - Override with `LEARNING_DB_PATH` / `EPISODIC_DB_PATH` (relative paths are resolved against the runtime root)
+  - Source tree root = parent of `learning/`; packaged build = `Path.cwd()`
+- `ConsolidationEngine` provides candidate discovery, pattern extraction, and semantic-knowledge writes, but currently has no startup hook, background thread, timer, or other runtime scheduler; consolidation does not run automatically
 
 ### IPC and Chat Process
 
@@ -305,13 +336,21 @@ A two-layer "time machine" whose data lives in `.spore/`:
 | Area | Description |
 |------|------|
 | REST routes | `/api/chat` (single round / interrupt / history / session management), `/api/task` (self-driven tasks), `/api/commands` (mode / memory / characters / history), `/api/files` (sandboxed file CRUD), `/api/agents`, `/api/settings` (.env / profiles / language / tool policy), `/api/backup`, `/api/instances`, `/api/confirm` |
-| WebSocket (:8766, standalone process) | Events: `log` / `agent_register` / `agent_output` / `agent_status` / `todo_update` / `confirm_request` / `confirm_cancel` / `task_event`; batched delivery (5 messages or 50ms flush) |
+| WebSocket (default :8766, standalone process) | The backend listens on REST + 1, but the React client currently connects to fixed `ws://127.0.0.1:8766`; events: `log` / `agent_register` / `agent_output` / `agent_status` / `todo_update` / `confirm_request` / `confirm_cancel` / `task_event`; batched delivery (5 messages or 50ms flush) |
 | confirm_manager | File writes/deletes and high-risk commands block on a WS `confirm_request` awaiting frontend confirmation |
 | security_interrupt | Malicious-command circuit-break bridge: session self-interrupts + synthesized `task_event` |
 | settings / profiles | Read/write `.env`, configuration profiles, command-interception toggles, system language, tool policy |
 | instance_manager | Multiple backend instances (port isolation) |
 
 File-route sandbox: only `output` / `skills` / `prompt` / `history` / `characters` plus root-level `note.txt` and `.env` are allowed; `prompt/skills/characters` are read-only resource roots.
+
+### Windows Mini-Mode Four-Edge Snap
+
+- On Windows, `desktop_app/frontend/src-tauri/src/edge_snap.rs` computes geometry in **physical pixels** from the window outer frame, screen cursor position, and the Win32 work area of the monitor under or nearest the cursor; this is neither CSS/logical pixels nor Windows Snap Layout
+- After the left mouse button is released and movement settles, if the window or pointer is within 40 px of a work-area edge, the state machine selects the nearest of left/right/top/bottom, docks there, then slides out while leaving 8 px inside that work area
+- Once hidden, moving out of and then back into the 12 px edge trigger band, limited to the window's span, reveals it. After reveal, it starts hiding again once the pointer has remained outside for at least 650 ms. At shared multi-monitor boundaries, the hidden part may appear on the adjacent monitor
+- The Tauri command `configure_edge_snap(mini_mode, enabled)` configures the native state machine; the native layer synchronizes React/Zustand `snapEdge` / `isSnappedHidden` through the window event `edge-snap-state` with payload `{ edge, hidden }`
+- Non-Windows builds retain the same command interface, but `start`, `window_moved`, `configure`, and `shutdown` are no-ops
 
 ### Configuration
 
@@ -325,6 +364,9 @@ File-route sandbox: only `output` / `skills` / `prompt` / `history` / `character
 - Persistence: `base/logger.py` writes to `logs/<startup time>/conversations/<id>/` based on `session_context`
 - Push: `websocket/log_bridge.py` attaches `conversation_id`; the frontend `logStore` buckets logs by session
 - The body does not embed `session_id` (only routing fields carry session information)
+- Raw logging is enabled by default: after each successful LLM call, the provider's complete response text plus request/model/profile/usage metadata is written to a rotating `raw.log`, without truncation or parsing and without being pushed to the desktop log panel
+- Main requests whose session can be parsed from their request ID are written under that conversation; helper-Agent requests that cannot be resolved this way may go to the process-level `raw.log`
+- Raw content is neither redacted nor encrypted and may include commands, file contents, paths, credentials, or personal data repeated by the model. Clearing or deleting a session does not remove existing logs; use `LOG_RAW_ENABLED=false` to disable them
 
 ### Memory and History
 

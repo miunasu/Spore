@@ -72,6 +72,7 @@ class ConversationLoop:
         # 后续任务完成分支也会读取它们
         self._task_start_query = None  # 记录任务开始时的用户查询
         self._task_start_time = None   # 记录任务开始时间
+        self._no_action_count: int = 0  # 连续无 ACTION 的计数器
         try:
             from learning import EpisodicRetriever
             self.retriever = EpisodicRetriever()
@@ -176,9 +177,10 @@ class ConversationLoop:
                 # 还没有 token 统计，跳过
                 return
         else:
-            # CLI 模式：暂时跳过，因为没有简单的方法获取当前 context
-            # 可以在 send_chat_request 返回后检查
-            return
+            # CLI 模式：使用 tiktoken 估算当前 context token 数
+            current_tokens = count_tokens(self.state.messages)
+            if current_tokens == 0:
+                return
         
         max_tokens = self.config.context_max_tokens
         warning_threshold = max_tokens * self.config.context_warning_threshold
@@ -315,7 +317,9 @@ class ConversationLoop:
                     args_str = str([a.parameters for a in action_block.actions])
                     if len(args_str) > 200:
                         args_str = args_str[:200] + "..."
-                    content_parts.append(f"[执行操作: {action.tool_name}({args_str})]")
+                    _first = action_block.first_action
+                    _tool_name = _first.tool_name if _first is not None else "unknown"
+                    content_parts.append(f"[执行操作: {_tool_name}({args_str})]")
                 else:
                     content_parts.append(content[:500] + "..." if len(content) > 500 else content)
                 
@@ -911,10 +915,11 @@ class ConversationLoop:
         after_todo_start = todo_pos + len("@SPORE:TODO_START")
         remaining = text[after_todo_start:]
         
-        # 找到 TODO 块的结束位置（下一个 ### 标记或文本结束）
-        next_section = remaining.find("\n###")
+        # 找到 TODO 块的结束位置（使用 @SPORE:TODO_END 标记）
+        _end_marker = "@SPORE:TODO_END"
+        next_section = remaining.find(_end_marker)
         if next_section >= 0:
-            after_todo = remaining[next_section + 1:].strip()  # +1 跳过换行符
+            after_todo = remaining[next_section + len(_end_marker):].strip()
         else:
             after_todo = ""
         

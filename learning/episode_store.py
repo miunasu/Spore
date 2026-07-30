@@ -4,20 +4,55 @@ Episodic Memory Store
 """
 import json
 import math
+import os
 import sqlite3
+import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-import uuid
+from typing import List, Dict, Any, Optional, Tuple, Union
 
 from .embedding import EmbeddingGenerator
+
+
+def _spore_runtime_root() -> Path:
+    """
+    与 Spore 主程序一致的运行根目录：
+    - 打包（frozen）：当前工作目录 Path.cwd()
+    - 源码运行：learning/ 的上一级（仓库/安装根）
+    """
+    if getattr(sys, "frozen", False):
+        return Path.cwd()
+    return Path(__file__).resolve().parent.parent
+
+
+def resolve_default_db_path() -> Path:
+    """
+    默认 episodic 数据库路径，跟随 Spore 运行目录。
+
+    优先级：
+    1. 环境变量 LEARNING_DB_PATH 或 EPISODIC_DB_PATH
+       - 绝对路径：原样使用
+       - 相对路径：相对运行根目录
+    2. 默认：<runtime_root>/.spore/memory/episodic.db
+    """
+    env = (os.getenv("LEARNING_DB_PATH") or os.getenv("EPISODIC_DB_PATH") or "").strip()
+    if env:
+        p = Path(env)
+        if not p.is_absolute():
+            p = _spore_runtime_root() / p
+        return p
+    return _spore_runtime_root() / ".spore" / "memory" / "episodic.db"
 
 
 class EpisodeStore:
     """管理 episodic memory 的存储和检索"""
     
-    def __init__(self, db_path: str = "F:/friend/spore/memory/episodic.db"):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: Optional[Union[str, Path]] = None):
+        # None → 跟随 Spore 运行路径；显式传入可覆盖（测试/运维）
+        self.db_path = Path(db_path) if db_path is not None else resolve_default_db_path()
+        if not self.db_path.is_absolute():
+            self.db_path = _spore_runtime_root() / self.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
         self.embedding_gen = EmbeddingGenerator()

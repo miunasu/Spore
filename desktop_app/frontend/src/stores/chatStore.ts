@@ -9,6 +9,7 @@ import {
   createCommandsApi,
   createTaskApi,
   commandsApi,
+  getMainApiPort,
 } from '../services/api';
 import { useLogStore } from './logStore';
 import { useTodoStore } from './todoStore';
@@ -390,9 +391,11 @@ interface ChatStore {
   renameHistoryFile: (oldName: string, newName: string) => Promise<void>;
   deleteHistoryFile: (filename: string) => Promise<void>;
   saveConversation: () => Promise<void>;
+  /** 在 bootstrap() 拿到真实端口后调用，修正主后端端口并初始化默认会话 */
+  setMainBackendPort: (port: number) => void;
 }
 
-// 主后端端口
+// 主后端端口（初始回退值；bootstrap() 后由 setMainBackendPort 修正为 .env 中的实际值）
 const MAIN_PORT = 8765;
 
 export const useChatStore = create<ChatStore>((set, get) => {
@@ -400,14 +403,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
   // 使用固定 ID "default" 以匹配后端的默认 session
   const defaultConv = createConversation('Default');
   defaultConv.id = 'default';  // 覆盖为固定 ID
-  defaultConv.backendPort = MAIN_PORT;
+  defaultConv.backendPort = MAIN_PORT;  // 临时回退值，bootstrap() 后由 setMainBackendPort 修正
   defaultConv.backendStatus = 'running';
 
-  // 确保后端切换到默认 session
-  const chatApi = createChatApi(MAIN_PORT);
-  chatApi.switchSession('default').catch((e) => {
-    frontendLog(t('stores.chat.initDefaultSessionFailed', { error: String(e) }));
-  });
+  // 注意：不在此处调用 switchSession——store 初始化器在 main.tsx 的 initApiPort()
+  // 之前执行，端口尚未确定。改由 main.tsx 在 initApiPort 之后调用 setMainBackendPort。
 
   return {
     conversations: [defaultConv],
@@ -467,14 +467,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
 
       // 默认使用主后端
-      return MAIN_PORT;
+      return getMainApiPort();
     },
 
     // 对话管理
     newConversation: async (name) => {
       const newConv = createConversation(name);
       // 新对话直接使用主后端
-      newConv.backendPort = MAIN_PORT;
+      newConv.backendPort = getMainApiPort();
       newConv.backendStatus = 'running';
 
       set((state) => ({
@@ -485,7 +485,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       // 在后端创建新会话
       try {
-        const chatApi = createChatApi(MAIN_PORT);
+        const chatApi = createChatApi(getMainApiPort());
         await chatApi.createSession(newConv.id);
         frontendLog(t('stores.chat.created', { name: newConv.name, id: newConv.id.slice(0, 16) }));
       } catch (e) {
@@ -502,12 +502,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
         set({ activeConversationId: id, inputValue: '' });
 
         // 通知后端切换会话并加载历史
-        const chatApi = createChatApi(MAIN_PORT);
+        const chatApi = createChatApi(getMainApiPort());
         try {
           await chatApi.switchSession(id);
 
           // 从后端加载该会话的消息历史快照
-          const messages = await fetchSessionMessages(MAIN_PORT, id);
+          const messages = await fetchSessionMessages(getMainApiPort(), id);
 
           // 更新该对话的消息
           get().setMessages(messages, id);
@@ -540,7 +540,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       // 删除后端会话
       try {
-        const chatApi = createChatApi(MAIN_PORT);
+        const chatApi = createChatApi(getMainApiPort());
         await chatApi.deleteSession(id);
       } catch (e) {
         frontendLog(t('stores.chat.deleteBackendSessionFailed', { error: String(e) }));
@@ -574,7 +574,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       // 切换到新的活动会话
       if (id === activeConversationId && newActiveId) {
-        const chatApi = createChatApi(MAIN_PORT);
+        const chatApi = createChatApi(getMainApiPort());
         chatApi.switchSession(newActiveId).catch((e) => {
           frontendLog(t('stores.chat.switchAfterCloseFailed', { error: String(e) }));
         });
@@ -828,7 +828,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         minute: '2-digit',
       });
       const newConv = createConversation(t('stores.chat.securityFixConversationName', { time }));
-      newConv.backendPort = MAIN_PORT;
+      newConv.backendPort = getMainApiPort();
       newConv.backendStatus = 'running';
       const conversationId = newConv.id;
 
@@ -840,7 +840,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }));
 
       try {
-        const chatApi = createChatApi(MAIN_PORT);
+        const chatApi = createChatApi(getMainApiPort());
         await chatApi.createSession(conversationId);
       } catch (e) {
         // /api/task/submit 对不存在的会话会自动创建，创建失败不阻断修复流程
@@ -861,7 +861,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       get().setGenerating(conversationId, true);
 
       try {
-        const taskApi = createTaskApi(MAIN_PORT);
+        const taskApi = createTaskApi(getMainApiPort());
         const response = await taskApi.submit(
           conversationId,
           submissionId,
@@ -1235,7 +1235,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       if (hasRunning || wasGenerating) {
         try {
-          const messages = await fetchSessionMessages(MAIN_PORT, conversationId);
+          const messages = await fetchSessionMessages(getMainApiPort(), conversationId);
           if ((taskStateVersions[conversationId] || 0) !== recoveryVersion) {
             return;
           }
@@ -1297,12 +1297,11 @@ export const useChatStore = create<ChatStore>((set, get) => {
           }
           newConv.id = originalId;
         }
-        newConv.backendPort = MAIN_PORT;
-        newConv.backendStatus = 'running';
+      newConv.backendPort = getMainApiPort();
+      newConv.backendStatus = 'running';
+      const chatApi = createChatApi(getMainApiPort());
 
-        const chatApi = createChatApi(MAIN_PORT);
-
-        // 1. 创建新会话
+      // 1. 创建新会话
         await chatApi.createSession(newConv.id);
 
         // 2. 切换到新会话（确保后端当前会话是新创建的）
@@ -1321,11 +1320,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
             return msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system';
           });
 
+          // 识别所有系统注入的 user 消息前缀
+          const SYSTEM_INJECTED_PREFIXES = [
+            '[系统通知]',
+            '[协议警告]',
+            '以下是之前对话的总结：',
+          ];
+
           const messages: Message[] = allMessages
             .map((msg, index) => {
+              const trimmed = msg.content?.trim() ?? '';
               const isSystemNotice =
                 msg.role === 'system'
-                || (msg.role === 'user' && msg.content?.trim().startsWith('[系统通知]'));
+                || (msg.role === 'user' && SYSTEM_INJECTED_PREFIXES.some((p) => trimmed.startsWith(p)));
               const baseMessage = {
                 id: index.toString(),
                 role: (isSystemNotice ? 'system' : msg.role) as 'user' | 'assistant' | 'system',
@@ -1337,7 +1344,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // 查找前一条消息作为"发送给LLM的消息"
                 const prevMsg = index > 0 ? allMessages[index - 1] : null;
                 const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
-                
+
                 return {
                   ...baseMessage,
                   content: extractDisplayContent(msg.content),
@@ -1345,14 +1352,27 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   raw_response: msg.content, // 原始响应（包含协议标记）
                 };
               } else {
-                // user 消息：区分用户输入和工具结果
-                const isToolResult = msg.content?.trim().startsWith('@SPORE:RESULT');
-                
+                // user 消息：区分工具结果、系统注入、真实用户输入
+                const isToolResult = trimmed.startsWith('@SPORE:RESULT');
+
                 if (isToolResult) {
-                  // 工具结果消息：不在对话中显示，但会被 assistant 消息引用
+                  // 工具结果消息：不在对话中显示
                   return null;
+                } else if (isSystemNotice) {
+                  // 系统注入消息（协议警告 / 系统通知 / 记忆摘要等）：剥掉前缀标签后以 system 气泡显示
+                  let displayContent = msg.content ?? '';
+                  for (const prefix of SYSTEM_INJECTED_PREFIXES) {
+                    if (displayContent.trimStart().startsWith(prefix)) {
+                      displayContent = displayContent.trimStart().slice(prefix.length).trimStart();
+                      break;
+                    }
+                  }
+                  return {
+                    ...baseMessage,
+                    content: displayContent,
+                  };
                 } else {
-                  // 用户输入消息：正常显示
+                  // 真实用户输入：正常显示
                   return {
                     ...baseMessage,
                     content: msg.content,
@@ -1418,6 +1438,22 @@ export const useChatStore = create<ChatStore>((set, get) => {
       } catch (error) {
         frontendLog(t('stores.chat.saveConversationFailed', { error: String(error) }));
       }
+    },
+
+    setMainBackendPort: (port: number) => {
+      // 将所有使用旧主后端端口的对话更新为真实端口
+      set((state) => ({
+        conversations: state.conversations.map((c) =>
+          c.backendPort === MAIN_PORT || c.backendPort === null
+            ? { ...c, backendPort: port }
+            : c
+        ),
+      }));
+      // 端口确定后再初始化默认会话
+      const chatApi = createChatApi(port);
+      chatApi.switchSession('default').catch((e) => {
+        frontendLog(t('stores.chat.initDefaultSessionFailed', { error: String(e) }));
+      });
     },
   };
 });

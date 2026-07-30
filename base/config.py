@@ -1,11 +1,26 @@
 import os
+import contextvars
 from typing import Optional
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
 logging.getLogger("dotenv").setLevel(logging.ERROR)
 
-# 全局当前agent名称
+# 线程安全的当前 agent 名称（ContextVar，支持多会话并发）
+_current_agent_name: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "spore_current_agent_name", default="Spore"
+)
+
+def get_current_agent_name() -> str:
+    """线程安全地获取当前 agent 名称。"""
+    return _current_agent_name.get()
+
+def set_current_agent_name(name: str) -> contextvars.Token:
+    """线程安全地设置当前 agent 名称，返回 Token 供 reset 使用。"""
+    return _current_agent_name.set(name)
+
+# 向后兼容：保留模块级属性供旧代码直接 import，值固定为初始默认值
+# 实际读取请使用 get_current_agent_name()
 current_agent_name = "Spore"
 
 # 全局继承记忆标志（用于 SYSTEM_AS_USER 模式下，continue 后第一条消息拼接 prompt）
@@ -49,6 +64,24 @@ class Config:
         # 仅对 Anthropic SDK 有意义，OpenAI SDK 不发送此头部
         self.clean_auth_header: bool = os.getenv("CLEAN_AUTH_HEADER", "false").lower() == "true"
         
+        # ========== Embedding 配置 ==========
+        # 专用 Embedding API，默认回退到主 LLM 的 OPENAI_API_KEY / OPENAI_API_URL
+        # 若你的主模型不支持 /v1/embeddings（如 DeepSeek、Claude），
+        # 请单独配置这三项，指向支持 text-embedding 的服务（OpenAI、硅基流动、本地 Ollama 等）
+        self.embedding_api_key: str = (
+            os.getenv("EMBEDDING_API_KEY", "").strip()
+            or os.getenv("OPENAI_API_KEY", "").strip()
+        )
+        self.embedding_api_url: Optional[str] = (
+            os.getenv("EMBEDDING_API_URL", "").strip()
+            or os.getenv("OPENAI_API_URL", "").strip()
+            or None
+        )
+        self.embedding_model: str = (
+            os.getenv("EMBEDDING_MODEL", "").strip()
+            or "text-embedding-3-small"
+        )
+
         # ========== Anthropic API 配置 ==========
         self.anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "").strip()
         self.anthropic_api_url: Optional[str] = os.getenv("ANTHROPIC_API_URL", "").strip() or None
@@ -185,7 +218,11 @@ class Config:
         self.log_llm_validation_filename: str = os.getenv("LOG_LLM_VALIDATION_FILENAME", "llm_validation.log")
         self.log_tool_execution_filename: str = os.getenv("LOG_TOOL_EXECUTION_FILENAME", "tool_execution.log")
         self.log_general_filename: str = os.getenv("LOG_GENERAL_FILENAME", "general.log")
-        
+
+        # Raw 日志：收到 LLM 回复时立即把原文完整落盘（不推送到 Desktop 左栏日志）
+        self.log_raw_enabled: bool = os.getenv("LOG_RAW_ENABLED", "true").lower() == "true"
+        self.log_raw_filename: str = os.getenv("LOG_RAW_FILENAME", "raw.log")
+
         # 日志监控配置
         self.log_monitor_lock_filename: str = os.getenv("LOG_MONITOR_LOCK_FILENAME", ".monitor.lock")
         try:
@@ -378,6 +415,21 @@ class Config:
             self.security_intent_timeout: int = int(os.getenv("SECURITY_INTENT_TIMEOUT", "45"))
         except ValueError:
             self.security_intent_timeout = 45
+
+        # 会话上下文模式：将本次会话已分析过的命令作为历史上下文随当前命令一起发给 LLM，
+        # 使安全 Agent 能结合 Agent 行为序列理解当前命令的真实意图。
+        # 仅对 full 模式有效；session_id 为 None（CLI 无桌面 session）时自动降级为无上下文。
+        self.security_agent_session_context: bool = (
+            os.getenv("SECURITY_AGENT_SESSION_CONTEXT", "false").lower() == "true"
+        )
+
+        # 会话上下文保留的最大历史命令数（超出则丢弃最旧的）
+        try:
+            self.security_session_context_max_commands: int = int(
+                os.getenv("SECURITY_SESSION_CONTEXT_MAX_COMMANDS", "20")
+            )
+        except ValueError:
+            self.security_session_context_max_commands = 20
 
         # ========== 系统语言 ==========
         # 影响需要"面向用户自然语言输出"的辅助 Agent（如命令意图说明、熔断修复建议）。

@@ -77,6 +77,20 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `CLEAN_SDK_HEADERS` | `false` | 清理 x-stainless 等 SDK 头 |
 | `CLEAN_AUTH_HEADER` | `false` | Anthropic 场景移除多余 Authorization |
 
+### Embedding / Learning
+
+Learning 使用 OpenAI-compatible embeddings HTTP 接口（`<base_url>/v1/embeddings`）；当 `LLM_SDK=anthropic` 时不会自动切换到 Anthropic embedding API：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `EMBEDDING_API_KEY` | 回退 `OPENAI_API_KEY` | Embedding 服务 API Key |
+| `EMBEDDING_API_URL` | 回退 `OPENAI_API_URL` | Embedding 服务 Base URL；为空时使用 OpenAI 默认地址 |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding 模型名 |
+| `LEARNING_DB_PATH` | `<runtime_root>/.spore/memory/episodic.db` | Learning SQLite 路径；相对路径相对运行根解析 |
+| `EPISODIC_DB_PATH` | 同上 | SQLite 路径兼容别名；`LEARNING_DB_PATH` 优先 |
+
+若主 OpenAI-compatible 模型服务不支持 embeddings，或只配置了 Anthropic Key，应单独设置 `EMBEDDING_API_KEY` / `EMBEDDING_API_URL` / `EMBEDDING_MODEL`。缺少 embedding 配置或请求失败时，Learning 检索/记录会跳过，但主对话继续；没有本地 embedding 或 FTS 回退。
+
 ### 子 Agent 独立 LLM（可选，空=继承主 Agent）
 
 | 变量 | 说明 |
@@ -126,7 +140,7 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 |------|------|------|
 | `LAUNCH_MODE` | `cli` | `cli` 或 `desktop` |
 | `DESKTOP_API_HOST` | `127.0.0.1` | FastAPI 监听地址 |
-| `DESKTOP_API_PORT` | `8765` | HTTP 端口；**WebSocket 端口 = HTTP + 1** |
+| `DESKTOP_API_PORT` | `8765` | 仅影响 REST 端口。后端会按 REST + 1 推导 WS 监听端口，但当前 React 客户端仍固定连接 `8766`；修改此值不会同步前端 WebSocket 地址 |
 | `SYSTEM_LANGUAGE` | `zh` | 系统语言：`zh` 或 `en`。影响面向用户的辅助 Agent 输出（命令意图说明、熔断修复建议）。桌面端标题栏的语言开关会自动同步此项；主 Agent 始终跟随用户消息所用的语言。 |
 
 打包运行时还会使用环境变量（由 Tauri / 安装器注入）：
@@ -168,6 +182,15 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 | `SECURITY_GUARD_MODE` | `balanced` | 仅 `basic` 模式生效：`strict` 命中即确认 / `balanced` 中高风险确认 / `permissive` 仅高风险确认 |
 | `SECURITY_LLM_TIMEOUT` | `30` | 风险评估 LLM 超时（秒） |
 | `SECURITY_INTENT_TIMEOUT` | `45` | 意图分析 LLM 超时（秒） |
+| `SECURITY_AGENT_SESSION_CONTEXT` | `false` | 仅 `full` 模式：后续安全分析请求携带同 session 已成功研判的命令上下文 |
+| `SECURITY_SESSION_CONTEXT_MAX_COMMANDS` | `20` | 上下文最多携带的最近历史命令数 |
+
+`full` 模式会话上下文边界：
+
+- 默认关闭时，命令仍逐条研判，成功研判的完整命令也会按 session 收集在进程内存中，只是不把既往历史发送给后续安全分析请求
+- 开启后，最近命令会与当前命令一起发送给配置的安全模型服务。命令可能包含路径、参数、令牌或其他秘密，启用前应评估该服务的数据处理政策
+- 历史只在进程内存中；恶意事件另行写入 `.spore/security_audit.jsonl`
+- `clear_session_history()` 当前尚未接入新对话、清记忆、reset 或删除 session 的生命周期；这些操作不会清除该历史，只有整个进程退出才自然释放
 
 相关数据文件（自动生成、git 忽略）：
 
@@ -281,11 +304,22 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 | `LOG_MONITOR_TYPES` | `error,llm_validation,tool_execution` | 监控展示类型 |
 | `LOG_MONITOR_CHECK_INTERVAL` | `0.5` | 监控刷新间隔 |
 | `LOG_MONITOR_MAX_LINE_LENGTH` | `200` | 监控行截断 |
+| `LOG_RAW_ENABLED` | `true` | Raw 原始回复日志开关 |
+| `LOG_RAW_FILENAME` | `raw.log` | Raw 日志文件名 |
 
 目录约定：
 
 - 进程级：`logs/<启动时间>/...`
 - 对话级：`logs/<启动时间>/conversations/<conversation_id>/...`（按会话隔离落盘）
+- Raw 日志：`logs/<启动时间>/conversations/<conversation_id>/raw.log`
+
+Raw 日志（`LOG_RAW_ENABLED`）：
+
+- 每次 LLM 调用成功后、响应返回调用方之前，把 provider 的**完整**回复文本及 request/model/profile/usage 元数据写入，不截断、不解析、不脱敏、不加密
+- 覆盖主 Agent、子 Agent 与辅助 Agent。可从 request ID 解析 session 的主请求写入对应会话目录；其他辅助请求可能写入进程级 `raw.log`
+- **只落盘**，不推送到 Desktop 左栏日志，也不进日志监控终端；它不记录请求 messages/system prompt，但回复可能复述命令、文件内容、路径、凭据或个人数据
+- 清空或删除会话不会删除已有 raw 日志。若这些数据不应落盘，应显式设置 `LOG_RAW_ENABLED=false`，不要依赖 `LOG_TO_FILE=false`
+- Raw 开关关闭时不会创建 `raw.log`
 
 推送到桌面前端的工具 / general 日志：
 

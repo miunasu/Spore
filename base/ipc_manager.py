@@ -2,13 +2,15 @@
 IPC 管理器 - 负责主进程和 Chat 进程之间的通信
 支持并发请求，通过 request_id 匹配响应
 """
+import json
 import multiprocessing as mp
-from typing import Optional, Dict, Any, List
+import os
 import threading
 import time
 import uuid
+from typing import Optional, Dict, Any, List
 
-from .chat_process import chat_process_worker
+from .chat_process import chat_process_worker, conversation_id_from_request_id
 from .logger import log_error
 from .config import get_config
 
@@ -122,6 +124,11 @@ class IPCManager:
                     if response.get("status") == "interrupted":
                         self._handle_interrupt_response(response)
                         continue
+
+                    # 进度事件（如 LLM 重试）：非终态，推送前端后继续等待真实响应
+                    if response.get("status") == "progress":
+                        self._handle_progress_response(response)
+                        continue
                     
                     request_id = response.get("request_id")
                     if not request_id:
@@ -159,6 +166,58 @@ class IPCManager:
             request_ids = list(self._response_conditions)
         for request_id in request_ids:
             self.cancel_request(request_id)
+
+    @staticmethod
+    def _conversation_id_from_request_id(request_id: Optional[str]) -> Optional[str]:
+        return conversation_id_from_request_id(request_id)
+
+    def _handle_progress_response(self, response: Dict[str, Any]) -> None:
+        """
+        处理 Chat 进程推送的非终态进度（当前主要用于 LLM 重试提醒）。
+
+        chat 子进程的 log_error 无法直接打到主进程 WebSocket；因此经 IPC 转发，
+        由主进程写日志并推送到 Desktop 前端 system 日志面板。
+        """
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        message = data.get("message") or "LLM request progress"
+        request_id = response.get("request_id")
+        conversation_id = self._conversation_id_from_request_id(request_id)
+
+        log_entry = {
+            "error_type": "LLM_API_RETRY_PROGRESS",
+            "message": message,
+            "context": {
+                "request_id": request_id,
+                "attempt": data.get("attempt"),
+                "total": data.get("total"),
+                "delay": data.get("delay"),
+                "event": data.get("event") or "llm_retry",
+            },
+        }
+        try:
+            log_error(
+                "LLM_API_RETRY_PROGRESS",
+                message,
+                context=log_entry["context"],
+            )
+        except Exception:
+            pass
+
+        # Desktop：直推 WS。IPC 分发线程没有 conversation_context，必须显式带 conversation_id。
+        if os.environ.get("SPORE_DESKTOP_MODE") == "1":
+            try:
+                from desktop_app.backend.websocket.ipc_bridge import send_ws_message
+                send_ws_message({
+                    "type": "log",
+                    "data": {
+                        "log_type": "error",
+                        "content": json.dumps(log_entry, ensure_ascii=False, indent=2),
+                        "timestamp": time.time(),
+                        "conversation_id": conversation_id,
+                    },
+                })
+            except Exception as e:
+                log_error("IPC_PROGRESS_WS_ERROR", f"Failed to push retry progress to WS: {e}", e)
     
     def _notify_waiter(self, request_id: str):
         """通知等待特定 request_id 的线程"""

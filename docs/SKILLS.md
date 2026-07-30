@@ -95,7 +95,7 @@ skill_query skill_name="your-skill"
 1. 创建目录：`skills/your-skill/`
 2. 编写 `SKILL.md`（name/description + 可操作说明）
 3. 如需脚本：放 `scripts/`，参数化并支持 `--help`
-4. 额外依赖写入 `requirements.txt`，在运行环境中自行安装
+4. 额外依赖写入 `requirements.txt`，并在运行环境中自行安装；Spore 只发现和读取技能，不会自动安装技能声明的外部依赖
 5. 启动 Spore，对话中要求「查询 your-skill 技能」验证 `skill_query`
 
 CLI 自检：
@@ -106,7 +106,15 @@ User> skills
 
 会打印已发现技能的功能摘要。桌面端右栏「skills」页也可直接浏览技能目录。
 
-> 提示：桌面安装版的技能目录位于安装目录下 `skills/`（由 `SPORE_RESOURCE_DIR` 定位）；把新技能包放进该目录即可被发现。
+> 提示：桌面安装版的技能目录位于资源根下的 `skills/`（通常由 `SPORE_RESOURCE_DIR` 定位）；源码运行时则通常是仓库根的 `skills/`。若部署环境另行提供 `SKILLS_DIR`，技能和脚本应以该目录为准。
+
+### 路径与依赖约定
+
+- `SKILL.md` 内的脚本和资源路径应相对当前技能目录书写，例如 `scripts/tool.py`、`references/notes.md`
+- 从仓库根给出可直接运行的示例时，使用 `skills/<技能名>/...`；运行时定位可使用 `SKILLS_DIR`，桌面安装版资源可使用 `SPORE_RESOURCE_DIR` 下的 `skills/`
+- 禁止把开发机专用绝对路径（如盘符路径或个人 home 目录）写入技能文档或脚本默认值
+- 示例输入/输出可使用清晰的占位相对路径，例如 `examples/input.docx`、`output/result.docx`
+- `requirements.txt` 只是依赖声明；Spore 不会自动执行 `pip`、`npm` 或系统包安装
 
 ---
 
@@ -116,7 +124,7 @@ User> skills
 2. **脚本可独立运行**：不依赖 Spore 内部 import  
 3. **错误信息可读**：非 0 退出码 + stderr 说明  
 4. **少占上下文**：细节放 references，SKILL.md 保持可检索的精炼结构  
-5. **路径写绝对或明确相对工作目录**：Agent 主机操作以 cwd 为准  
+5. **路径相对技能目录或已声明资源根**：优先使用技能目录相对路径；需要跨技能定位时明确使用 `SKILLS_DIR` / `SPORE_RESOURCE_DIR`，不要依赖开发机绝对路径
 
 ---
 

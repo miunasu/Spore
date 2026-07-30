@@ -655,8 +655,11 @@ class ProtocolManager:
         if has_final:
             final_content = (final_blocks[0].get("content") or "").strip() or None
             # STOP_REASON 的自然语言原因按 REPLY 逻辑作为用户可见内容。
-            # 终止回复不应再使用 REPLY；若仍带 REPLY，优先展示 STOP_REASON。
-            display_content = final_content or reply_content
+            # 规范上终止回复不应再使用 REPLY；若模型仍同时输出 REPLY，系统兜底拼接展示。
+            if final_content and reply_content:
+                display_content = f"{reply_content}\n\n{final_content}"
+            else:
+                display_content = final_content or reply_content
             return ParsedResponse(
                 response_type="final",
                 prefix_text=display_content,

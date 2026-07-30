@@ -8,6 +8,9 @@ const titleBar = {
     switchToLight: '切换到亮色主题',
     switchToDark: '切换到暗色主题',
     switchLanguage: '切换语言 (中文 / English)',
+    snap: '吸附',
+    snapEnabled: '已启用靠边吸附：拖到屏幕边缘时自动隐藏',
+    snapDisabled: '点击启用靠边吸附',
   },
   en: {
     exitMiniMode: 'Exit Mini Mode',
@@ -18,6 +21,9 @@ const titleBar = {
     switchToLight: 'Switch to light theme',
     switchToDark: 'Switch to dark theme',
     switchLanguage: 'Switch language (中文 / English)',
+    snap: 'Snap',
+    snapEnabled: 'Edge snap enabled: auto-hides when dragged to screen edge',
+    snapDisabled: 'Click to enable edge snap',
   },
 };
 

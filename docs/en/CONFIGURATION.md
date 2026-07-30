@@ -77,6 +77,20 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | `CLEAN_SDK_HEADERS` | `false` | Strip SDK headers such as x-stainless |
 | `CLEAN_AUTH_HEADER` | `false` | Remove the redundant Authorization header in the Anthropic case |
 
+### Embedding / Learning
+
+Learning uses an OpenAI-compatible embeddings HTTP endpoint (`<base_url>/v1/embeddings`); it does not automatically switch to an Anthropic embedding API when `LLM_SDK=anthropic`:
+
+| Variable | Default | Description |
+|------|------|------|
+| `EMBEDDING_API_KEY` | falls back to `OPENAI_API_KEY` | Embedding-service API key |
+| `EMBEDDING_API_URL` | falls back to `OPENAI_API_URL` | Embedding-service base URL; the OpenAI default is used when empty |
+| `EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
+| `LEARNING_DB_PATH` | `<runtime_root>/.spore/memory/episodic.db` | Learning SQLite path; relative paths resolve against the runtime root |
+| `EPISODIC_DB_PATH` | same as above | Compatibility alias for the SQLite path; `LEARNING_DB_PATH` takes precedence |
+
+If the main OpenAI-compatible model service does not support embeddings, or only an Anthropic key is configured, set `EMBEDDING_API_KEY` / `EMBEDDING_API_URL` / `EMBEDDING_MODEL` separately. Missing embedding configuration or request failures cause Learning retrieval/recording to be skipped while the main conversation continues; there is no local embedding or FTS fallback.
+
 ### Sub-Agent Dedicated LLM (optional; empty = inherit from the main Agent)
 
 | Variable | Description |
@@ -126,7 +140,7 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 |------|------|------|
 | `LAUNCH_MODE` | `cli` | `cli` or `desktop` |
 | `DESKTOP_API_HOST` | `127.0.0.1` | FastAPI listen address |
-| `DESKTOP_API_PORT` | `8765` | HTTP port; **WebSocket port = HTTP + 1** |
+| `DESKTOP_API_PORT` | `8765` | REST port only. The backend derives its WebSocket listener as REST + 1, but the current React client still connects to fixed port `8766`; changing this value does not update the frontend WebSocket address |
 | `SYSTEM_LANGUAGE` | `zh` | System language: `zh` or `en`. Affects user-facing helper-Agent output (command-intent explanations, circuit-break remediation advice). The desktop title-bar language switch syncs this automatically; the main Agent always follows the language of the user's message. |
 
 The packaged runtime also uses environment variables (injected by Tauri / the installer):
@@ -168,6 +182,15 @@ At runtime, you can switch via CLI `mode ...` or the GUI mode dropdown; it appli
 | `SECURITY_GUARD_MODE` | `balanced` | `basic` mode only: `strict` = confirm on every hit / `balanced` = confirm medium and high risk / `permissive` = confirm high risk only |
 | `SECURITY_LLM_TIMEOUT` | `30` | Risk-assessment LLM timeout (seconds) |
 | `SECURITY_INTENT_TIMEOUT` | `45` | Intent-analysis LLM timeout (seconds) |
+| `SECURITY_AGENT_SESSION_CONTEXT` | `false` | `full` mode only: include successfully adjudicated commands from the same session in later security-analysis requests |
+| `SECURITY_SESSION_CONTEXT_MAX_COMMANDS` | `20` | Maximum number of recent historical commands included in context |
+
+Session-context boundaries in `full` mode:
+
+- With the default disabled setting, commands are still analyzed individually and complete successfully adjudicated commands are collected per session in process memory; prior history is simply not sent in later security-analysis requests
+- When enabled, recent commands are sent with the current command to the configured security-model service. Commands may contain paths, arguments, tokens, or other secrets; assess the service's data-handling policy before enabling it
+- History exists only in process memory; malicious events are separately written to `.spore/security_audit.jsonl`
+- `clear_session_history()` is not yet connected to the new-conversation, memory-clear, reset, or session-deletion lifecycle; those operations do not clear this history, and it is naturally released only when the whole process exits
 
 Related data files (auto-generated, git-ignored):
 
@@ -281,11 +304,22 @@ Toggles go down to sub-tool granularity (`file.read/write/delete`, `edit.single/
 | `LOG_MONITOR_TYPES` | `error,llm_validation,tool_execution` | Types displayed by the monitor |
 | `LOG_MONITOR_CHECK_INTERVAL` | `0.5` | Monitor refresh interval |
 | `LOG_MONITOR_MAX_LINE_LENGTH` | `200` | Monitor line truncation |
+| `LOG_RAW_ENABLED` | `true` | Toggle for the raw LLM-response log |
+| `LOG_RAW_FILENAME` | `raw.log` | Raw log file name |
 
 Directory conventions:
 
 - Process level: `logs/<startup time>/...`
 - Conversation level: `logs/<startup time>/conversations/<conversation_id>/...` (persisted with per-session isolation)
+- Raw log: `logs/<startup time>/conversations/<conversation_id>/raw.log`
+
+Raw log (`LOG_RAW_ENABLED`):
+
+- After each successful LLM call and before the response returns to its caller, the provider's **complete** response text and request/model/profile/usage metadata are written without truncation, parsing, redaction, or encryption
+- This covers main, sub-, and helper-Agent calls. Main requests whose session can be parsed from the request ID go to that conversation directory; other helper requests may go to the process-level `raw.log`
+- **File only** — never pushed to the desktop log panel or the log monitor terminal; request messages and the system prompt are not logged, but replies may repeat commands, file contents, paths, credentials, or personal data
+- Clearing or deleting a session does not remove existing raw logs. Set `LOG_RAW_ENABLED=false` explicitly when this data must not be persisted; do not rely on `LOG_TO_FILE=false`
+- No `raw.log` is created while the raw-log toggle is off
 
 Tool / general logs pushed to the desktop frontend:
 

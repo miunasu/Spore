@@ -34,7 +34,7 @@ class CleanHeadersTransport(httpx.HTTPTransport):
             headers_to_remove.extend([k for k in request.headers.keys() if k.lower() == 'authorization'])
         for h in headers_to_remove:
             del request.headers[h]
-        request.headers['user-agent'] = 'python-httpx/0.27.0'
+        request.headers['user-agent'] = f'python-httpx/{httpx.__version__}'
         return super().handle_request(request)
 
 
@@ -50,7 +50,7 @@ class AsyncCleanHeadersTransport(httpx.AsyncHTTPTransport):
             headers_to_remove.extend([k for k in request.headers.keys() if k.lower() == 'authorization'])
         for h in headers_to_remove:
             del request.headers[h]
-        request.headers['user-agent'] = 'python-httpx/0.27.0'
+        request.headers['user-agent'] = f'python-httpx/{httpx.__version__}'
         return await super().handle_async_request(request)
 
 

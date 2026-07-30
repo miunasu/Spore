@@ -5,7 +5,19 @@
 
 import type { TaskInfo } from '../types';
 
-const MAIN_API_BASE = 'http://127.0.0.1:8765';
+// 动态端口：由 main.tsx 在启动时从 .env（通过 Tauri 命令）读取并设置
+// desktop 模式下跟随 DESKTOP_API_PORT；非 Tauri 环境保持默认值 8765
+let _mainApiPort = 8765;
+
+/** 在 App 启动时调用，将 .env 中的 DESKTOP_API_PORT 同步到前端 */
+export function initApiPort(port: number): void {
+  _mainApiPort = port;
+}
+
+/** 获取当前主后端端口（在 initApiPort 之后调用时返回正确值）*/
+export const getMainApiPort = (): number => _mainApiPort;
+
+const getMainApiBase = () => `http://127.0.0.1:${_mainApiPort}`;
 
 class ApiError extends Error {
   constructor(
@@ -22,7 +34,7 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${MAIN_API_BASE}${endpoint}`;
+  const url = `${getMainApiBase()}${endpoint}`;
 
   const response = await fetch(url, {
     ...options,
@@ -323,6 +335,7 @@ export const createBackupApi = (port: number) => ({
         id: string;
         ts: string;
         session_id: string;
+        kind?: 'user_message' | 'action' | string;
         message_count: number;
         llm_reply_count: number;
         reply_preview?: string;
@@ -353,12 +366,18 @@ export const createBackupApi = (port: number) => ({
       body: JSON.stringify(payload),
     }),
 
-  listTrackedFiles: () =>
-    requestToPort<{ success: boolean; files: string[] }>(port, '/api/backup/files'),
+  listTrackedFiles: (conversationId?: string) =>
+    requestToPort<{ success: boolean; conversation_id?: string; files: string[] }>(
+      port,
+      `/api/backup/files${conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : ''}`
+    ),
 
-  getFileHistory: (path: string) =>
-    requestToPort<{
+  getFileHistory: (path: string, conversationId?: string) => {
+    const params = new URLSearchParams({ path });
+    if (conversationId) params.set('conversation_id', conversationId);
+    return requestToPort<{
       success: boolean;
+      conversation_id?: string;
       path: string;
       has_baseline: boolean;
       versions: Array<{
@@ -368,11 +387,18 @@ export const createBackupApi = (port: number) => ({
         store: string;
         size: number;
       }>;
-    }>(port, `/api/backup/files/history?path=${encodeURIComponent(path)}`),
+    }>(port, `/api/backup/files/history?${params.toString()}`);
+  },
 
-  restoreFile: (payload: { path: string; version_id?: number; steps?: number }) =>
+  restoreFile: (payload: {
+    path: string;
+    version_id?: number;
+    steps?: number;
+    conversation_id?: string;
+  }) =>
     requestToPort<{
       success: boolean;
+      conversation_id?: string;
       path: string;
       restored_to_version: number;
       deleted: boolean;
@@ -382,17 +408,26 @@ export const createBackupApi = (port: number) => ({
     }),
 });
 
-// 主后端 Chat API（默认端口）
-export const chatApi = createChatApi(8765);
+// 用 Proxy 包装，保证每次方法调用都读取最新的 _mainApiPort
+// 这样 initApiPort() 在 main.tsx 里调用后，所有 API 实例自动使用新端口
+const makeApiProxy = <T extends object>(factory: (port: number) => T): T =>
+  new Proxy({} as T, {
+    get(_target, key) {
+      return (factory(_mainApiPort) as Record<string, unknown>)[key as string];
+    },
+  });
 
-// 主后端 Task API（默认端口）
-export const taskApi = createTaskApi(8765);
+// 主后端 Chat API（端口跟随 _mainApiPort）
+export const chatApi = makeApiProxy(createChatApi);
 
-// 主后端 Commands API（默认端口）
-export const commandsApi = createCommandsApi(8765);
+// 主后端 Task API（端口跟随 _mainApiPort）
+export const taskApi = makeApiProxy(createTaskApi);
 
-// 主后端 Backup API（默认端口）
-export const backupApi = createBackupApi(8765);
+// 主后端 Commands API（端口跟随 _mainApiPort）
+export const commandsApi = makeApiProxy(createCommandsApi);
+
+// 主后端 Backup API（端口跟随 _mainApiPort）
+export const backupApi = makeApiProxy(createBackupApi);
 
 // Files API（只在主后端）
 export const filesApi = {
@@ -825,8 +860,8 @@ export const settingsApi = {
 
 };
 
-// Health check
-export const healthCheck = (port = 8765) =>
-  requestToPort<{ status: string; initialized: boolean }>(port, '/health');
+// Health check（不传 port 时默认使用 _mainApiPort）
+export const healthCheck = (port?: number) =>
+  requestToPort<{ status: string; initialized: boolean }>(port ?? _mainApiPort, '/health');
 
 export { ApiError, requestToPort };

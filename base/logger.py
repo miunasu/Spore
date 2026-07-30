@@ -9,6 +9,7 @@
     general.log / error.log / ...
     conversations/<session_id>/        # 一样本/一对话独立日志
       general.log / error.log / ...
+      raw.log                          # LLM 原始回复全文（仅落盘，不推送到 Desktop 日志栏）
       agents/
 """
 import os
@@ -112,6 +113,18 @@ class SporeLogger:
             return SporeLogger._session_log_dir
         return self.log_dir
 
+    def get_conversation_log_dir(self, conversation_id: str) -> Path:
+        """按显式对话 ID 定位日志目录（用于 contextvar 不可用的子进程）。"""
+        conv_dir = self.get_process_log_dir() / "conversations" / _sanitize_conversation_id(conversation_id)
+        conv_dir.mkdir(parents=True, exist_ok=True)
+        meta = conv_dir / "session_id.txt"
+        try:
+            if not meta.exists():
+                meta.write_text(conversation_id, encoding="utf-8")
+        except OSError:
+            pass
+        return conv_dir
+
     def get_active_log_dir(self) -> Path:
         """返回当前上下文应写入的日志目录（按对话隔离）。"""
         env_conv_dir = os.environ.get("SPORE_CONVERSATION_LOG_DIR")
@@ -120,19 +133,10 @@ class SporeLogger:
             path.mkdir(parents=True, exist_ok=True)
             return path
 
-        process_dir = self.get_process_log_dir()
         cid = _resolve_conversation_id()
         if cid:
-            conv_dir = process_dir / "conversations" / _sanitize_conversation_id(cid)
-            conv_dir.mkdir(parents=True, exist_ok=True)
-            meta = conv_dir / "session_id.txt"
-            try:
-                if not meta.exists():
-                    meta.write_text(cid, encoding="utf-8")
-            except OSError:
-                pass
-            return conv_dir
-        return process_dir
+            return self.get_conversation_log_dir(cid)
+        return self.get_process_log_dir()
 
     def _init_monitor_client(self):
         import multiprocessing as mp
@@ -201,6 +205,12 @@ class SporeLogger:
         ]
         for name, filename in specs:
             target[name] = self._create_logger(f"{name}.{logger_suffix}", log_dir / filename)
+        # raw 日志按开关创建，关闭时不生成空文件
+        if getattr(_config, "log_raw_enabled", False):
+            target["raw"] = self._create_logger(
+                f"raw.{logger_suffix}",
+                log_dir / getattr(_config, "log_raw_filename", "raw.log"),
+            )
 
     def _setup_loggers(self):
         self._setup_loggers_into(self.loggers, self.log_dir, logger_suffix="process")
@@ -217,6 +227,21 @@ class SporeLogger:
             self._setup_loggers_into(loggers, log_dir, logger_suffix=key)
             self._dynamic_loggers[key] = loggers
             return loggers, cid
+
+    def _get_loggers_for_conversation(self, conversation_id: Optional[str]) -> Dict[str, logging.Logger]:
+        """按显式对话 ID 取日志器；未提供时回退到当前上下文。"""
+        if not conversation_id:
+            return self._get_loggers_for_active_context()[0]
+        key = _sanitize_conversation_id(conversation_id)
+        with SporeLogger._handler_lock:
+            cached = self._dynamic_loggers.get(key)
+            if cached is not None:
+                return cached
+            log_dir = self.get_conversation_log_dir(conversation_id)
+            loggers: Dict[str, logging.Logger] = {}
+            self._setup_loggers_into(loggers, log_dir, logger_suffix=key)
+            self._dynamic_loggers[key] = loggers
+            return loggers
 
     def _create_logger(self, name: str, log_file: Path) -> logging.Logger:
         logger = logging.getLogger(f"spore.{name}")
@@ -307,6 +332,41 @@ class SporeLogger:
         loggers["general"].debug(log_message)
         self._send_to_monitor("general", log_message)
 
+    def log_raw_response(
+        self,
+        content: str,
+        conversation_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """记录 LLM 原始回复全文。
+
+        仅落盘到对应会话目录下的 raw 日志，不推送到日志监控 / Desktop 左栏日志。
+
+        Args:
+            content: LLM 回复原文（不截断、不做任何解析）
+            conversation_id: 显式对话 ID；子进程中 contextvar 不可用时必须传
+            metadata: 附带的请求元信息（model / request_id / usage 等）
+        """
+        from .config import get_config
+        if not get_config().log_raw_enabled:
+            return
+        try:
+            loggers = self._get_loggers_for_conversation(conversation_id)
+            raw_logger = loggers.get("raw")
+            if raw_logger is None:
+                return
+            header = dict(metadata or {})
+            header["content_length"] = len(content or "")
+            log_message = "{0}\n----- RAW CONTENT -----\n{1}\n----- END RAW CONTENT -----".format(
+                json.dumps(header, ensure_ascii=False),
+                content or "",
+            )
+            raw_logger.debug(log_message)
+            # 注意：raw 日志刻意不调用 _send_to_monitor，只落地到文件
+        except Exception:
+            # raw 日志属于旁路记录，任何异常都不应影响主流程
+            pass
+
     def _sanitize_args(self, args: Dict) -> Dict:
         sanitized = {}
         sensitive_keys = ["password", "api_key", "token", "secret", "credential"]
@@ -346,3 +406,8 @@ def log_tool_error(tool_name: str, error_message: str, args: Optional[Dict] = No
 
 def log_info(message: str, context: Optional[Dict[str, Any]] = None, args: Optional[Dict[str, Any]] = None):
     get_logger().log_info(message, context, args)
+
+
+def log_raw_response(content: str, conversation_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
+    """记录 LLM 原始回复全文（仅落盘，不上报日志监控 / Desktop 日志栏）"""
+    get_logger().log_raw_response(content, conversation_id, metadata)

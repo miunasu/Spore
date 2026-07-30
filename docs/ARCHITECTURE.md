@@ -38,7 +38,8 @@
 │  ├─ ProtocolManager + ActionParser                                  │
 │  ├─ Tools + ToolPolicy（会话/全局工具策略过滤与运行时拦截）            │
 │  ├─ SecurityGuard（命令拦截 / 风险评估 / 熔断）                       │
-│  ├─ BackupManager（文件版本 + 对话检查点）                            │
+│  ├─ BackupManager（会话级文件版本 + 用户消息/ACTION 对话点）          │
+│  ├─ Learning（情景记忆检索/任务记录，可选降级）                        │
 │  ├─ ModeSelector / CharacterManager / TodoManager / RuleReminder    │
 │  └─ multi_agent_dispatch → AgentProcessManager / SubAgentThread     │
 └─────────────┬──────────────────────────────────────────────────────┘
@@ -78,7 +79,7 @@ Spore/
 │   ├── tools.py               # TOOL_DEFINITIONS + 处理器
 │   ├── tool_policy.py         # 工具策略：模式基线 + 子工具开关 + 双层执行
 │   ├── security_guard.py      # 命令安全守卫：关键字规则/白名单/审计
-│   ├── backup_manager.py      # 备份回滚：bsdiff4 文件版本 + 对话检查点
+│   ├── backup_manager.py      # 会话级备份回滚：bsdiff4 文件版本 + user/action 对话点
 │   ├── agent_types.py         # 主 Agent 工具集 / 预定义子 Agent 类型
 │   ├── agent_process.py       # 多 Agent 派发引擎（含桌面异步派发）
 │   ├── agent_database.py      # 子 Agent 任务与工具调用记录
@@ -158,8 +159,8 @@ Spore/
 ### 3. Desktop 路径
 
 1. FastAPI lifespan：`initialize_desktop_backend()`（复用 main 初始化）
-2. 启动独立 WebSocket 推送进程（端口 = HTTP + 1），接线日志 / TODO / Agent 监控 / 确认桥
-3. 每个会话由 `ConversationLoopManager` 维护独立 `ConversationLoop`
+2. 启动独立 WebSocket 推送进程：后端按 REST 端口 + 1 计算端口；当前 React 客户端地址仍固定为 `ws://127.0.0.1:8766`
+3. 每个会话由 `ConversationLoopManager` 维护独立 `ConversationState` 与 `SessionConversationLoop`
 4. **后端自驱任务循环**：前端 `POST /api/task/submit` 提交任务后，后端在线程池内自动逐轮推进直至终态，前端只消费 WebSocket `task_event` 事件流（`task_started / round_reply / tool_call / tool_result / todo_update / task_finished`，以及异步旁路事件 `command_intent / security_malicious / security_remediation`）。因此关闭前端页面或切换标签不影响任务继续执行。
 
 ---
@@ -173,6 +174,13 @@ Spore/
 | `ConversationState` | `base/state_manager.py` | 单会话消息、token、TODO、context_mode、interrupt_epoch、会话级工具策略 |
 | `MultiSessionManager` | 同上 | 多会话创建/切换/删除（桌面） |
 | `session_context` | `base/session_context.py` | ContextVar 绑定 conversation_id / task_source / task_epoch |
+
+桌面后端的会话隔离不依赖当前 UI 标签页：
+
+- 每个 session 的 `SessionConversationLoop` 固定绑定自己的 `ConversationState`，并持有独立的可重入执行锁；同一 session 的完整轮次串行，不同 session 可并发
+- 主 LLM 请求 ID 为 `{conversation_id}_{uuid}`；IPC 按精确 request ID 匹配/逻辑取消，再以 `interrupt_epoch` 丢弃中断后的迟到结果
+- `conversation_context` 把日志、TODO、确认、工具策略与子 Agent 侧信道绑定到发起请求的 session，并通过 `copy_context()` 传播到并行工具
+- 取消是应用层逻辑取消，不保证终止 provider 侧已经发出的网络请求
 
 ### 对话循环 `ConversationLoop`
 
@@ -283,16 +291,39 @@ file type=read file_path="C:/demo.txt"
      - **异步意图分析**：生成人话意图说明（`command_intent` 事件，前端以脚注展示）
      - **恶意熔断**：判定为恶意时写审计、**中断当前会话**（epoch 提升 + 终止子 Agent）、推送 `security_malicious`
      - **修复建议**：熔断后生成 `security_remediation`（含 `auto_fix_prompt`），前端弹窗提供「手动处理」或「自动修复」（新开会话执行）
+     - **可选会话命令上下文**：`SECURITY_AGENT_SESSION_CONTEXT` 默认关闭；开启后把同 session 最近最多 `SECURITY_SESSION_CONTEXT_MAX_COMMANDS`（默认 20）条已成功研判的完整命令连同当前命令发送给安全模型
+     - 完整命令历史保存在当前进程内存中；即使上下文开关关闭，full 模式仍会收集成功研判的命令，但不把历史加入后续请求。`clear_session_history()` 已提供，当前尚未接入新对话、清记忆、reset 或删除 session 的生命周期，只有进程退出才自然释放
 3. 面向用户的文字语言跟随 `SYSTEM_LANGUAGE`。
 
 ### 备份与回滚（v4.0）`base/backup_manager.py`
 
-双层「时间机器」，数据存于 `.spore/`：
+双层「时间机器」，数据按**会话隔离**存于 `.spore/`：
 
-- **文件级**：Agent 每次写/删文件前自动留底（基线 + `bsdiff4` 增量补丁，按内容哈希去重）；`rollback <文件> [--to <版本>|--steps N]`、`filehistory` 查看/恢复
-- **对话点检查点**：每轮任务开始时记录文件与对话状态；`rewind [<checkpoint_id>|--turns N]` 一键把**文件 + 对话历史 + TODO** 一起回到该时点
-- 桌面端对应 `/api/backup/*` 与设置菜单「备份/回滚」页
+- **文件级（会话隔离）**：主 `ConversationLoop` 经 `file write/delete` 或 `edit` 实际改变文件时自动留底（基线 + `bsdiff4` 增量补丁）；shell 命令与子 Agent 直接写入不保证被捕获
+  - 版本：`.spore/backups/<session_id>/<path_hash>/baseline.full` + `vNNNN.patch|full`
+  - 元数据：`.spore/metadata/<session_id>_file_history.json`
+  - CLI：`rollback` / `filehistory` 仅操作当前会话；桌面 `/api/backup/files*` 的 `conversation_id` 可选，省略时解析为后端当前会话，而不是从正在运行的 task 自动推导，调用方应显式传入
+- **对话点检查点（两种）**：
+  1. `user_message`：用户消息入队后创建；CLI 与直接 `/api/chat/send` 路径已接入，当前桌面 `/api/task/submit` 主路径尚未创建此类型
+  2. `action`：某轮 LLM 回复的 ACTION 首次成功记录文件版本时创建，可回到该回复之前
+  - `rewind [<checkpoint_id>|--turns N]` 一键把**文件 + 对话历史 + TODO** 一起回到该时点
+  - 存储：`.spore/checkpoints/<session_id>.json`
+- 桌面端对应 `/api/backup/*` 与设置菜单「备份/回滚」页（对话点与文件备份均绑定当前会话）
+- 会话隔离的是版本链与元数据，所有会话仍操作同一工作区物理文件；当前回滚没有跨会话冲突检测。多个会话修改同一路径时，`rollback` / `rewind` / 文件恢复可能覆盖其他会话的较新结果
 - 开关与限额：`BACKUP_ENABLED` / `BACKUP_DIR` / `BACKUP_MAX_FILE_BYTES` / `BACKUP_MAX_DELETE_FILES`
+
+### Learning 情景记忆 `learning/`
+
+- `EpisodeStore` 使用 SQLite（schema 位于 `learning/schema.sql`），episode 与 embedding 存在独立表中；数据库跨会话共享
+- 在 `ConversationLoop` / Desktop `SessionConversationLoop` 尝试初始化 `EpisodicRetriever`
+- 发送 LLM 请求前，对最后一条 user-role 消息生成 embedding，从最近 100 条 `general_task` episode 按时间、余弦相似度与显著性综合评分，最多注入 3 条相关历史
+- 任务以 `STOP_REASON` 成功结束时，尝试记录查询、工具调用与结果为 success episode
+- embedding 通过 OpenAI-compatible `/v1/embeddings` 接口；专用 `EMBEDDING_*` 配置为空时回退 `OPENAI_API_KEY` / `OPENAI_API_URL`，默认模型 `text-embedding-3-small`
+- embedding 缺少配置、超时或调用失败时，检索/记录异常由上层捕获，主对话继续；这不是本地 embedding 或 FTS 回退，记录阶段的 embedding 失败会跳过整条 episode
+- **数据库路径跟随运行目录**：默认 `<runtime_root>/.spore/memory/episodic.db`
+  - 可用环境变量 `LEARNING_DB_PATH` / `EPISODIC_DB_PATH` 覆盖（相对路径相对运行根）
+  - 源码根 = `learning/` 上一级；打包环境 = `Path.cwd()`
+- `ConsolidationEngine` 提供候选发现、模式提取与 semantic knowledge 写入能力，但当前没有启动钩子、后台线程、定时器或其他运行时调度，不会自动执行 consolidation
 
 ### IPC 与 Chat 进程
 
@@ -305,13 +336,21 @@ file type=read file_path="C:/demo.txt"
 | 区域 | 说明 |
 |------|------|
 | REST routes | `/api/chat`（单轮/中断/历史/会话管理）、`/api/task`（自驱任务）、`/api/commands`（模式/记忆/角色/历史）、`/api/files`（沙箱文件 CRUD）、`/api/agents`、`/api/settings`（.env/档案/语言/工具策略）、`/api/backup`、`/api/instances`、`/api/confirm` |
-| WebSocket（:8766，独立进程） | 事件：`log` / `agent_register` / `agent_output` / `agent_status` / `todo_update` / `confirm_request` / `confirm_cancel` / `task_event`；批量下发（5 条或 50ms 刷新） |
+| WebSocket（默认 :8766，独立进程） | 后端按 REST + 1 监听，但 React 客户端当前固定连接 `ws://127.0.0.1:8766`；事件：`log` / `agent_register` / `agent_output` / `agent_status` / `todo_update` / `confirm_request` / `confirm_cancel` / `task_event`；批量下发（5 条或 50ms 刷新） |
 | confirm_manager | 文件写删与高危命令经 WS `confirm_request` 阻塞等待前端确认 |
 | security_interrupt | 恶意命令熔断桥：会话自中断 + 合成 `task_event` |
 | settings / profiles | 读写 `.env`、配置档案、命令拦截开关、系统语言、工具策略 |
 | instance_manager | 多后端实例（端口隔离） |
 
 文件路由沙箱：仅允许 `output` / `skills` / `prompt` / `history` / `characters` 及根目录 `note.txt`、`.env`；`prompt/skills/characters` 为只读资源根。
+
+### Windows Mini 模式四边吸附
+
+- `desktop_app/frontend/src-tauri/src/edge_snap.rs` 在 Windows 上以窗口外框、光标屏幕坐标和光标所在/最近显示器的 Win32 work area 做**物理像素**计算；不是 CSS/逻辑像素，也不是 Windows Snap Layout
+- 松开鼠标且移动稳定后，窗口或光标距工作区边缘不超过 40 px 时，状态机从 left/right/top/bottom 中选择最近边，先贴边再滑出，并在目标工作区内保留 8 px
+- 隐藏后先移出、再进入沿窗口跨度限定的 12 px 边缘触发带可唤回；唤回后光标离窗至少 650 ms 开始再次隐藏。多显示器共享边可能让隐藏部分出现在相邻显示器
+- Tauri 命令 `configure_edge_snap(mini_mode, enabled)` 配置原生状态机；原生层通过窗口事件 `edge-snap-state`（`{ edge, hidden }`）同步 React/Zustand 的 `snapEdge` / `isSnappedHidden`
+- 非 Windows 构建保留同一命令接口，但 `start` / `window_moved` / `configure` / `shutdown` 均为空操作
 
 ### 配置
 
@@ -325,6 +364,9 @@ file type=read file_path="C:/demo.txt"
 - 落盘：`base/logger.py` 按 `session_context` 写入 `logs/<启动时间>/conversations/<id>/`
 - 推送：`websocket/log_bridge.py` 附加 `conversation_id`；前端 `logStore` 按会话分桶
 - 正文不嵌入 `session_id`（仅路由字段携带会话信息）
+- Raw log 默认开启：每次 LLM 调用成功后，把 provider 返回的完整文本及 request/model/profile/usage 等元数据写入轮转 `raw.log`，不截断、不解析，也不推送到桌面日志面板
+- 可解析 session 的主请求写入会话目录；辅助 Agent 等无法从 request ID 解析 session 的请求可能写入进程级 `raw.log`
+- Raw 内容不脱敏、不加密，可能包含模型复述的命令、文件内容、路径、凭据或个人数据；清空/删除会话不会删除已有日志，可用 `LOG_RAW_ENABLED=false` 禁用
 
 ### 记忆与历史
 

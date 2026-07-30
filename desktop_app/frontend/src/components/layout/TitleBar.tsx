@@ -1,6 +1,7 @@
 /**
  * 自定义标题栏组件
  * 与深色主题融合，支持窗口拖拽和控制按钮
+ * mini 模式下左侧显示靠边吸附开关
  */
 import React, { useRef, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
@@ -17,7 +18,14 @@ export const TitleBar: React.FC = () => {
   const lastClickTime = useRef(0);
   const { theme, toggleTheme } = useSettingsStore();
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
-  const { miniMode, enterMiniMode, exitMiniMode } = useMiniModeStore();
+  const {
+    miniMode,
+    enterMiniMode,
+    exitMiniMode,
+    snapEnabled,
+    snapBusy,
+    setSnapEnabled,
+  } = useMiniModeStore();
 
   const handleMinimize = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -123,11 +131,31 @@ export const TitleBar: React.FC = () => {
       onMouseLeave={handleMouseLeave}
       className="h-8 bg-spore-panel flex items-center justify-between px-3 select-none border-b border-spore-border/30 cursor-default"
     >
-      {/* 左侧 - 应用标题 */}
-      <div className="flex items-center gap-2 pointer-events-none">
-        <img src={sporeIcon} alt="Spore" className="w-5 h-5 rounded" />
-        <span className="text-xs font-medium text-spore-muted">Spore</span>
-      </div>
+      {/* 左侧 - 普通模式显示应用标题，mini 模式显示吸附开关 */}
+      {miniMode ? (
+        <label
+          className="flex items-center gap-1.5 cursor-pointer pointer-events-auto"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          title={snapEnabled ? t('titleBar.snapEnabled') : t('titleBar.snapDisabled')}
+        >
+          <input
+            type="checkbox"
+            checked={snapEnabled}
+            disabled={snapBusy}
+            onChange={(e) => void setSnapEnabled(e.target.checked)}
+            className="w-3 h-3 accent-spore-highlight cursor-pointer disabled:cursor-wait disabled:opacity-60"
+          />
+          <span className="text-[11px] text-spore-muted leading-none">
+            {t('titleBar.snap')}
+          </span>
+        </label>
+      ) : (
+        <div className="flex items-center gap-2 pointer-events-none">
+          <img src={sporeIcon} alt="Spore" className="w-5 h-5 rounded" />
+          <span className="text-xs font-medium text-spore-muted">Spore</span>
+        </div>
+      )}
 
       {/* 右侧 - 窗口控制按钮 */}
       <div className="flex items-center -mr-3">

@@ -17,7 +17,8 @@ This document introduces the features of each panel in the Spore desktop fronten
 | Center column | Conversation tabs, mode, history, send/interrupt, TODO, confirmation, security prompts |
 | Right column | File management, subsystem switching, agent monitor, Notes |
 
-Backend: FastAPI (default `127.0.0.1:8765`) + a separate WebSocket push process (`8766`).  
+Backend: FastAPI plus a separate WebSocket push process. The REST endpoint defaults to `127.0.0.1:8765`, and the desktop shell reads `DESKTOP_API_PORT` dynamically at startup; the current frontend WebSocket URL is fixed at `ws://127.0.0.1:8766`.
+
 Each session has an independent `ConversationLoop` instance; **tasks are driven by the backend**—after submitting, the task keeps progressing in the background even if you switch tabs or minimize the window; the frontend only renders the event stream and automatically restores state after reconnecting.
 
 ---
@@ -69,7 +70,8 @@ Drag the slider to switch views: **Notes (note) / output / Agent monitor / promp
 ### File Operations
 
 - Create file / folder, rename, delete, open containing location
-- Cut / copy / paste **interoperate with Windows Explorer** (native clipboard, implemented via Tauri)
+- Cut / copy / paste in the file manager actually copies or moves files and **interoperates with Windows Explorer** through the native file clipboard implemented by Tauri
+- Pasting files copied in Windows Explorer into the chat input only extracts their real paths and sends them as path attachments with the message; it does not copy them into the workspace, upload them, or read their contents
 - Accessible scope is the sandbox directories: `output` / `skills` / `prompt` / `history` / `characters` plus the root-level `note.txt` and `.env` (`prompt/skills/characters` are read-only)
 
 ![File operations](../../img/RightFile.png)
@@ -131,14 +133,7 @@ Agent-declared TODOs are pushed via WebSocket and shown as a collapsible per-ses
 
 ![Options menu](../../img/MiddleOption.png)
 
-### Agent Activity Bar (v4.0)
-
-A non-blocking status bar above the send bar that shows security-agent activity in real time (contents depend on the security mode):
-
-- 💡 Command intent explanation (`full` mode)
-- 🚨 Malicious command alert (`full` mode)
-- 🛡️ High-risk command risk scan in progress (`basic` mode)
-- ⚡ Whitelist auto-pass (`basic` mode)
+Command intent and malicious-command judgments are now attached directly below the corresponding assistant message; the send area no longer mounts the old `AgentActivityBar`. Mini mode shows the same footnotes inside its message cards.
 
 ### Confirmation Bar and Security Modal (v4.0)
 
@@ -155,12 +150,14 @@ Reduces tokens: compresses multi-step intermediate steps, favoring the retention
 
 ## Mini Mode (v4.0)
 
-Click the Mini button in the title bar to enter a floating mini window (about 380×520, auto always-on-top, restores the original window geometry on exit):
+Click the Mini button in the title bar to enter a floating mini window (about 380×520, automatically always-on-top; exiting restores the previous size, position, maximized state, and always-on-top state):
 
-- Shows the two most recent agent replies and live sub-agent activity
-- Command intent footnotes are shown as usual
-- The input bar appears on hover/focus, allowing you to send new tasks directly
-- Perfect for parking Spore in a corner of the screen as a "background assistant"
+- `MiniModeView` shows the current session's two most recent assistant replies; if an older message carries the latest command intent, that message is also pinned into view
+- Shows every sub-agent's current status and latest log in real time; terminal entries are removed later by the store timer
+- Command intent and malicious-command reasons remain attached to the corresponding message card
+- The input appears when the bottom hot zone is hovered, the input has focus, or a confirmation is pending; it uses the same `InputArea` as normal mode, including send, interrupt, confirmation handling, and pasted path attachments
+- **Windows only** supports four-edge snapping. The toggle is enabled by default and can be switched off in the Mini title bar; dragging to the left, right, top, or bottom screen edge auto-hides the window, and moving the pointer to that edge reveals it
+- Non-Windows platforms do not provide native four-edge snapping or auto-hide
 
 ---
 
@@ -199,8 +196,13 @@ The "Tools" page visually toggles every tool and even **sub-tools** (e.g., allow
 
 Two tabs:
 
-- **Checkpoints**: lists the conversation points of the current session, with one-click `rewind` (files + conversation history + TODOs restored together; refused with a prompt while a task is generating)
-- **File history**: view the version list of any file modified by the agent and restore it to a specific version
+- **Checkpoints**: lists the checkpoint kinds already created for the current session: `user_message` (created after adding user input in the CLI and direct `/api/chat/send` paths; the current desktop `/api/task/submit` main path does not create it) and `action` (created when an LLM reply first changes a file); one-click `rewind` restores files, truncates that session's conversation history, and clears TODOs (it is rejected with a prompt while that session is generating)
+- **File history**: lists only files and versions tracked by the current session; a restore is itself recorded as a new version
+- **Shared-file risk**: session backup metadata, checkpoints, and automatic short-term memory are isolated, but all sessions still operate on the same physical workspace files; when sessions modify the same path concurrently, restoring an old version can overwrite another session's result
+
+### Session Backups and History
+
+Each session's short-term memory is automatically overwritten at `history/autosave/session_<session_id>.mem`, and these autosaves can be loaded from the history panel; by default, roughly the 10 most recent sessions are retained. When short-term memory is evicted or manually deleted, the corresponding conversation checkpoints are also removed. Manually saved `history/*.mem` files are displayed separately from automatic session backups.
 
 ### Command Interception
 

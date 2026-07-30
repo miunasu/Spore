@@ -59,14 +59,20 @@ Automatic short-term memory:
 
 ```
 rollback <file_path> [--to <version>|--steps <N>]  - Roll a file back to a specific version / go back N versions
-filehistory [<file_path>]                          - View a file's version history
-checkpoints                                        - List the conversation checkpoints of the current session
+filehistory [<file_path>]                          - View the current session's file history; omit the path to list files tracked by this session
+checkpoints                                        - List both kinds of conversation checkpoint in the current session
 rewind [<checkpoint_id>|--turns <N>]               - Roll back to a conversation checkpoint (files + conversation history + TODOs restored together)
 ```
 
 - Before every write/delete, the agent automatically keeps a backup (`.spore/`, bsdiff4 delta storage)
-- `rewind` is a "time machine": it rolls the workspace files and the conversation context back together to the point before a given task turn started
+- There are two checkpoint kinds: a `user_message` point is created as soon as a user message is sent and returns to "message sent, before the agent acted"; an `action` point is created only when an LLM reply actually changes files and returns to the point before that reply
+- `filehistory` / `rollback` and `checkpoints` / `rewind` are all scoped to the current session; `rewind` also truncates that session's conversation history and clears its TODOs
+- Session isolation applies to backup metadata and version chains, not to separate workspace copies. Sessions still operate on the same physical files. If sessions modify the same path concurrently, writing old content through `rollback` or `rewind` can overwrite another session's result; stop related tasks and inspect the current file before rolling back
 - For the master switch and limits, see [CONFIGURATION.md](CONFIGURATION.md), "Backup and Rollback"
+
+### Learning
+
+Learning requires no CLI command. When enabled, it automatically retrieves relevant past experience at task start and records the execution when the task finishes. The CLI currently has **no** command for manually running consolidation; the consolidation capabilities in `learning/consolidation.py` are not part of the CLI command surface.
 
 ### Security Whitelist (v4.0)
 
@@ -136,9 +142,10 @@ User> rollback output/report.md --to 2
 [Rolled back] output/report.md → v2
 
 User> checkpoints
-[Checkpoints] 1. cp_xxxx 2026-07-20 14:20 "Restructure the report"
+[Conversation checkpoints] cp_0001 [User message] "Restructure the report"
+[Conversation checkpoints] cp_0002 [File change] "Reordering sections"
 User> rewind --turns 1
-[Rolled back] Files and conversation history restored to the point before the previous task turn started
+[Rolled back] Files and conversation history restored to the previous conversation checkpoint
 ```
 
 ### Switching Modes
@@ -201,7 +208,7 @@ Logs: A log-monitoring terminal is opened by default (see `logs/` and the `LOG_M
 | Dangerous-operation confirmation | Terminal confirmation + command interception | WebSocket confirmation bar + security popup |
 | Real-time panels | Log terminal | Logs / TODO / Agent monitoring / File tree / Mini mode |
 | Configuration profiles | Manually edit `.env` | GUI + profiles |
-| Backup and rollback | `rollback` / `rewind` commands | Visual "Backup/Rollback" operations in the settings menu |
+| Backup and rollback | Current-session `filehistory` / `rollback` / `checkpoints` / `rewind` commands | Visual "Backup/Rollback" operations in the settings menu |
 
 More:
 

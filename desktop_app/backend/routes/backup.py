@@ -34,13 +34,6 @@ class RewindRequest(BaseModel):
     steps: Optional[int] = None
 
 
-class RestoreFileRequest(BaseModel):
-    """文件恢复请求：version_id（0 表示 baseline）与 steps 二选一"""
-    path: str
-    version_id: Optional[int] = None
-    steps: Optional[int] = None
-
-
 @router.get("/checkpoints")
 def list_checkpoints(conversation_id: Optional[str] = None) -> Dict[str, Any]:
     """列出指定会话的对话点快照"""
@@ -126,20 +119,41 @@ def rewind(req: RewindRequest) -> Dict[str, Any]:
             lock.release()
 
 
+class RestoreFileRequest(BaseModel):
+    """文件恢复请求：version_id（0 表示 baseline）与 steps 二选一；按会话隔离"""
+    path: str
+    version_id: Optional[int] = None
+    steps: Optional[int] = None
+    conversation_id: Optional[str] = None
+
+
 @router.get("/files")
-def list_tracked_files() -> Dict[str, Any]:
-    """列出所有有备份记录的文件"""
-    return {"success": True, "files": get_backup_manager().list_tracked_files()}
+def list_tracked_files(conversation_id: Optional[str] = None) -> Dict[str, Any]:
+    """列出当前会话有备份记录的文件（会话级隔离）"""
+    session_manager = get_session_manager()
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="后端未初始化")
+    resolved_id = _resolve_conversation_id(session_manager, conversation_id)
+    return {
+        "success": True,
+        "conversation_id": resolved_id,
+        "files": get_backup_manager().list_tracked_files(session_id=resolved_id),
+    }
 
 
 @router.get("/files/history")
-def get_file_history(path: str) -> Dict[str, Any]:
-    """查看某文件的备份版本历史"""
-    result = get_backup_manager().get_history(path)
+def get_file_history(path: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
+    """查看某文件在当前会话下的备份版本历史"""
+    session_manager = get_session_manager()
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="后端未初始化")
+    resolved_id = _resolve_conversation_id(session_manager, conversation_id)
+    result = get_backup_manager().get_history(path, session_id=resolved_id)
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("error", "没有该文件的备份记录"))
     return {
         "success": True,
+        "conversation_id": resolved_id,
         "path": result["path"],
         "has_baseline": result["has_baseline"],
         "versions": result["versions"],
@@ -149,15 +163,21 @@ def get_file_history(path: str) -> Dict[str, Any]:
 @router.post("/files/restore")
 def restore_file(req: RestoreFileRequest) -> Dict[str, Any]:
     """恢复文件到指定版本（version_id=0 表示 baseline；恢复本身会记录为新版本，可撤销）"""
+    session_manager = get_session_manager()
+    if not session_manager:
+        raise HTTPException(status_code=503, detail="后端未初始化")
+    resolved_id = _resolve_conversation_id(session_manager, req.conversation_id)
     result = get_backup_manager().restore_file(
         req.path,
         version_id=req.version_id,
         steps=req.steps,
+        session_id=resolved_id,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "恢复失败"))
     return {
         "success": True,
+        "conversation_id": resolved_id,
         "path": result["path"],
         "restored_to_version": result["restored_to_version"],
         "deleted": result["deleted"],

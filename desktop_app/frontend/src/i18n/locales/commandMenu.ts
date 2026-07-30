@@ -186,6 +186,12 @@ const commandMenu = {
       LOG_LLM_VALIDATION_FILENAME: { label: 'LLM 校验日志', ph: '默认: llm_validation.log' },
       LOG_TOOL_EXECUTION_FILENAME: { label: '工具执行日志', ph: '默认: tool_execution.log' },
       LOG_GENERAL_FILENAME: { label: '通用日志', ph: '默认: general.log' },
+      LOG_RAW_ENABLED: {
+        label: 'Raw 原始回复日志',
+        ph: '默认: true',
+        desc: '收到 LLM 回复即把原文完整落盘，不显示在日志栏',
+      },
+      LOG_RAW_FILENAME: { label: 'Raw 日志文件名', ph: '默认: raw.log' },
       LOG_MONITOR_LOCK_FILENAME: { label: '监控锁文件', ph: '默认: .monitor.lock' },
       LOG_MONITOR_CHECK_INTERVAL: { label: '日志检查间隔', ph: '默认: 0.5 秒' },
       LOG_MONITOR_TYPES: {
@@ -301,6 +307,20 @@ const commandMenu = {
         desc: 'full 模式下普通命令意图/恶意研判的超时时间（秒）',
         ph: '默认: 45',
       },
+      SECURITY_AGENT_SESSION_CONTEXT: {
+        label: '会话上下文模式',
+        desc: '开启后将本次会话的历史命令作为上下文随当前命令一起发给安全 Agent，提升多步操作的意图判断准确性（仅 full 模式有效）',
+        ph: '默认: false',
+        opts: {
+          on: '开启（带历史上下文分析）',
+          off: '关闭（单条独立分析）',
+        },
+      },
+      SECURITY_SESSION_CONTEXT_MAX_COMMANDS: {
+        label: '历史命令保留数',
+        desc: '会话上下文模式下保留的最近历史命令条数，超出后丢弃最旧的',
+        ph: '默认: 20',
+      },
     },
 
     groups: {
@@ -359,7 +379,9 @@ const commandMenu = {
     backup: {
       checkpointsTab: '对话点',
       filesTab: '文件备份',
-      checkpointsDesc: '只有当某条 LLM 回复实际修改了文件时才会产生对话点。回滚即回到这条回复之前：截断当前会话的对话历史，并把本会话在该点之后修改过的文件恢复到当时的版本；其它会话修改的文件不受影响。',
+      checkpointsDesc: '对话点有两类：1) 用户发消息时立即创建，可回到“用户刚发送”的状态；2) 某条 LLM 回复实际修改文件时创建，可回到该回复之前。回滚会截断当前会话对话历史，并只恢复本会话在该点之后改过的文件；其它会话不受影响。文件备份列表同样按当前会话隔离显示。',
+      kindUser: '用户消息',
+      kindAction: '文件改动',
       noCheckpoints: '当前会话没有对话点快照',
       noReply: '（工具执行轮，无文字回复）',
       checkpointMeta: '消息数 {count} · 跟踪文件 {files}',
@@ -608,6 +630,12 @@ const commandMenu = {
       LOG_LLM_VALIDATION_FILENAME: { label: 'LLM validation log', ph: 'Default: llm_validation.log' },
       LOG_TOOL_EXECUTION_FILENAME: { label: 'Tool execution log', ph: 'Default: tool_execution.log' },
       LOG_GENERAL_FILENAME: { label: 'General log', ph: 'Default: general.log' },
+      LOG_RAW_ENABLED: {
+        label: 'Raw response log',
+        ph: 'Default: true',
+        desc: 'Writes the full LLM reply to file on arrival; never shown in the log panel',
+      },
+      LOG_RAW_FILENAME: { label: 'Raw log filename', ph: 'Default: raw.log' },
       LOG_MONITOR_LOCK_FILENAME: { label: 'Monitor lock file', ph: 'Default: .monitor.lock' },
       LOG_MONITOR_CHECK_INTERVAL: { label: 'Log check interval', ph: 'Default: 0.5s' },
       LOG_MONITOR_TYPES: {
@@ -723,6 +751,20 @@ const commandMenu = {
         desc: 'Timeout (seconds) for intent/malice analysis of ordinary commands in full mode',
         ph: 'Default: 45',
       },
+      SECURITY_AGENT_SESSION_CONTEXT: {
+        label: 'Session context mode',
+        desc: 'When enabled, the security agent receives the session\'s command history as context alongside the current command, improving intent accuracy for multi-step operations (full mode only)',
+        ph: 'Default: false',
+        opts: {
+          on: 'Enabled (analyze with history)',
+          off: 'Disabled (analyze each command independently)',
+        },
+      },
+      SECURITY_SESSION_CONTEXT_MAX_COMMANDS: {
+        label: 'Max history commands',
+        desc: 'Maximum number of recent commands kept in session context; oldest entries are dropped when exceeded',
+        ph: 'Default: 20',
+      },
     },
 
     groups: {
@@ -781,7 +823,9 @@ const commandMenu = {
     backup: {
       checkpointsTab: 'Checkpoints',
       filesTab: 'File backups',
-      checkpointsDesc: 'A checkpoint is created only when an LLM reply actually modifies files. Rewinding returns to just before that reply: it truncates this session’s conversation history and restores files this session changed after that point to their versions at the time; files changed by other sessions are unaffected.',
+      checkpointsDesc: 'There are two checkpoint kinds: 1) created immediately when the user sends a message, so you can rewind to “just after that message”; 2) created when an LLM reply actually modifies files, so you can rewind to just before that reply. Rewinding truncates this session’s history and restores only files this session changed after that point; other sessions are unaffected. The file-backup list is also scoped to the current session.',
+      kindUser: 'User message',
+      kindAction: 'File change',
       noCheckpoints: 'No checkpoint snapshots in the current session',
       noReply: '(tool-execution turn, no text reply)',
       checkpointMeta: 'Messages {count} · Tracked files {files}',

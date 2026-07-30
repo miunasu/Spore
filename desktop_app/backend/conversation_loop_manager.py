@@ -52,6 +52,16 @@ class SessionConversationLoop(ConversationLoop):
         self._task_start_time = None
         try:
             from learning import EpisodicRetriever
+            from learning.embedding import EmbeddingGenerator
+            # 启动探针：若 embedding API 不可用，直接跳过 learning 而不是在
+            # 每条消息时阻塞等待超时
+            _gen = EmbeddingGenerator()
+            if not _gen.probe():
+                raise RuntimeError(
+                    f"Embedding API probe failed ({_gen.api_url}). "
+                    "Learning disabled. Set EMBEDDING_API_URL / EMBEDDING_API_KEY "
+                    "to a service that supports /v1/embeddings, or leave unconfigured to skip."
+                )
             self.retriever = EpisodicRetriever()
         except Exception as e:
             # Learning 模块不可用时降级运行

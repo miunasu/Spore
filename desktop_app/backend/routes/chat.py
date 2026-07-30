@@ -284,6 +284,21 @@ def run_single_round(
         # 首轮 user 消息只在这里添加；它属于用户已确认的输入，中断不回滚。
         if message_text.strip() and not message_already_added:
             target_state.add_user_message(message_text)
+            # 用户发消息快照点：记录发消息当下的文件版本，便于 rewind 到“用户刚发送时”
+            try:
+                from base.backup_manager import get_backup_manager
+                get_backup_manager().create_user_message_checkpoint(
+                    session_id=conversation_id,
+                    message_count=len(target_state.messages),
+                    user_preview=message_text,
+                    llm_reply_count=getattr(target_state, "llm_reply_count", 0) or 0,
+                )
+            except Exception as checkpoint_err:
+                log_error(
+                    "CHECKPOINT_ERROR",
+                    f"创建用户消息对话点失败: {checkpoint_err}",
+                    checkpoint_err,
+                )
 
         checkpoint = {
             "messages": copy.deepcopy(target_state.messages),

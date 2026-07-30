@@ -30,6 +30,7 @@
 - Windows 10/11 x64
 - Python ≥ 3.10（构建环境实际使用 3.13）
 - [uv](https://github.com/astral-sh/uv)
+- PyInstaller（仅构建工具，已不属于 `pyproject.toml` 的运行依赖；干净环境需显式安装，例如 `uv pip install pyinstaller`）
 - Node.js 18+ 或 20 LTS
 - Rust（`rustup`，MSVC toolchain）
 - Visual Studio Build Tools（C++ 桌面开发）
@@ -46,7 +47,7 @@ build_installer.bat
 
 脚本分 6 个阶段：
 
-1. **PyInstaller 后端（onefile）**：清理旧产物；`.venv` 缺 pyinstaller 时自动 `uv sync`（或设 `FORCE_UV_SYNC=1` 强制）；执行 `uv run pyinstaller spore_backend.spec --noconfirm`，产出 `dist/spore_backend.exe`
+1. **PyInstaller 后端（onefile）**：清理旧产物；`.venv` 缺 pyinstaller 时尝试 `uv sync`（或设 `FORCE_UV_SYNC=1` 强制）；执行 `uv run pyinstaller spore_backend.spec --noconfirm`，产出 `dist/spore_backend.exe`。注意 PyInstaller 已不在 `pyproject.toml` 运行依赖中，因此干净环境仅靠该自动 `uv sync` 仍不会安装它，必须先显式安装
 2. **Tauri sidecar**：复制为 `desktop_app/frontend/src-tauri/binaries/spore_backend-x86_64-pc-windows-msvc.exe`（Tauri `externalBin` 要求平台三元组后缀）
 3. **资源同步**：`prompt/`、`skills/`、`characters/`、`.env` 复制进 `src-tauri/`；下载并 SHA256 校验 **ripgrep 14.1.1**（缓存于 `.tool-cache/ripgrep/`），复制 `rg.exe`
 4. **前端 + Tauri 构建**：清理 Vite 缓存；`node_modules` 缺失时 `npm install`（或 `FORCE_NPM_INSTALL=1`）；`npm run tauri build` 产出 NSIS 安装包
@@ -63,6 +64,7 @@ build_installer.bat
 
 ```bash
 uv sync
+uv pip install pyinstaller    # 干净环境必需；PyInstaller 不在项目运行依赖中
 uv run pyinstaller spore_backend.spec --noconfirm
 ```
 
@@ -101,14 +103,15 @@ npm run dev                   # Vite http://localhost:1420
 npm run tauri dev
 ```
 
-默认 API：`http://127.0.0.1:8765`，WebSocket：`ws://127.0.0.1:8766`（端口 + 1）。
+默认 API：`http://127.0.0.1:8765`，WebSocket：`ws://127.0.0.1:8766`。REST 端口由 `DESKTOP_API_PORT` 动态读取，当前 WebSocket 客户端 URL 仍固定为 `8766`。
 
 ---
 
 ## 打包结构要点
 
-- **后端**：PyInstaller **onefile**（`spore_backend.spec`），入口 `main_entry.py`，`console=False`；spec 的 `datas` 为空——资源不打进 exe
-- **资源**：由 Tauri `resources` 携带：`prompt/**`、`skills/**`、`characters/**`、`.env`、`rg.exe`；运行时经 `SPORE_RESOURCE_DIR` 定位
+- **后端**：PyInstaller **onefile**（`spore_backend.spec`），入口 `main_entry.py`，`console=False`；spec 的 `datas` 包含 `learning/schema.sql`，供 frozen 后端从 PyInstaller 解压目录中的 `learning/schema.sql` 读取
+- **资源**：`prompt/**`、`skills/**`、`characters/**`、`.env`、`rg.exe` 由 Tauri `resources` 携带，运行时经 `SPORE_RESOURCE_DIR` 定位；`learning/schema.sql` 则内嵌在后端 onefile 中，不从 Tauri 资源根读取
+- **frozen 路径**：打包后配置、Learning 数据库等可写运行数据以 `Path.cwd()` 为运行根；Python 模块随 onefile 解压到临时目录，`schema.sql` 使用模块相对路径读取
 - **进程托管**：Tauri `main.rs` 以 sidecar 方式拉起后端，注入 `SPORE_DESKTOP_MODE=1` 与 `SPORE_RESOURCE_DIR`，并用 Windows Job Object 保证窗口关闭时整棵子进程树一并退出
 - **工作目录**：安装后由 `main.rs` 与 `resource_manager` 保证 cwd 正确，并创建可写目录（`output/`、`history/`、`logs/`、`note.txt`）
 - **隐藏导入**：若运行缺模块，补 `spore_backend.spec` 的 `hiddenimports`
@@ -144,6 +147,7 @@ output/  history/  logs/  note.txt   # 运行时生成
 2. 网络是否能拉 ripgrep  
 3. 删除 `.tool-cache/ripgrep/` 后重试  
 4. `uv sync` 是否成功  
+5. 干净 `.venv` 中是否已显式安装 PyInstaller；脚本检测不到 `.venv\Scripts\pyinstaller.exe` 时虽然会自动运行 `uv sync`，但当前 `pyproject.toml` 不声明 PyInstaller，因此同步后仍可能在 `uv run pyinstaller` 处失败
 
 ### 安装包体积
 

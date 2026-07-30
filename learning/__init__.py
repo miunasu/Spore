@@ -2,9 +2,15 @@
 Spore Learning System - Episodic and Semantic Memory
 """
 
-from .episode_store import EpisodeStore
+from .episode_store import EpisodeStore, resolve_default_db_path
 from .embedding import EmbeddingGenerator
 from .retrieval import EpisodicRetriever
 from .consolidation import ConsolidationEngine
 
-__all__ = ['EpisodeStore', 'EmbeddingGenerator', 'EpisodicRetriever', 'ConsolidationEngine']
+__all__ = [
+    'EpisodeStore',
+    'EmbeddingGenerator',
+    'EpisodicRetriever',
+    'ConsolidationEngine',
+    'resolve_default_db_path',
+]

@@ -8,7 +8,6 @@ import { useChatStore } from '../../stores/chatStore';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConfirmStore } from '../../stores/confirmStore';
 import { InputArea } from '../chat-panel/InputArea';
-import { AgentActivityBar } from '../chat-panel/AgentActivityBar';
 import { useT } from '../../i18n';
 
 // 最多保留的 LLM 回复条数
@@ -185,11 +184,6 @@ export const MiniModeView: React.FC = () => {
         onFocusCapture={() => setInputFocused(true)}
         onBlurCapture={() => setInputFocused(false)}
       >
-        {/* 辅助 Agent 解析（命令意图 / 安全扫描）：不随输入栏隐藏 */}
-        <div className="px-2">
-          <AgentActivityBar />
-        </div>
-
         {/* 输入栏：收起时高度折叠为 0，不占位、不产生超大悬停区 */}
         <div
           className={`transition-all duration-200 ${

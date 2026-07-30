@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
-from .episode_store import EpisodeStore
+from .episode_store import EpisodeStore, _spore_runtime_root
 
 
 class ConsolidationEngine:
@@ -18,10 +18,19 @@ class ConsolidationEngine:
     def __init__(
         self,
         episode_store: Optional[EpisodeStore] = None,
-        db_path: str = "F:/friend/spore/memory/episodic.db"
+        db_path: Optional[str] = None,
     ):
-        self.store = episode_store or EpisodeStore()
-        self.db_path = Path(db_path)
+        # 与 EpisodeStore 共用同一路径：优先跟随已有 store，其次显式 db_path，最后运行目录默认
+        if episode_store is not None:
+            self.store = episode_store
+            if db_path is not None:
+                p = Path(db_path)
+                self.db_path = p if p.is_absolute() else (_spore_runtime_root() / p)
+            else:
+                self.db_path = Path(episode_store.db_path)
+        else:
+            self.store = EpisodeStore(db_path) if db_path is not None else EpisodeStore()
+            self.db_path = Path(self.store.db_path)
     
     def find_consolidation_candidates(
         self,

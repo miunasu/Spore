@@ -21,20 +21,20 @@ description: "Word文档(.docx)的创建、编辑和分析。支持：基于模�
 
 ### 使用 template_editor.py
 
-**脚本位置**: `E:\SoulRain\Project\AI\Spore\skills\docx\scripts\template_editor.py`
+**脚本位置**: `skills/docx/scripts/template_editor.py`（以下命令从 Spore 仓库根目录运行）
 
 ```bash
-# 基本用法（使用绝对路径）
-python E:\SoulRain\Project\AI\Spore\skills\docx\scripts\template_editor.py 模板.docx 输出.docx --replacements data.json
+# 基本用法
+python skills/docx/scripts/template_editor.py examples/template.docx output/result.docx --replacements examples/replacements.json
 
 # 清空所有图片
-python E:\SoulRain\Project\AI\Spore\skills\docx\scripts\template_editor.py 模板.docx 输出.docx --replacements data.json --clear-images
+python skills/docx/scripts/template_editor.py examples/template.docx output/result.docx --replacements examples/replacements.json --clear-images
 ```
 
 **注意**：
 - 脚本可以直接运行，不需要先解压 docx
-- 模板.docx 和 输出.docx 都使用绝对路径
-- data.json 也使用绝对路径
+- 命令从仓库根目录运行；脚本路径相对仓库根目录
+- 模板、输出和 JSON 路径可使用普通相对路径；不要写入开发机专用的绝对路径
 
 ### data.json 格式
 
@@ -103,7 +103,7 @@ Word文档会把文本分割成多个XML元素（如"2025年"可能被拆成"202
 
 2. 运行:
 ```bash
-python E:\SoulRain\Project\AI\Spore\skills\docx\scripts\template_editor.py E:\工作目录\参考报告.docx E:\工作目录\SpeedMaster报告.docx -r E:\工作目录\replacements.json
+python skills/docx/scripts/template_editor.py examples/reference-report.docx output/SpeedMaster-report.docx -r examples/replacements.json
 ```
 
 ---
@@ -124,9 +124,9 @@ python E:\SoulRain\Project\AI\Spore\skills\docx\scripts\template_editor.py E:\�
 # 转为Markdown
 pandoc document.docx -o output.md
 
-# 查看原始XML结构
-python ooxml/scripts/unpack.py document.docx unpacked_dir
-# 然后查看 unpacked_dir/word/document.xml
+# 查看原始XML结构（从仓库根目录运行）
+python skills/docx/ooxml/scripts/unpack.py examples/document.docx output/unpacked
+# 然后查看 output/unpacked/word/document.xml
 ```
 
 ---
@@ -136,13 +136,13 @@ python ooxml/scripts/unpack.py document.docx unpacked_dir
 如果 `template_editor.py` 无法满足需求，可以直接操作XML：
 
 ```bash
-# 1. 解压
-python ooxml/scripts/unpack.py 模板.docx unpacked
+# 1. 解压（从仓库根目录运行）
+python skills/docx/ooxml/scripts/unpack.py examples/template.docx output/unpacked
 
-# 2. 编辑（见 ooxml.md）
+# 2. 编辑（见 skills/docx/ooxml.md）
 
 # 3. 打包
-python ooxml/scripts/pack.py unpacked 输出.docx
+python skills/docx/ooxml/scripts/pack.py output/unpacked output/result.docx
 ```
 
 详见 [`ooxml.md`](ooxml.md)
@@ -152,12 +152,12 @@ python ooxml/scripts/pack.py unpacked 输出.docx
 ## 常用命令
 
 ```bash
-# 模板生成（推荐）- 使用绝对路径
-python E:\SoulRain\Project\AI\Spore\skills\docx\scripts\template_editor.py 模板.docx 输出.docx -r data.json
+# 模板生成（推荐；从仓库根目录运行）
+python skills/docx/scripts/template_editor.py examples/template.docx output/result.docx -r examples/replacements.json
 
 # 解压/打包
-python E:\SoulRain\Project\AI\Spore\skills\docx\ooxml\scripts\unpack.py input.docx output_dir
-python E:\SoulRain\Project\AI\Spore\skills\docx\ooxml\scripts\pack.py input_dir output.docx
+python skills/docx/ooxml/scripts/unpack.py examples/input.docx output/unpacked
+python skills/docx/ooxml/scripts/pack.py output/unpacked output/result.docx
 
 # 转Markdown
 pandoc input.docx -o output.md

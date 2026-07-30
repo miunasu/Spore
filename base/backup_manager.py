@@ -5,19 +5,21 @@
 1. 文件级回滚（细粒度）：Hook 所有文件写工具调用，操作前后哈希对比，
    内容变化才备份。首次备份存储完整文件（baseline），后续变化存储
    bsdiff4 二进制 patch（bsdiff4 不可用时自动回退为完整快照）。
-2. 对话点回滚（粗粒度）：仅当某轮 LLM 回复的 ACTION 实际改动了
-   被跟踪文件时创建 checkpoint，记录改动前所有文件的版本号，
-   可同时回滚代码 + 对话历史（回到这条回复之前）。
+   文件备份按会话隔离：.spore/backups/<session_id>/ + metadata/<session_id>_file_history.json
+2. 对话点回滚（粗粒度）：两种快照点
+   - user_message：用户发出消息时立即创建（回到用户发消息那一刻）
+   - action：某轮 LLM 回复的 ACTION 实际改动了被跟踪文件时创建
+     （回到这条回复之前）
+   记录改动前所有文件的版本号，可同时回滚代码 + 对话历史。
 
 存储结构:
     .spore/
-    ├── backups/<path_hash>/        # 按文件路径哈希分组
-    │   ├── baseline.full           # 首次备份时的原始文件
-    │   ├── v0001.patch             # 第1次修改的二进制 diff
-    │   ├── v0002.full              # 链断裂/定期重建的完整快照
+    ├── backups/<session_id>/<path_hash>/  # 会话隔离的文件版本
+    │   ├── baseline.full
+    │   ├── v0001.patch
     │   └── ...
-    ├── metadata/file_history.json  # 文件路径 -> 版本历史映射
-    └── checkpoints/<session>.json  # 对话点快照
+    ├── metadata/<session_id>_file_history.json
+    └── checkpoints/<session>.json  # 对话点快照（按会话）
 """
 import hashlib
 import json
@@ -530,18 +532,21 @@ class BackupManager:
         llm_reply_count: int = 0,
         reply_preview: str = "",
         files: Optional[Dict[str, int]] = None,
+        kind: str = "action",
     ) -> Optional[str]:
         """
         创建对话点快照。
 
-        files 为快照记录的文件版本表（回滚目标）；不传则取当前所有
-        被跟踪文件的最新版本。正常流程由 begin_round/_record_version
-        在某轮 ACTION 实际改动文件时自动提交（files 为改动前的版本），
-        rewind 该点即回到"这条回复之前"的状态。
-        reply_preview 为该轮 LLM 回复的摘要，用于 UI 标识快照对应哪条回复。
+        kind:
+          - "user_message": 用户发消息时创建；rewind 回到该条用户消息之后、Agent 动手之前
+          - "action": ACTION 实际改文件时创建；rewind 回到该条 LLM 回复之前
+        files 为快照记录的文件版本表（回滚目标）；不传则取当前会话
+        被跟踪文件的最新版本。
+        reply_preview 为摘要（用户消息或 LLM 回复），用于 UI 标识。
         """
         if not self.enabled:
             return None
+        kind = (kind or "action").strip() or "action"
         with self._lock:
             if files is None:
                 # 使用会话级元数据
@@ -552,10 +557,14 @@ class BackupManager:
                 }
             checkpoints = self._load_checkpoints(session_id)
 
-            # 与上一个 checkpoint 完全相同（消息数和文件版本都没变）则跳过
+            # 与上一个 checkpoint 完全相同（类型+消息数+文件版本都没变）则跳过
             if checkpoints:
                 last = checkpoints[-1]
-                if last.get("message_count") == message_count and last.get("files") == files:
+                if (
+                    last.get("kind", "action") == kind
+                    and last.get("message_count") == message_count
+                    and last.get("files") == files
+                ):
                     return last.get("id")
 
             self._checkpoint_counter += 1
@@ -564,6 +573,7 @@ class BackupManager:
                 "id": cp_id,
                 "ts": _now_iso(),
                 "session_id": session_id,
+                "kind": kind,
                 "message_count": message_count,
                 "llm_reply_count": llm_reply_count,
                 "reply_preview": (reply_preview or "")[:200],
@@ -571,6 +581,30 @@ class BackupManager:
             })
             self._save_checkpoints(session_id, checkpoints)
             return cp_id
+
+    def create_user_message_checkpoint(
+        self,
+        session_id: str,
+        message_count: int,
+        user_preview: str = "",
+        llm_reply_count: int = 0,
+    ) -> Optional[str]:
+        """
+        用户发消息时的对话点：记录当前文件版本表 + 消息数。
+        rewind 该点 = 截断到该条用户消息（含）并恢复文件到发消息时的版本。
+        """
+        preview = (user_preview or "").strip().replace("\n", " ")
+        if preview:
+            preview = f"用户: {preview[:180]}"
+        else:
+            preview = "用户消息"
+        return self.create_checkpoint(
+            session_id=session_id,
+            message_count=message_count,
+            llm_reply_count=llm_reply_count,
+            reply_preview=preview,
+            kind="user_message",
+        )
 
     # ------------------------------------------------------------------
     # 轮次挂钩：仅当 ACTION 实际改动文件时才提交对话点
@@ -623,6 +657,7 @@ class BackupManager:
             llm_reply_count=pending["llm_reply_count"],
             reply_preview=pending["reply_preview"],
             files=pending["files"],
+            kind="action",
         )
 
     def list_checkpoints(self, session_id: str) -> List[Dict[str, Any]]:

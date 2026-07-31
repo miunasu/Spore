@@ -117,6 +117,21 @@ class WebSocketService {
     }
   }
 
+  /**
+   * 更新连接地址。若已连接则断开并用新地址重连；
+   * 若尚未连接（connect 还未被调用），下次 connect() 时自动使用新地址。
+   */
+  setUrl(url: string): void {
+    if (this.url === url) return;
+    this.url = url;
+    if (this.ws) {
+      // 已有连接，重置重连计数并用新地址重连
+      this.reconnectAttempts = 0;
+      this.disconnect();
+      this.connect();
+    }
+  }
+
   subscribe(handler: EventHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);

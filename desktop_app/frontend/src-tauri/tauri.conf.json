@@ -52,13 +52,13 @@
         "icons/128x128.png",
         "icons/256x256.png"
       ],
-      "resources": [
-        "prompt/**/*",
-        "skills/**/*",
-        "characters/**/*",
-        ".env",
-        "rg.exe"
-      ],
+      "resources": {
+        "../../../prompt": "prompt",
+        "../../../skills": "skills",
+        "../../../characters": "characters",
+        "../../../.env": "",
+        "rg.exe": ""
+      },
       "externalBin": [
         "binaries/spore_backend"
       ],

@@ -8,6 +8,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConfirmStore } from '../../stores/confirmStore';
 import { InputArea } from '../chat-panel/InputArea';
+import { AssistantMessageContent } from '../chat-panel/AssistantMessageContent';
 import { useT } from '../../i18n';
 
 // 最多保留的 LLM 回复条数
@@ -90,9 +91,7 @@ export const MiniModeView: React.FC = () => {
             {messages.map((message) => (
               <div key={message.id} className="animate-fade-in">
                 <div className="bg-spore-card text-spore-text rounded-xl rounded-tl-md px-3 py-2.5">
-                  <div className="whitespace-pre-wrap break-all text-xs leading-relaxed overflow-hidden">
-                    {message.content}
-                  </div>
+                  <AssistantMessageContent content={message.content} variant="mini" />
 
                   {/* 命令意图脚注（安全 Agent 解析，与普通模式 MessageList 完全一致，恶意标红） */}
                   {message.command_intents && message.command_intents.length > 0 && (

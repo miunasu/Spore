@@ -188,30 +188,9 @@ echo ========================================
 echo [3/6] Preparing resource files...
 echo ========================================
 
-REM Resources are placed directly in src-tauri directory
-REM After packaging, they will be in the installation root directory
-REM This way cwd can directly access prompt/skills/characters without SPORE_RESOURCE_DIR
-
-REM Clean old resources
-if exist "%TAURI_DIR%\prompt" rmdir /s /q "%TAURI_DIR%\prompt"
-if exist "%TAURI_DIR%\skills" rmdir /s /q "%TAURI_DIR%\skills"
-if exist "%TAURI_DIR%\characters" rmdir /s /q "%TAURI_DIR%\characters"
-
-REM Copy read-only resources to src-tauri directory
-echo Copying prompt/...
-xcopy /s /e /y /q "%PROJECT_ROOT%\prompt" "%TAURI_DIR%\prompt\" >nul
-
-echo Copying skills/...
-xcopy /s /e /y /q "%PROJECT_ROOT%\skills" "%TAURI_DIR%\skills\" >nul
-
-echo Copying characters/...
-xcopy /s /e /y /q "%PROJECT_ROOT%\characters" "%TAURI_DIR%\characters\" >nul
-
-REM Copy .env (use config file from project root)
-echo Copying .env...
-if exist "%PROJECT_ROOT%\.env" (
-    copy /y "%PROJECT_ROOT%\.env" "%TAURI_DIR%\.env" >nul
-) else (
+REM Tauri bundles prompt/skills/characters/.env directly from PROJECT_ROOT
+REM via src-tauri/tauri.conf.json resource mappings.
+if not exist "%PROJECT_ROOT%\.env" (
     echo [ERROR] .env does not exist, please create config file first
     goto :error
 )

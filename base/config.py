@@ -65,17 +65,12 @@ class Config:
         self.clean_auth_header: bool = os.getenv("CLEAN_AUTH_HEADER", "false").lower() == "true"
         
         # ========== Embedding 配置 ==========
-        # 专用 Embedding API，默认回退到主 LLM 的 OPENAI_API_KEY / OPENAI_API_URL
-        # 若你的主模型不支持 /v1/embeddings（如 DeepSeek、Claude），
-        # 请单独配置这三项，指向支持 text-embedding 的服务（OpenAI、硅基流动、本地 Ollama 等）
-        self.embedding_api_key: str = (
-            os.getenv("EMBEDDING_API_KEY", "").strip()
-            or os.getenv("OPENAI_API_KEY", "").strip()
-        )
+        # 仅使用专用配置。聊天服务常不支持 /v1/embeddings，自动复用
+        # OPENAI_API_* 会在 DeepSeek/Claude/各类中转上产生无意义的启动探针。
+        # EMBEDDING_API_KEY 留空表示明确禁用 Learning。
+        self.embedding_api_key: str = os.getenv("EMBEDDING_API_KEY", "").strip()
         self.embedding_api_url: Optional[str] = (
-            os.getenv("EMBEDDING_API_URL", "").strip()
-            or os.getenv("OPENAI_API_URL", "").strip()
-            or None
+            os.getenv("EMBEDDING_API_URL", "").strip() or None
         )
         self.embedding_model: str = (
             os.getenv("EMBEDDING_MODEL", "").strip()

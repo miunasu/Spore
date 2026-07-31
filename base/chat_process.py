@@ -100,10 +100,6 @@ class ChatProcess:
         # 全局中断标志 - 所有线程共享
         self.global_cancel_flag = threading.Event()
 
-        # with_raw_response 通道是否已被判定不可用（见 _create_and_log_raw）。
-        # 一旦不可用就不再尝试，避免每次请求都可能多发一次。
-        self._raw_capture_disabled = False
-        
         # SDK 类型
         self.llm_sdk = self.config.llm_sdk
         self.sub_agent_llm_sdk = self.config.get_sub_agent_sdk()
@@ -491,43 +487,39 @@ class ChatProcess:
         的结构，会把第三方中转返回的非常规字段归一化甚至丢弃 —— 而要排查的正是
         中转把字段搞坏的情况，只有 HTTP wire body 才是可信的原文。
 
-        回退规则很窄，只覆盖"SDK/客户端不提供这个通道"：
-        - 没有 with_raw_response 属性 → 直接走普通调用（未发出请求，零成本）；
-        - 调用它抛 AttributeError/TypeError（参数绑定期的签名不匹配）→ 退回普通
-          调用一次，并记下这个客户端不支持，后续请求不再重试该通道，避免每次都
-          可能多发一次请求。
+        只在 SDK 不提供 raw 通道时走普通调用。一旦调用了 raw ``create``，任何异常
+        都原样交给上层，不能再调用普通 ``create``：异常可能发生在 HTTP 请求已经
+        成功之后，自动回退会造成同一轮重复生成和重复计费。
 
-        API 自身的错误（400 等）一律原样抛给上层错误分支：绝不能因为报错就重发。
+        ``CLEAN_SDK_HEADERS=true`` 会按配置删除 ``X-Stainless-Raw-Response``。
+        此时 SDK 可能直接返回已解析模型而非 raw wrapper；这是受支持的配置形态，
+        记录 ``parsed_model`` 后直接返回，不尝试恢复或重发请求。
         """
-        if not getattr(self, "_raw_capture_disabled", False):
-            raw_api = getattr(endpoint, "with_raw_response", None)
-            if raw_api is not None and callable(getattr(raw_api, "create", None)):
-                raw = None
-                try:
-                    raw = raw_api.create(**request_params)
-                except (AttributeError, TypeError) as exc:
-                    # 通道不可用：参数还没被真正发出，可以安全退回普通调用
-                    self._raw_capture_disabled = True
-                    log_error(
-                        "LLM_RAW_RESPONSE_UNSUPPORTED",
-                        "with_raw_response 通道不可用，退回普通调用（raw 日志将落 model_dump 结构）",
-                        exc,
-                        context={"request_id": meta.get("request_id"), "api": meta.get("api")},
+        raw_api = getattr(endpoint, "with_raw_response", None)
+        raw_create = getattr(raw_api, "create", None)
+        if callable(raw_create):
+            raw = raw_create(**request_params)
+            parse = getattr(raw, "parse", None)
+            if callable(parse):
+                # 先落盘再 parse：parse 失败时（中转返回非标准结构）原文已经在盘上
+                wire = self._wire_body_text(raw)
+                if wire is not None:
+                    self._log_received(
+                        wire,
+                        {**meta, "payload_kind": "wire_body", **self._wire_meta(raw)},
                     )
-                if raw is not None:
-                    # 先落盘再 parse：parse 失败时（中转返回非标准结构）原文已经在盘上
-                    wire = self._wire_body_text(raw)
-                    if wire is not None:
-                        self._log_received(
-                            wire,
-                            {**meta, "payload_kind": "wire_body", **self._wire_meta(raw)},
-                        )
-                    else:
-                        self._log_received(
-                            self._response_payload(raw),
-                            {**meta, "payload_kind": "raw_wrapper_repr", **self._wire_meta(raw)},
-                        )
-                    return raw.parse()
+                else:
+                    self._log_received(
+                        self._response_payload(raw),
+                        {**meta, "payload_kind": "raw_wrapper_repr", **self._wire_meta(raw)},
+                    )
+                return parse()
+
+            self._log_received(
+                self._response_payload(raw),
+                {**meta, "payload_kind": "parsed_model", **self._wire_meta(raw)},
+            )
+            return raw
 
         response = endpoint.create(**request_params)
         payload = self._response_payload(response)
@@ -558,6 +550,72 @@ class ChatProcess:
             return repr(response)
         except Exception:
             return "<unrepresentable response>"
+
+    @classmethod
+    def _anthropic_protocol_mismatch(cls, response: Any) -> Optional[Dict[str, Any]]:
+        """识别 Anthropic 调用路径收到的 OpenAI Chat Completions 包络。
+
+        不按模型名猜协议，避免误伤支持多种 wire protocol 的中转；只有响应缺少
+        Anthropic content 且带明确 OpenAI 标志时才判定为配置错配。
+        """
+        payload = cls._response_payload(response)
+        if not isinstance(payload, dict):
+            return None
+
+        content = payload.get("content")
+        has_anthropic_content = isinstance(content, list) and bool(content)
+        response_id = payload.get("id")
+        object_type = payload.get("object")
+        openai_marker = (
+            isinstance(response_id, str) and response_id.startswith("chatcmpl-")
+        ) or object_type == "chat.completion"
+        if has_anthropic_content or not openai_marker:
+            return None
+
+        return {
+            "response_id": response_id,
+            "object": object_type,
+            "content_type": type(content).__name__,
+            "choices_type": type(payload.get("choices")).__name__,
+        }
+
+    def _protocol_mismatch_result(
+        self,
+        request_id: str,
+        response: Any,
+        model: Optional[str],
+        diagnostics: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        message = (
+            "Anthropic Messages 调用收到了 OpenAI Chat Completions 格式的响应。"
+            "请将 LLM_SDK 设为 openai，并通过 OPENAI_API_URL / OPENAI_API_KEY / "
+            "OPENAI_MODEL 配置该模型；当前响应无法按 Anthropic content[] 解析。"
+        )
+        context = {
+            "request_id": request_id,
+            "model": model,
+            "expected_api": "anthropic_messages",
+            "detected_api": "openai_chat",
+            **diagnostics,
+        }
+        log_error("LLM_API_PROTOCOL_MISMATCH", message, context=context)
+        return {
+            "request_id": request_id,
+            "status": "error",
+            "data": message,
+            # 使用不可重试的客户端错误码；这是本地协议配置错误，不是 provider 5xx。
+            "error_meta": {"status_code": 422, "exception_type": "ProtocolMismatch"},
+            "raw_payload": self._response_payload(response),
+            "health": {
+                "api_stop_reason": None,
+                "finish_state": response_health.FINISH_UNKNOWN,
+                "truncated": False,
+                "empty": True,
+                "refusal": False,
+                "usage": response_health.extract_usage(response),
+                "content_blocks": [],
+            },
+        }
 
     def _finalize_result(
         self,
@@ -1655,6 +1713,7 @@ class ChatProcess:
                 "model": model or self.config.get_model(),
                 "messages": anthropic_messages,
                 "max_tokens": max_tokens,
+                "timeout": self.config.api_timeout,
             }
             
             # system 参数（仅在非 system_as_user 模式下使用）
@@ -1715,6 +1774,12 @@ class ChatProcess:
 
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
+
+            mismatch = self._anthropic_protocol_mismatch(response)
+            if mismatch is not None:
+                return self._protocol_mismatch_result(
+                    request_id, response, request_params.get("model"), mismatch
+                )
 
             # 提取响应内容：排除式判定（排除 thinking / 工具类块，其余凡有文本即为正文），
             # 同时兼容 dict 形态的块。旧实现只认 type == "text"，模型新增块类型或

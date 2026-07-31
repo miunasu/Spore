@@ -1,8 +1,7 @@
 """
 Embedding generation using OpenAI API
 
-优先使用 EMBEDDING_API_* 专用配置；
-若未单独配置，则回退到主 LLM 的 OPENAI_API_KEY / OPENAI_API_URL。
+仅使用 EMBEDDING_API_* 专用配置；未配置时由调用方禁用 Learning。
 """
 import os
 import struct
@@ -28,7 +27,7 @@ class EmbeddingGenerator:
         api_url: Optional[str] = None,
         model: Optional[str] = None,
     ):
-        # 优先使用显式传入参数，其次读专用 EMBEDDING_* 配置，最后回退到主 LLM 配置
+        # 优先使用显式传入参数，其次读专用 EMBEDDING_* 配置；不复用聊天 API。
         try:
             from base.config import get_config
             cfg = get_config()
@@ -36,17 +35,13 @@ class EmbeddingGenerator:
             resolved_url = api_url or cfg.embedding_api_url or "https://api.openai.com/v1"
             self.model = model or cfg.embedding_model or "text-embedding-3-small"
         except Exception:
-            # config 不可用（测试环境等），直接读环境变量
-            self.api_key = api_key or os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY", "")
-            resolved_url = (
-                api_url
-                or os.getenv("EMBEDDING_API_URL")
-                or os.getenv("OPENAI_API_URL", "https://api.openai.com/v1")
-            )
+            # config 不可用（测试环境等），直接读专用环境变量
+            self.api_key = api_key or os.getenv("EMBEDDING_API_KEY", "")
+            resolved_url = api_url or os.getenv("EMBEDDING_API_URL") or "https://api.openai.com/v1"
             self.model = model or os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
 
         if not self.api_key:
-            raise ValueError("Embedding API key not found (set EMBEDDING_API_KEY or OPENAI_API_KEY)")
+            raise ValueError("Embedding API key not found (set EMBEDDING_API_KEY)")
 
         # 确保 base_url 以 /v1 结尾
         if not resolved_url.endswith("/v1"):

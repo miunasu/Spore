@@ -1,12 +1,23 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { LineNumberedTextarea } from '../common/LineNumberedTextarea';
-import { SyntaxHighlighter, getSyntaxLanguage } from '../common/SyntaxHighlighter';
+import { SafeMarkdownRenderer } from '../common/SafeMarkdownRenderer';
+import {
+  MAX_HIGHLIGHT_CHARS,
+  SyntaxHighlighter,
+  getSyntaxLanguage,
+} from '../common/SyntaxHighlighter';
+import { isSemanticMarkdownFile } from '../common/codeLanguages';
 import { useEditorStore } from '../../stores/editorStore';
 import { useT } from '../../i18n';
 
 type ViewMode = 'preview' | 'edit';
 
-class SyntaxPreviewBoundary extends React.Component<
+type ScrollPosition = {
+  top: number;
+  left: number;
+};
+
+class FilePreviewBoundary extends React.Component<
   { children: React.ReactNode; resetKey: string; fallbackText: string },
   { hasError: boolean }
 > {
@@ -39,6 +50,10 @@ class SyntaxPreviewBoundary extends React.Component<
   }
 }
 
+export function shouldUseMarkdownFilePreview(fileName: string, content: string) {
+  return isSemanticMarkdownFile(fileName) && content.length <= MAX_HIGHLIGHT_CHARS;
+}
+
 export const FileEditorContent: React.FC = () => {
   const t = useT();
   const {
@@ -52,15 +67,49 @@ export const FileEditorContent: React.FC = () => {
   } = useEditorStore();
 
   const [viewMode, setViewMode] = useState<ViewMode>('preview');
+  const previewRef = useRef<HTMLDivElement>(null);
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  const scrollPositionsRef = useRef(new Map<string, ScrollPosition>());
   const activeFile = openFiles.find((file) => file.path === activeFilePath);
+  const fileName = activeFile?.path || activeFile?.name || '';
   const language = useMemo(
-    () => getSyntaxLanguage(activeFile?.path || activeFile?.name || '', activeFile?.content ?? ''),
-    [activeFile?.content, activeFile?.name, activeFile?.path]
+    () => getSyntaxLanguage(fileName, activeFile?.content ?? ''),
+    [activeFile?.content, fileName]
   );
+  const useMarkdownPreview = Boolean(
+    activeFile && shouldUseMarkdownFilePreview(fileName, activeFile.content)
+  );
+
+  const getScrollKey = useCallback(
+    (mode: ViewMode) => activeFilePath ? `${activeFilePath}:${mode}` : null,
+    [activeFilePath]
+  );
+
+  const saveScrollPosition = useCallback((mode: ViewMode, element: HTMLElement) => {
+    const key = getScrollKey(mode);
+    if (!key) return;
+    scrollPositionsRef.current.set(key, {
+      top: element.scrollTop,
+      left: element.scrollLeft,
+    });
+  }, [getScrollKey]);
 
   useEffect(() => {
     setViewMode('preview');
   }, [activeFilePath]);
+
+  useLayoutEffect(() => {
+    const key = getScrollKey(viewMode);
+    const element = viewMode === 'preview' ? previewRef.current : editRef.current;
+    if (!key || !element) return;
+    const position = scrollPositionsRef.current.get(key);
+    if (!position) return;
+    element.scrollTop = position.top;
+    element.scrollLeft = position.left;
+    if (element instanceof HTMLTextAreaElement) {
+      element.dispatchEvent(new Event('scroll'));
+    }
+  }, [activeFilePath, getScrollKey, useMarkdownPreview, viewMode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -72,6 +121,22 @@ export const FileEditorContent: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeFile?.hasChanges, saveFile]);
+
+  const handleViewModeChange = (nextMode: ViewMode) => {
+    if (nextMode === viewMode) return;
+    const currentElement = viewMode === 'preview' ? previewRef.current : editRef.current;
+    if (currentElement) {
+      saveScrollPosition(viewMode, currentElement);
+      const nextKey = getScrollKey(nextMode);
+      if (nextKey && !scrollPositionsRef.current.has(nextKey)) {
+        scrollPositionsRef.current.set(nextKey, {
+          top: currentElement.scrollTop,
+          left: currentElement.scrollLeft,
+        });
+      }
+    }
+    setViewMode(nextMode);
+  };
 
   if (!activeFile) {
     return (
@@ -94,7 +159,7 @@ export const FileEditorContent: React.FC = () => {
         <div className="flex items-center gap-2 flex-shrink-0">
           <div className="flex overflow-hidden rounded-md border border-spore-border/30 bg-spore-bg/40">
             <button
-              onClick={() => setViewMode('preview')}
+              onClick={() => handleViewModeChange('preview')}
               className={`px-2.5 py-1 text-xs transition-colors ${
                 viewMode === 'preview'
                   ? 'bg-spore-highlight text-white'
@@ -105,7 +170,7 @@ export const FileEditorContent: React.FC = () => {
               {t('chatPanel.fileEditorContent.preview')}
             </button>
             <button
-              onClick={() => setViewMode('edit')}
+              onClick={() => handleViewModeChange('edit')}
               className={`px-2.5 py-1 text-xs transition-colors ${
                 viewMode === 'edit'
                   ? 'bg-spore-highlight text-white'
@@ -139,20 +204,34 @@ export const FileEditorContent: React.FC = () => {
             <span className="text-spore-muted">{t('common.loading')}</span>
           </div>
         ) : viewMode === 'preview' ? (
-          <SyntaxPreviewBoundary
+          <FilePreviewBoundary
             key={activeFile.path}
-            resetKey={`${activeFile.path}:${activeFile.content.length}:${language.id}`}
+            resetKey={`${activeFile.path}:${activeFile.content.length}:${language.id}:${activeFile.content.slice(0, 256)}`}
             fallbackText={t('chatPanel.fileEditorContent.previewFailed')}
           >
-            <SyntaxHighlighter
-              content={activeFile.content}
-              fileName={activeFile.path || activeFile.name}
-            />
-          </SyntaxPreviewBoundary>
+            {useMarkdownPreview ? (
+              <SafeMarkdownRenderer
+                content={activeFile.content}
+                variant="file"
+                containerRef={previewRef}
+                onScroll={(event) => saveScrollPosition('preview', event.currentTarget)}
+              />
+            ) : (
+              <SyntaxHighlighter
+                content={activeFile.content}
+                fileName={fileName}
+                language={language.id}
+                viewerRef={previewRef}
+                onScroll={(event) => saveScrollPosition('preview', event.currentTarget)}
+              />
+            )}
+          </FilePreviewBoundary>
         ) : (
           <LineNumberedTextarea
             value={activeFile.content}
             onChange={(event) => updateContent(event.target.value)}
+            onScroll={(event) => saveScrollPosition('edit', event.currentTarget)}
+            textareaRef={editRef}
             spellCheck={false}
           />
         )}

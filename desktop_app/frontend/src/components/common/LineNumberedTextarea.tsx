@@ -1,9 +1,10 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, type Ref } from 'react';
 
 type LineNumberedTextareaProps = {
   value: string;
   onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
   onScroll?: (event: React.UIEvent<HTMLTextAreaElement>) => void;
+  textareaRef?: Ref<HTMLTextAreaElement>;
   className?: string;
   textareaClassName?: string;
   spellCheck?: boolean;
@@ -13,6 +14,7 @@ export const LineNumberedTextarea: React.FC<LineNumberedTextareaProps> = ({
   value,
   onChange,
   onScroll,
+  textareaRef,
   className = '',
   textareaClassName = '',
   spellCheck = false,
@@ -41,6 +43,7 @@ export const LineNumberedTextarea: React.FC<LineNumberedTextareaProps> = ({
         ))}
       </div>
       <textarea
+        ref={textareaRef}
         value={value}
         onChange={onChange}
         onScroll={handleScroll}

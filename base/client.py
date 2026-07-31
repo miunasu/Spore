@@ -5,6 +5,24 @@ from openai import OpenAI, AsyncOpenAI
 
 from .config import get_config
 
+def _api_timeout() -> float:
+    return float(get_config().api_timeout)
+
+
+def _http_client(*, clean_auth: bool = False) -> httpx.Client:
+    return httpx.Client(
+        transport=CleanHeadersTransport(clean_auth=clean_auth),
+        timeout=_api_timeout(),
+    )
+
+
+def _async_http_client(*, clean_auth: bool = False) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        transport=AsyncCleanHeadersTransport(clean_auth=clean_auth),
+        timeout=_api_timeout(),
+    )
+
+
 # Anthropic SDK 延迟导入，避免未安装时报错
 _anthropic_available = False
 try:
@@ -62,14 +80,14 @@ def load_openai_client() -> OpenAI:
     
     # 根据配置决定是否清理 headers（OpenAI 不需要清理 auth header）
     if config.clean_sdk_headers:
-        http_client = httpx.Client(transport=CleanHeadersTransport(clean_auth=False))
+        http_client = _http_client(clean_auth=False)
         if base_url:
-            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
-        return OpenAI(api_key=api_key, http_client=http_client)
+            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return OpenAI(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     
     if base_url:
-        return OpenAI(api_key=api_key, base_url=base_url)
-    return OpenAI(api_key=api_key)
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return OpenAI(api_key=api_key, timeout=config.api_timeout)
 
 
 def load_async_openai_client() -> AsyncOpenAI:
@@ -80,14 +98,14 @@ def load_async_openai_client() -> AsyncOpenAI:
     
     # 根据配置决定是否清理 headers（OpenAI 不需要清理 auth header）
     if config.clean_sdk_headers:
-        http_client = httpx.AsyncClient(transport=AsyncCleanHeadersTransport(clean_auth=False))
+        http_client = _async_http_client(clean_auth=False)
         if base_url:
-            return AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
-        return AsyncOpenAI(api_key=api_key, http_client=http_client)
+            return AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return AsyncOpenAI(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     
     if base_url:
-        return AsyncOpenAI(api_key=api_key, base_url=base_url)
-    return AsyncOpenAI(api_key=api_key)
+        return AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return AsyncOpenAI(api_key=api_key, timeout=config.api_timeout)
 
 
 def load_anthropic_client() -> "Anthropic":
@@ -102,14 +120,14 @@ def load_anthropic_client() -> "Anthropic":
     # 根据配置决定是否清理 headers
     if config.clean_sdk_headers or config.clean_auth_header:
         transport = CleanHeadersTransport(clean_auth=config.clean_auth_header)
-        http_client = httpx.Client(transport=transport)
+        http_client = httpx.Client(transport=transport, timeout=config.api_timeout)
         if base_url:
-            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client)
-        return Anthropic(api_key=api_key, http_client=http_client)
+            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return Anthropic(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     
     if base_url:
-        return Anthropic(api_key=api_key, base_url=base_url)
-    return Anthropic(api_key=api_key)
+        return Anthropic(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return Anthropic(api_key=api_key, timeout=config.api_timeout)
 
 
 def load_async_anthropic_client() -> "AsyncAnthropic":
@@ -124,14 +142,14 @@ def load_async_anthropic_client() -> "AsyncAnthropic":
     # 根据配置决定是否清理 headers
     if config.clean_sdk_headers or config.clean_auth_header:
         transport = AsyncCleanHeadersTransport(clean_auth=config.clean_auth_header)
-        http_client = httpx.AsyncClient(transport=transport)
+        http_client = httpx.AsyncClient(transport=transport, timeout=config.api_timeout)
         if base_url:
-            return AsyncAnthropic(api_key=api_key, base_url=base_url, http_client=http_client)
-        return AsyncAnthropic(api_key=api_key, http_client=http_client)
+            return AsyncAnthropic(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return AsyncAnthropic(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     
     if base_url:
-        return AsyncAnthropic(api_key=api_key, base_url=base_url)
-    return AsyncAnthropic(api_key=api_key)
+        return AsyncAnthropic(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return AsyncAnthropic(api_key=api_key, timeout=config.api_timeout)
 
 
 def load_sub_agent_openai_client() -> OpenAI:
@@ -142,14 +160,14 @@ def load_sub_agent_openai_client() -> OpenAI:
     
     # 根据配置决定是否清理 headers（OpenAI 不需要清理 auth header）
     if config.clean_sdk_headers:
-        http_client = httpx.Client(transport=CleanHeadersTransport(clean_auth=False))
+        http_client = _http_client(clean_auth=False)
         if base_url:
-            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
-        return OpenAI(api_key=api_key, http_client=http_client)
+            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return OpenAI(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     
     if base_url:
-        return OpenAI(api_key=api_key, base_url=base_url)
-    return OpenAI(api_key=api_key)
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return OpenAI(api_key=api_key, timeout=config.api_timeout)
 
 
 def load_sub_agent_anthropic_client() -> "Anthropic":
@@ -164,14 +182,14 @@ def load_sub_agent_anthropic_client() -> "Anthropic":
     # 根据配置决定是否清理 headers
     if config.clean_sdk_headers or config.clean_auth_header:
         transport = CleanHeadersTransport(clean_auth=config.clean_auth_header)
-        http_client = httpx.Client(transport=transport)
+        http_client = httpx.Client(transport=transport, timeout=config.api_timeout)
         if base_url:
-            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client)
-        return Anthropic(api_key=api_key, http_client=http_client)
+            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return Anthropic(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     
     if base_url:
-        return Anthropic(api_key=api_key, base_url=base_url)
-    return Anthropic(api_key=api_key)
+        return Anthropic(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return Anthropic(api_key=api_key, timeout=config.api_timeout)
 
 
 def load_llm_client() -> Union[OpenAI, "Anthropic"]:
@@ -189,13 +207,13 @@ def build_openai_client(api_key: str, base_url: Optional[str] = None) -> OpenAI:
     """按显式参数构造 OpenAI 客户端（清理 headers 遵循全局配置）。"""
     config = get_config()
     if config.clean_sdk_headers:
-        http_client = httpx.Client(transport=CleanHeadersTransport(clean_auth=False))
+        http_client = _http_client(clean_auth=False)
         if base_url:
-            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
-        return OpenAI(api_key=api_key, http_client=http_client)
+            return OpenAI(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return OpenAI(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     if base_url:
-        return OpenAI(api_key=api_key, base_url=base_url)
-    return OpenAI(api_key=api_key)
+        return OpenAI(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return OpenAI(api_key=api_key, timeout=config.api_timeout)
 
 
 def build_anthropic_client(api_key: str, base_url: Optional[str] = None) -> "Anthropic":
@@ -205,12 +223,12 @@ def build_anthropic_client(api_key: str, base_url: Optional[str] = None) -> "Ant
     config = get_config()
     if config.clean_sdk_headers or config.clean_auth_header:
         transport = CleanHeadersTransport(clean_auth=config.clean_auth_header)
-        http_client = httpx.Client(transport=transport)
+        http_client = httpx.Client(transport=transport, timeout=config.api_timeout)
         if base_url:
-            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client)
-        return Anthropic(api_key=api_key, http_client=http_client)
+            return Anthropic(api_key=api_key, base_url=base_url, http_client=http_client, timeout=config.api_timeout)
+        return Anthropic(api_key=api_key, http_client=http_client, timeout=config.api_timeout)
     if base_url:
-        return Anthropic(api_key=api_key, base_url=base_url)
-    return Anthropic(api_key=api_key)
+        return Anthropic(api_key=api_key, base_url=base_url, timeout=config.api_timeout)
+    return Anthropic(api_key=api_key, timeout=config.api_timeout)
 
 

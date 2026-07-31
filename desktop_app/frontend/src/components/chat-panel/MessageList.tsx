@@ -4,6 +4,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { MessageDetailButton, MessageDetailContent } from './MessageDetail';
+import { AssistantMessageContent } from './AssistantMessageContent';
 import { useT } from '../../i18n';
 
 export const MessageList: React.FC = () => {
@@ -105,9 +106,13 @@ export const MessageList: React.FC = () => {
                       ? 'bg-spore-info text-white rounded-tr-md'
                       : 'bg-spore-card text-spore-text rounded-tl-md'
                   }`}>
-                    <div className="whitespace-pre-wrap break-all text-sm leading-relaxed overflow-hidden">
-                      {message.content}
-                    </div>
+                    {message.role === 'assistant' ? (
+                      <AssistantMessageContent content={message.content} />
+                    ) : (
+                      <div className="whitespace-pre-wrap break-all text-sm leading-relaxed overflow-hidden">
+                        {message.content}
+                      </div>
+                    )}
 
                     {/* 命令意图脚注（安全 Agent 解析，持久化显示；恶意标红） */}
                     {message.role === 'assistant' &&

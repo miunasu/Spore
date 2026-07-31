@@ -219,13 +219,18 @@ export const SidePanel: React.FC = () => {
 
       {/* 内容区域 */}
       <div className="flex-1 overflow-hidden">
+        <div className={activeTab === 'note' ? 'h-full' : 'hidden'} aria-hidden={activeTab !== 'note'}>
+          <NoteEditor active={activeTab === 'note'} />
+        </div>
         {activeTab === 'agents' ? (
-          <AgentMonitor />
-        ) : activeTab === 'note' ? (
-          <NoteEditor />
-        ) : (
-          <FileManager />
-        )}
+          <div className="h-full">
+            <AgentMonitor />
+          </div>
+        ) : isFileTab(activeTab) ? (
+          <div className="h-full">
+            <FileManager />
+          </div>
+        ) : null}
       </div>
     </div>
   );

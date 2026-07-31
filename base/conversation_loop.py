@@ -74,8 +74,11 @@ class ConversationLoop:
         self._task_start_time = None   # 记录任务开始时间
         self._no_action_count: int = 0  # 连续无 ACTION 的计数器
         try:
-            from learning import EpisodicRetriever
-            self.retriever = EpisodicRetriever()
+            if not config.embedding_api_key:
+                self.retriever = None
+            else:
+                from learning import EpisodicRetriever
+                self.retriever = EpisodicRetriever()
         except Exception as e:
             # Learning 模块不可用时降级运行
             self.retriever = None

@@ -8,7 +8,7 @@ import os
 import threading
 import time
 import uuid
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from .chat_process import chat_process_worker, conversation_id_from_request_id
 from .logger import log_error
@@ -39,6 +39,11 @@ class IPCManager:
         # 等待特定响应的条件变量
         self._response_conditions: Dict[str, threading.Condition] = {}
         self._conditions_lock = threading.Lock()
+
+        # 流式分片是非终态旁路，不进入响应缓存；回调只存在于发起请求的主进程。
+        self._stream_callbacks: Dict[str, Callable[[Dict[str, Any]], None]] = {}
+        self._stream_buffers: Dict[str, str] = {}
+        self._stream_lock = threading.Lock()
         
         # 配置
         self._config = get_config()
@@ -98,6 +103,9 @@ class IPCManager:
         self._response_cache.clear()
         self._cancelled_request_ids.clear()
         self._cancelled_request_times.clear()
+        with self._stream_lock:
+            self._stream_callbacks.clear()
+            self._stream_buffers.clear()
 
         self.process_started = False
     
@@ -129,6 +137,10 @@ class IPCManager:
                     if response.get("status") == "progress":
                         self._handle_progress_response(response)
                         continue
+
+                    if response.get("status") == "stream":
+                        self._handle_stream_response(response)
+                        continue
                     
                     request_id = response.get("request_id")
                     if not request_id:
@@ -146,6 +158,8 @@ class IPCManager:
 
                         # 存入缓存
                         self._response_cache[request_id] = (response, time.time())
+
+                    self._clear_stream_state(request_id)
                     
                     # 通知等待者
                     self._notify_waiter(request_id)
@@ -218,6 +232,38 @@ class IPCManager:
                 })
             except Exception as e:
                 log_error("IPC_PROGRESS_WS_ERROR", f"Failed to push retry progress to WS: {e}", e)
+
+    def _handle_stream_response(self, response: Dict[str, Any]) -> None:
+        """聚合单个 request 的 delta，并交给其会话级回调。"""
+        request_id = response.get("request_id")
+        if not request_id:
+            return
+        with self._cache_lock:
+            if request_id in self._cancelled_request_ids:
+                return
+
+        data = response.get("data") if isinstance(response.get("data"), dict) else {}
+        event = data.get("event") or "delta"
+        piece = data.get("content") if isinstance(data.get("content"), str) else ""
+        with self._stream_lock:
+            callback = self._stream_callbacks.get(request_id)
+            if callback is None:
+                return
+            if event == "start":
+                self._stream_buffers[request_id] = ""
+            elif event == "delta":
+                self._stream_buffers[request_id] = self._stream_buffers.get(request_id, "") + piece
+            content = self._stream_buffers.get(request_id, "")
+
+        try:
+            callback({"event": event, "delta": piece, "content": content})
+        except Exception as e:
+            log_error("IPC_STREAM_CALLBACK_ERROR", f"Stream callback failed: {e}", e)
+
+    def _clear_stream_state(self, request_id: str) -> None:
+        with self._stream_lock:
+            self._stream_callbacks.pop(request_id, None)
+            self._stream_buffers.pop(request_id, None)
     
     def _notify_waiter(self, request_id: str):
         """通知等待特定 request_id 的线程"""
@@ -256,6 +302,8 @@ class IPCManager:
         request_id: Optional[str] = None,
         use_sub_agent_config: bool = False,
         agent_profile: Optional[str] = None,
+        stream: bool = False,
+        stream_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         **kwargs  # 兼容旧调用，忽略 tool_calls, tools 等参数
     ) -> str:
         """
@@ -286,12 +334,17 @@ class IPCManager:
             "system": system,
             "use_sub_agent_config": use_sub_agent_config,
             "agent_profile": agent_profile,
+            "stream": bool(stream and stream_callback is not None),
         }
         
         # 预先创建条件变量。若 interrupt 已先一步为该 ID 写入 tombstone，
         # 不再把请求送入 provider；等待方会立即读到合成的 cancelled。
         with self._conditions_lock:
             self._response_conditions[request_id] = threading.Condition()
+        if request_data["stream"]:
+            with self._stream_lock:
+                self._stream_callbacks[request_id] = stream_callback
+                self._stream_buffers[request_id] = ""
         with self._cache_lock:
             cancelled = request_id in self._cancelled_request_ids
 
@@ -359,6 +412,7 @@ class IPCManager:
             # 清理条件变量
             with self._conditions_lock:
                 self._response_conditions.pop(request_id, None)
+            self._clear_stream_state(request_id)
     
     def cancel_request(self, request_id: Optional[str]) -> bool:
         """逻辑取消一个精确请求：立即唤醒 waiter，并丢弃迟到的 provider 响应。"""
@@ -375,6 +429,7 @@ class IPCManager:
             self._cancelled_request_ids.add(request_id)
             self._cancelled_request_times[request_id] = now
             self._response_cache[request_id] = (cancelled_response, now)
+        self._clear_stream_state(request_id)
         self._notify_waiter(request_id)
         return True
 

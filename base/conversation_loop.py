@@ -759,6 +759,11 @@ class ConversationLoop:
             self.ipc_manager.cancel_request(request_id)
 
         try:
+            stream_enabled = bool(getattr(self.config, "llm_stream_enabled", True))
+
+            def _on_stream(data: Dict[str, Any]) -> None:
+                self._emit_event("llm_chunk", data)
+
             request_id = self.ipc_manager.send_chat_request(
                 messages=self.state.messages,
                 model=self.config.get_model(),
@@ -766,6 +771,8 @@ class ConversationLoop:
                 tool_calls=False,
                 tools=None,
                 request_id=request_id,
+                stream=stream_enabled,
+                stream_callback=_on_stream if stream_enabled else None,
             )
             response = self.ipc_manager.get_chat_response(request_id=request_id)
         finally:

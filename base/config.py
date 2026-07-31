@@ -48,6 +48,10 @@ class Config:
         # 启用后使用 client.responses.create，支持 o 系列模型的原生接口
         self.use_responses_api: bool = os.getenv("USE_RESPONSES_API", "false").lower() == "true"
 
+        # 主 Agent 流式输出。Chat 进程仍会聚合完整响应供协议解析与历史持久化，
+        # 分片仅作为旁路事件供桌面前端实时展示。
+        self.llm_stream_enabled: bool = os.getenv("LLM_STREAM_ENABLED", "true").lower() == "true"
+
         # OpenAI reasoning_effort 参数（用于推理模型如 o1/gpt-5.5 等）
         # 可选值：low, medium, high, xhigh；留空或 none/off 表示不传此参数
         _openai_reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "").strip()

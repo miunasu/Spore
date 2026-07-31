@@ -289,7 +289,7 @@ file type=read file_path="C:/workspace/README.md"
 
 ## 5. LLM 提供商与颗粒化模型配置
 
-核心支持 OpenAI SDK、Anthropic SDK、自定义 Base URL、OpenAI 兼容服务与网关，以及每类 Agent 独立模型配置。配置回退链：
+核心支持 OpenAI SDK、Anthropic SDK、自定义 Base URL、OpenAI 兼容服务与网关，以及每类 Agent 独立模型配置。主 Agent 默认流式读取模型输出，只在生成到用户可见区段时实时更新聊天消息，工具协议区段不会暴露给前端；可通过 `LLM_STREAM_ENABLED=false` 兼容不支持流式接口的网关。配置回退链：
 
 ```text
 AGENT_<PROFILE>_* → SUB_AGENT_* → 主 Agent 配置

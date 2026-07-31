@@ -48,6 +48,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `LLM_SDK` | `openai` | `openai` 或 `anthropic` |
+| `LLM_STREAM_ENABLED` | `true` | 主 Agent 使用流式接口，并在生成到用户可见区段时实时更新桌面聊天消息；第三方代理不支持流式时设为 `false` |
 
 ### OpenAI / 兼容接口
 

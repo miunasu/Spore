@@ -11,9 +11,11 @@ GET  /api/task/status   查询任务状态（按 task_id，或按 session_id 查
 发结构化事件，统一信封：
     {"type": "task_event", "event": <名>, "session_id", "task_id",
      "submission_id", "round": int, "ts": iso8601, "data": {...}}
-事件名：task_started / round_reply / tool_call / tool_result / todo_update / task_finished。
+事件名：task_started / round_chunk / round_reply / tool_call / tool_result /
+todo_update / task_finished。
 tool_call/tool_result/todo_update 由 conv_loop.event_emitter 回调注入产生
-（base/ 不直接依赖 websocket 模块）。事件中的字符串字段截断为 8KB。
+（base/ 不直接依赖 websocket 模块）。工具类字符串字段截断为 8KB，回复正文
+允许到 256KB。
 
 任务注册表为进程内内存（Spore 重启任务作废是可接受语义）。
 """
@@ -43,6 +45,7 @@ _task_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="spore-tas
 
 # 事件 content 截断上限（8KB）
 _MAX_EVENT_CONTENT = 8 * 1024
+_MAX_REPLY_CONTENT = 256 * 1024
 
 
 def _now_iso() -> str:
@@ -73,8 +76,15 @@ def _send_envelope(envelope: Dict[str, Any]) -> None:
 def _emit_task_event(event: str, session_id: str, task_id: str,
                      submission_id: str, round_num: int,
                      data: Optional[Dict[str, Any]] = None) -> None:
-    """按统一信封发出 task_event（顶层字符串字段做 8KB 截断）"""
-    safe_data = {k: _truncate(v) for k, v in (data or {}).items()}
+    """按统一信封发出 task_event，并按字段类型控制字符串体积。"""
+    safe_data = {}
+    for key, value in (data or {}).items():
+        limit = (
+            _MAX_REPLY_CONTENT
+            if event in ("round_chunk", "round_reply") and key in ("content", "raw_response")
+            else _MAX_EVENT_CONTENT
+        )
+        safe_data[key] = _truncate(value, limit)
     _send_envelope({
         "type": "task_event",
         "event": event,
@@ -330,7 +340,7 @@ def _run_task_loop(task_id: str, session_id: str, message: str, total_timeout: f
 def _run_task_loop_body(task_id: str, session_id: str, message: str, total_timeout: float) -> None:
     """任务循环实现体（调用方已绑定 conversation_context）。"""
     from ..core import get_session_manager
-    from .chat import run_single_round
+    from .chat import extract_stream_user_visible_content, run_single_round
 
     entry = _tasks[task_id]
     submission_id = entry["submission_id"]
@@ -339,8 +349,31 @@ def _run_task_loop_body(task_id: str, session_id: str, message: str, total_timeo
     error: Optional[str] = None
     rounds = 0
     started = time.monotonic()
+    stream_snapshot = ""
 
     def _emitter(event: str, data: Dict[str, Any]) -> None:
+        nonlocal stream_snapshot
+        if event == "llm_chunk":
+            reset = data.get("event") == "start"
+            if reset:
+                stream_snapshot = ""
+            visible = extract_stream_user_visible_content(data.get("content") or "")
+            if not reset and visible == stream_snapshot:
+                return
+            previous = stream_snapshot
+            replace = not visible.startswith(previous)
+            content = visible if replace else visible[len(previous):]
+            stream_snapshot = visible
+            _emit_active_task_event(
+                "round_chunk",
+                session_id,
+                task_id,
+                submission_id,
+                entry["rounds"] + 1,
+                {"content": content, "reset": reset, "replace": replace},
+            )
+            return
+
         # 命令意图 / 恶意通知 / 处置建议是异步旁路产物：研判可能晚于任务终态完成
         # （恶意研判甚至会主动中断该任务），迟到的事件仍要送达前端，不受 active 门限制
         if event in ("command_intent", "security_malicious", "security_remediation"):

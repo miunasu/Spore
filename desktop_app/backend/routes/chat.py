@@ -134,6 +134,43 @@ def extract_user_visible_content(reply: str) -> str:
     return '\n'.join(visible_lines).strip()
 
 
+_STREAM_PROTOCOL_MARKERS = (
+    "@SPORE:REPLY_START",
+    "@SPORE:REPLY_END",
+    "@SPORE:CONTENT_START",
+    "@SPORE:CONTENT_END",
+    "@SPORE:TODO_START",
+    "@SPORE:TODO_END",
+    "@SPORE:ACTION_SINGLE_START",
+    "@SPORE:ACTION_SINGLE_END",
+    "@SPORE:ACTION_SEQUENCE_START",
+    "@SPORE:ACTION_SEQUENCE_END",
+    "@SPORE:ACTION_PARALLEL_START",
+    "@SPORE:ACTION_PARALLEL_END",
+    "@SPORE:STOP_REASON",
+    "### RULE_REMINDER",
+)
+
+
+def extract_stream_user_visible_content(reply: str) -> str:
+    """提取流式累计文本中的可见快照，并隐藏尚未生成完整的协议标记。"""
+    if not reply:
+        return ""
+
+    stable = reply
+    if not reply.endswith(("\n", "\r")):
+        line_start = max(reply.rfind("\n"), reply.rfind("\r")) + 1
+        tail = reply[line_start:].strip()
+        if tail and (
+            any(marker.startswith(tail) for marker in _STREAM_PROTOCOL_MARKERS)
+            or tail.startswith("@SPORE:")
+            or tail.startswith("### RULE_REMINDER")
+        ):
+            stable = reply[:line_start]
+
+    return extract_user_visible_content(stable)
+
+
 class ChatRequest(BaseModel):
     """聊天请求模型"""
     message: str

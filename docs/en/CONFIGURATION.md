@@ -48,6 +48,7 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 | Variable | Default | Description |
 |------|------|------|
 | `LLM_SDK` | `openai` | `openai` or `anthropic` |
+| `LLM_STREAM_ENABLED` | `true` | Stream main-agent output and update desktop chat as user-visible sections arrive; set to `false` for gateways without streaming support |
 
 ### OpenAI / Compatible Interfaces
 

@@ -231,6 +231,7 @@ def get_settings() -> Dict[str, Any]:
                 "default_character": config.default_character,
                 "context_mode": config.context_mode,
                 "max_output_tokens": config.max_output_tokens,
+                "llm_stream_enabled": getattr(config, "llm_stream_enabled", True),
                 "command_intercept": getattr(config, "command_intercept", True),
             }
         }

@@ -99,6 +99,7 @@ const SUB_AGENT_SDK_PROFILE_KEYS = {
 } as const;
 
 const COMMON_PROFILE_KEYS = [
+  'LLM_STREAM_ENABLED',
   'CLEAN_SDK_HEADERS',
   'SYSTEM_AS_USER',
   'SYSTEM_PROMPT_FILE',
@@ -255,6 +256,17 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
   {
     title: 'LLM 参数',
     items: [
+      {
+        key: 'LLM_STREAM_ENABLED',
+        label: 'commandMenu.env.LLM_STREAM_ENABLED.label',
+        type: 'select',
+        options: [
+          { value: 'true', label: 'common.yes' },
+          { value: 'false', label: 'common.no' },
+        ],
+        placeholder: 'commandMenu.env.LLM_STREAM_ENABLED.ph',
+        description: 'commandMenu.env.LLM_STREAM_ENABLED.desc',
+      },
       {
         key: 'MAX_OUTPUT_TOKENS',
         label: 'commandMenu.env.MAX_OUTPUT_TOKENS.label',

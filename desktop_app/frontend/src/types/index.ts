@@ -181,6 +181,7 @@ export type TaskStatus = 'running' | 'succeeded' | 'failed' | 'interrupted' | 't
 
 export type TaskEventName =
   | 'task_started'
+  | 'round_chunk'
   | 'round_reply'
   | 'tool_call'
   | 'tool_result'
@@ -213,8 +214,10 @@ export interface WSTaskEvent {
       total: number;
       running: string[];
     };
-    // round_reply（字符串字段最多 8KB）
+    // round_chunk / round_reply
     content?: string;
+    reset?: boolean;
+    replace?: boolean;
     raw_response?: string;
     sent_messages?: Array<{ role: string; content: string }>;
     // tool_call / tool_result

@@ -148,6 +148,7 @@ class ChatProcess:
                 "thinking_budget_tokens": getattr(cfg, "anthropic_thinking_budget_tokens", None),
                 "effort": getattr(cfg, "anthropic_effort", None),
                 "use_responses_api": getattr(cfg, "use_responses_api", None),
+                "llm_stream_enabled": getattr(cfg, "llm_stream_enabled", None),
                 "chat_max_workers": getattr(cfg, "chat_max_workers", None),
                 "log_raw_enabled": getattr(cfg, "log_raw_enabled", None),
             }
@@ -245,6 +246,8 @@ class ChatProcess:
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
+            if request_data.get("stream"):
+                self._emit_stream_event(request_id, "start")
             result = self._do_single_llm_call(request_id, request_data, retry_hint=retry_hint)
             status = result.get("status")
 
@@ -526,6 +529,174 @@ class ChatProcess:
         self._log_received(
             payload,
             {**meta, "payload_kind": "model_dump" if not isinstance(payload, str) else "repr"},
+        )
+        return response
+
+    def _emit_stream_event(self, request_id: str, event: str, content: str = "") -> None:
+        """经 IPC 发送非终态流事件；失败不能影响最终响应。"""
+        try:
+            self.response_queue.put({
+                "request_id": request_id,
+                "status": "stream",
+                "data": {"event": event, "content": content},
+            })
+        except Exception:
+            pass
+
+    @staticmethod
+    def _field(value: Any, name: str, default: Any = None) -> Any:
+        if isinstance(value, dict):
+            return value.get(name, default)
+        return getattr(value, name, default)
+
+    def _stream_openai_chat(
+        self,
+        request_id: str,
+        endpoint: Any,
+        request_params: Dict[str, Any],
+        meta: Dict[str, Any],
+    ) -> Any:
+        """消费 Chat Completions 分片并重建兼容现有提取器的完整响应。"""
+        stream_params = dict(request_params)
+        stream_params["stream"] = True
+        stream_params["stream_options"] = {"include_usage": True}
+        try:
+            chunks = endpoint.create(**stream_params)
+        except Exception as exc:
+            # 一些 OpenAI-compatible 网关支持 SSE，却不认识 stream_options。
+            # 仅在错误明确指向该字段时去掉它重试；不能对任意异常重发，避免重复计费。
+            if "stream_options" not in str(exc).lower():
+                raise
+            stream_params.pop("stream_options", None)
+            chunks = endpoint.create(**stream_params)
+
+        text_parts = []
+        response_id = None
+        model = stream_params.get("model")
+        created = None
+        finish_reason = None
+        usage = None
+        role = "assistant"
+
+        try:
+            for chunk in chunks:
+                if self.global_cancel_flag.is_set():
+                    break
+                response_id = response_id or self._field(chunk, "id")
+                model = self._field(chunk, "model", model) or model
+                created = created or self._field(chunk, "created")
+                chunk_usage = self._field(chunk, "usage")
+                if chunk_usage is not None:
+                    usage = self._response_payload(chunk_usage)
+
+                choices = self._field(chunk, "choices", []) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                finish_reason = self._field(choice, "finish_reason") or finish_reason
+                delta = self._field(choice, "delta", {}) or {}
+                role = self._field(delta, "role", role) or role
+                piece = self._field(delta, "content", "") or ""
+                if isinstance(piece, str) and piece:
+                    text_parts.append(piece)
+                    self._emit_stream_event(request_id, "delta", piece)
+        finally:
+            close = getattr(chunks, "close", None)
+            if callable(close):
+                close()
+
+        response = {
+            "id": response_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "finish_reason": finish_reason,
+                "message": {"role": role, "content": "".join(text_parts)},
+            }],
+            "usage": usage or {},
+        }
+        self._log_received(response, {**meta, "payload_kind": "stream_aggregate"})
+        return response
+
+    def _stream_openai_responses(
+        self,
+        request_id: str,
+        endpoint: Any,
+        request_params: Dict[str, Any],
+        meta: Dict[str, Any],
+    ) -> Any:
+        """消费 Responses API 事件，返回服务端最终 Response 或兼容聚合结果。"""
+        stream_params = dict(request_params)
+        stream_params["stream"] = True
+        events = endpoint.create(**stream_params)
+        text_parts = []
+        final_response = None
+
+        try:
+            for event in events:
+                if self.global_cancel_flag.is_set():
+                    break
+                event_type = self._field(event, "type", "") or ""
+                if event_type == "response.output_text.delta":
+                    piece = self._field(event, "delta", "") or ""
+                    if isinstance(piece, str) and piece:
+                        text_parts.append(piece)
+                        self._emit_stream_event(request_id, "delta", piece)
+                elif event_type in ("response.completed", "response.incomplete"):
+                    final_response = self._field(event, "response")
+        finally:
+            close = getattr(events, "close", None)
+            if callable(close):
+                close()
+
+        if final_response is None:
+            content = "".join(text_parts)
+            final_response = {
+                "status": "completed",
+                "output_text": content,
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": content}],
+                }],
+                "usage": {},
+            }
+        self._log_received(
+            self._response_payload(final_response),
+            {**meta, "payload_kind": "stream_final"},
+        )
+        return final_response
+
+    def _create_anthropic_message(
+        self,
+        request_id: str,
+        endpoint: Any,
+        request_params: Dict[str, Any],
+        meta: Dict[str, Any],
+        *,
+        stream: bool,
+    ) -> Any:
+        """Anthropic 流式/非流式统一入口，流式结束后返回完整 Message。"""
+        if not stream:
+            return self._create_and_log_raw(endpoint, request_params, meta)
+
+        stream_factory = getattr(endpoint, "stream", None)
+        if not callable(stream_factory):
+            raise RuntimeError("当前 Anthropic 客户端不支持 messages.stream")
+
+        with stream_factory(**request_params) as message_stream:
+            for piece in message_stream.text_stream:
+                if self.global_cancel_flag.is_set():
+                    break
+                if isinstance(piece, str) and piece:
+                    self._emit_stream_event(request_id, "delta", piece)
+            response = message_stream.get_final_message()
+
+        self._log_received(
+            self._response_payload(response),
+            {**meta, "payload_kind": "stream_final"},
         )
         return response
 
@@ -850,6 +1021,7 @@ class ChatProcess:
         system = request_data.get("system")
         use_sub_agent_config = request_data.get("use_sub_agent_config", False)
         agent_profile = request_data.get("agent_profile")
+        stream = bool(request_data.get("stream"))
 
         # 优先级：颗粒化 profile 基座 > 子 Agent 基座 > 主 Agent 基座
         overrides = None
@@ -881,12 +1053,12 @@ class ChatProcess:
         if sdk == "anthropic":
             return self._do_anthropic_call(
                 request_id, messages, model, system, client, overrides,
-                retry_hint=retry_hint, call_meta=call_meta,
+                retry_hint=retry_hint, call_meta=call_meta, stream=stream,
             )
         else:
             return self._do_openai_call(
                 request_id, messages, model, system, client, overrides,
-                retry_hint=retry_hint, call_meta=call_meta,
+                retry_hint=retry_hint, call_meta=call_meta, stream=stream,
             )
 
     # effort 类参数的显式关闭哨兵：配置 none/off 表示"该层明确不传此参数"，
@@ -1308,16 +1480,17 @@ class ChatProcess:
         overrides: Optional[Dict[str, Any]] = None,
         retry_hint: Optional[Dict[str, Any]] = None,
         call_meta: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
     ) -> Dict[str, Any]:
         """使用 OpenAI SDK 调用 LLM（自动选择 Chat Completions 或 Responses API）"""
         if self._adv(overrides, "use_responses_api", "use_responses_api"):
             return self._do_openai_responses_call(
                 request_id, messages, model, system, client, overrides,
-                retry_hint=retry_hint, call_meta=call_meta,
+                retry_hint=retry_hint, call_meta=call_meta, stream=stream,
             )
         return self._do_openai_chat_call(
             request_id, messages, model, system, client, overrides,
-            retry_hint=retry_hint, call_meta=call_meta,
+            retry_hint=retry_hint, call_meta=call_meta, stream=stream,
         )
 
     def _do_openai_chat_call(
@@ -1330,6 +1503,7 @@ class ChatProcess:
         overrides: Optional[Dict[str, Any]] = None,
         retry_hint: Optional[Dict[str, Any]] = None,
         call_meta: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
     ) -> Dict[str, Any]:
         """使用 OpenAI Chat Completions API"""
         # 构建最终消息列表
@@ -1389,9 +1563,14 @@ class ChatProcess:
                 extra={"retry_adjust": retry_adjust} if retry_adjust else None,
             )
             # 收到即落盘：提取/判定之前先把原文写进 raw
-            completion = self._create_and_log_raw(
-                client.chat.completions, request_params, received_meta
-            )
+            if stream:
+                completion = self._stream_openai_chat(
+                    request_id, client.chat.completions, request_params, received_meta
+                )
+            else:
+                completion = self._create_and_log_raw(
+                    client.chat.completions, request_params, received_meta
+                )
 
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -1482,6 +1661,7 @@ class ChatProcess:
         overrides: Optional[Dict[str, Any]] = None,
         retry_hint: Optional[Dict[str, Any]] = None,
         call_meta: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
     ) -> Dict[str, Any]:
         """使用 OpenAI Responses API（client.responses.create）"""
         # Responses API 使用 `input` 字段传消息，`instructions` 传 system prompt
@@ -1534,7 +1714,12 @@ class ChatProcess:
                 extra={"retry_adjust": retry_adjust} if retry_adjust else None,
             )
             # 收到即落盘：提取/判定之前先把原文写进 raw
-            response = self._create_and_log_raw(client.responses, request_params, received_meta)
+            if stream:
+                response = self._stream_openai_responses(
+                    request_id, client.responses, request_params, received_meta
+                )
+            else:
+                response = self._create_and_log_raw(client.responses, request_params, received_meta)
 
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -1614,6 +1799,7 @@ class ChatProcess:
         overrides: Optional[Dict[str, Any]] = None,
         retry_hint: Optional[Dict[str, Any]] = None,
         call_meta: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
     ) -> Dict[str, Any]:
         """使用 Anthropic SDK 调用 LLM"""
         # Anthropic 消息格式转换
@@ -1770,7 +1956,9 @@ class ChatProcess:
                 extra={"retry_adjust": retry_adjust} if retry_adjust else None,
             )
             # 收到即落盘：提取 / 续调 / 判定之前先把原文写进 raw
-            response = self._create_and_log_raw(client.messages, request_params, received_meta)
+            response = self._create_anthropic_message(
+                request_id, client.messages, request_params, received_meta, stream=stream
+            )
 
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -1789,7 +1977,8 @@ class ChatProcess:
             # pause_turn：长任务被服务端暂停，需要把已产出的部分回传后续调，
             # 否则这一轮会被当成"提前结束"，正文只有一半。
             response, content, pause_rounds = self._continue_paused_turn(
-                request_id, client, request_params, response, content, received_meta
+                request_id, client, request_params, response, content, received_meta,
+                stream=stream,
             )
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
@@ -1902,6 +2091,7 @@ class ChatProcess:
         response: Any,
         content: str,
         received_meta: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
     ) -> Tuple[Any, str, int]:
         """pause_turn 续调：把已产出的助手轮回传，继续这一轮生成。
 
@@ -1935,7 +2125,9 @@ class ChatProcess:
                 )
                 round_meta = dict(received_meta or {"request_id": request_id})
                 round_meta["pause_turn_round"] = rounds + 1
-                response = self._create_and_log_raw(client.messages, params, round_meta)
+                response = self._create_anthropic_message(
+                    request_id, client.messages, params, round_meta, stream=stream
+                )
                 content = (content or "") + response_health.extract_text(response)
                 request_params = params
                 rounds += 1

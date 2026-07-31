@@ -124,6 +124,12 @@ const commandMenu = {
         desc: '手动扩展思考 budget_tokens，需 >=1024 且 < max_tokens',
       },
 
+      LLM_STREAM_ENABLED: {
+        label: '流式输出',
+        ph: '默认: true',
+        desc: '模型生成到用户可见区段时实时更新聊天消息；内部协议区段不会显示',
+      },
+
       MAX_OUTPUT_TOKENS: {
         label: '最大输出 Token',
         ph: '默认: 15000',
@@ -566,6 +572,12 @@ const commandMenu = {
       ANTHROPIC_THINKING_BUDGET_TOKENS: {
         ph: 'Default: auto (enabled mode only)',
         desc: 'Manual extended-thinking budget_tokens; must be >=1024 and < max_tokens',
+      },
+
+      LLM_STREAM_ENABLED: {
+        label: 'Streaming output',
+        ph: 'Default: true',
+        desc: 'Update chat while the model generates user-visible sections; internal protocol sections stay hidden',
       },
 
       MAX_OUTPUT_TOKENS: {

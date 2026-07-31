@@ -1110,6 +1110,43 @@ export const useChatStore = create<ChatStore>((set, get) => {
           setActivity(null);
           break;
 
+        case 'round_chunk': {
+          const messageId = `${event.task_id}_r${event.round}`;
+          const content = event.data.content || '';
+          set((state) => ({
+            conversations: state.conversations.map((conversation) => {
+              if (conversation.id !== sessionId) return conversation;
+              const existingIndex = conversation.messages.findIndex((message) => message.id === messageId);
+              let messages = conversation.messages;
+              if (event.data.reset && existingIndex >= 0) {
+                messages = conversation.messages.filter((message) => message.id !== messageId);
+              } else if (content && existingIndex >= 0) {
+                messages = conversation.messages.slice();
+                messages[existingIndex] = {
+                  ...messages[existingIndex],
+                  content: event.data.replace
+                    ? content
+                    : messages[existingIndex].content + content,
+                };
+              } else if (content) {
+                messages = [
+                  ...conversation.messages,
+                  {
+                    id: messageId,
+                    role: 'assistant' as const,
+                    content,
+                    timestamp: Date.now(),
+                  },
+                ];
+              }
+              return messages === conversation.messages
+                ? conversation
+                : { ...conversation, messages, updatedAt: Date.now() };
+            }),
+          }));
+          break;
+        }
+
         case 'round_reply': {
           setActivity(null);
           const content = (event.data.content || '').trim();
@@ -1121,7 +1158,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
             pendingIntentsBySession[sessionId] = pending.filter(
               (ci) => !raw.includes(ci.command)
             );
-            get().addMessage(sessionId, {
+            const finalizedMessage: Message = {
               id: `${event.task_id}_r${event.round}`,
               role: 'assistant',
               content,
@@ -1129,7 +1166,34 @@ export const useChatStore = create<ChatStore>((set, get) => {
               raw_response: event.data.raw_response,
               sent_messages: event.data.sent_messages,
               command_intents: matched.length > 0 ? matched : undefined,
-            });
+            };
+            set((state) => ({
+              conversations: state.conversations.map((conversation) => {
+                if (conversation.id !== sessionId) return conversation;
+                const existingIndex = conversation.messages.findIndex(
+                  (message) => message.id === finalizedMessage.id
+                );
+                const messages = conversation.messages.slice();
+                if (existingIndex >= 0) {
+                  messages[existingIndex] = finalizedMessage;
+                } else {
+                  messages.push(finalizedMessage);
+                }
+                return { ...conversation, messages, updatedAt: Date.now() };
+              }),
+            }));
+          } else {
+            const messageId = `${event.task_id}_r${event.round}`;
+            set((state) => ({
+              conversations: state.conversations.map((conversation) =>
+                conversation.id === sessionId
+                  ? {
+                      ...conversation,
+                      messages: conversation.messages.filter((message) => message.id !== messageId),
+                    }
+                  : conversation
+              ),
+            }));
           }
           break;
         }

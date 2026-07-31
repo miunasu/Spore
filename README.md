@@ -289,7 +289,7 @@ Tool policy controls tools and sub-capabilities per session or globally (file re
 
 ## 5. LLM providers & granular model config
 
-Core support: OpenAI SDK, Anthropic SDK, custom base URL, OpenAI-compatible services and gateways, and independent model config per agent. Fallback chain:
+Core support: OpenAI SDK, Anthropic SDK, custom base URL, OpenAI-compatible services and gateways, and independent model config per agent. Main-agent output streams by default: desktop chat updates only while user-visible sections are arriving, without exposing tool-protocol sections. Set `LLM_STREAM_ENABLED=false` for gateways without streaming support. Fallback chain:
 
 ```text
 AGENT_<PROFILE>_* → SUB_AGENT_* → main agent config

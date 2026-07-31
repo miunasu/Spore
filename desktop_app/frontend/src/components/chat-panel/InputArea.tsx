@@ -26,19 +26,6 @@ function getFileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-/** 将用户输入与附件路径合并为最终发送内容 */
-function buildMessageContent(text: string, paths: string[]): string {
-  const trimmed = text.trim();
-  if (paths.length === 0) {
-    return trimmed;
-  }
-  const pathBlock = paths.join('\n');
-  if (!trimmed) {
-    return pathBlock;
-  }
-  return `${trimmed}\n\n${pathBlock}`;
-}
-
 export const InputArea: React.FC<InputAreaProps> = ({ mini = false }) => {
   const t = useT();
   const { inputValue, setInputValue, sendMessage, interrupt } = useChatStore();
@@ -86,9 +73,9 @@ export const InputArea: React.FC<InputAreaProps> = ({ mini = false }) => {
 
   const handleSubmit = () => {
     if (isGenerating) return;
-    const content = buildMessageContent(inputValue, attachedPaths);
-    if (!content) return;
-    sendMessage(content);
+    const content = inputValue.trim();
+    if (!content && attachedPaths.length === 0) return;
+    sendMessage(content, attachedPaths);
     setAttachedPaths([]);
   };
 

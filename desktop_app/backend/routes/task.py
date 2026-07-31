@@ -159,6 +159,7 @@ class TaskSubmitRequest(BaseModel):
     session_id: str
     submission_id: str
     message: str
+    user_preview: Optional[str] = None
     total_timeout: float = 1800.0
 
 
@@ -178,6 +179,7 @@ def _submit_task_impl(
     source: str = "user",
     notice: Optional[Dict[str, Any]] = None,
     delivery_generation: Optional[int] = None,
+    user_preview: Optional[str] = None,
 ) -> Dict[str, Any]:
     """提交用户任务或后端自发的子Agent完成通知任务。"""
     from ..core import get_session_manager, get_conv_loop_manager
@@ -252,6 +254,21 @@ def _submit_task_impl(
                 # task 被接受即记录输入；系统通知使用固定前缀，历史接口会映射为 system。
                 target_state.add_user_message(message)
                 entry["user_message_added"] = True
+                if source == "user":
+                    try:
+                        from base.backup_manager import get_backup_manager
+                        get_backup_manager().create_user_message_checkpoint(
+                            session_id=session_id,
+                            message_count=len(target_state.messages),
+                            user_preview=message if user_preview is None else user_preview,
+                            llm_reply_count=getattr(target_state, "llm_reply_count", 0) or 0,
+                        )
+                    except Exception as checkpoint_err:
+                        log_error(
+                            "CHECKPOINT_ERROR",
+                            f"Failed to create desktop user-message checkpoint: {checkpoint_err}",
+                            checkpoint_err,
+                        )
                 _tasks[task_id] = entry
                 _active_tasks_by_session[session_id] = task_id
 
@@ -278,6 +295,7 @@ def submit_task(req: TaskSubmitRequest) -> Dict[str, Any]:
         req.message,
         float(req.total_timeout),
         source="user",
+        user_preview=req.user_preview,
     )
 
 

@@ -287,7 +287,8 @@ export const createTaskApi = (port: number) => ({
     sessionId: string,
     submissionId: string,
     message: string,
-    totalTimeout?: number
+    totalTimeout?: number,
+    userPreview?: string
   ) =>
     requestToPort<{
       success: boolean;
@@ -300,6 +301,7 @@ export const createTaskApi = (port: number) => ({
           session_id: sessionId,
           submission_id: submissionId,
           message,
+          ...(userPreview !== undefined ? { user_preview: userPreview } : {}),
           ...(totalTimeout !== undefined ? { total_timeout: totalTimeout } : {}),
         }),
       }

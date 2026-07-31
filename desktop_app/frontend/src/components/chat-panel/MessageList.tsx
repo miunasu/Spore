@@ -6,6 +6,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { MessageDetailButton, MessageDetailContent } from './MessageDetail';
 import { AssistantMessageContent } from './AssistantMessageContent';
 import { useT } from '../../i18n';
+import { getAttachmentName } from '../../utils/messageAttachments';
 
 export const MessageList: React.FC = () => {
   const t = useT();
@@ -109,9 +110,40 @@ export const MessageList: React.FC = () => {
                     {message.role === 'assistant' ? (
                       <AssistantMessageContent content={message.content} />
                     ) : (
-                      <div className="whitespace-pre-wrap break-all text-sm leading-relaxed overflow-hidden">
-                        {message.content}
-                      </div>
+                      <>
+                        {message.content && (
+                          <div className="whitespace-pre-wrap break-all text-sm leading-relaxed overflow-hidden">
+                            {message.content}
+                          </div>
+                        )}
+                        {message.attachments && message.attachments.length > 0 && (
+                          <div className={`flex flex-wrap gap-1.5 ${message.content ? 'mt-2' : ''}`}>
+                            {message.attachments.map((path) => (
+                              <div
+                                key={path}
+                                className="flex min-w-0 max-w-full items-center gap-1.5 rounded-lg border border-white/25 bg-black/10 px-2 py-1 text-xs text-white"
+                                title={path}
+                              >
+                                <svg
+                                  className="h-3.5 w-3.5 flex-shrink-0"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                  aria-hidden="true"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+                                  />
+                                </svg>
+                                <span className="max-w-[220px] truncate">{getAttachmentName(path)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
                     )}
 
                     {/* 命令意图脚注（安全 Agent 解析，持久化显示；恶意标红） */}

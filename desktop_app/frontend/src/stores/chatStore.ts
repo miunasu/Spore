@@ -15,6 +15,7 @@ import { useLogStore } from './logStore';
 import { useTodoStore } from './todoStore';
 import { useSecurityStore } from './securityStore';
 import { t, localeTag } from '../i18n';
+import { buildMessageContent, parseMessageContent } from '../utils/messageAttachments';
 
 // 前端日志辅助函数
 const frontendLog = (message: string) => {
@@ -264,7 +265,7 @@ const fetchSessionMessages = async (
   ));
 
   const messages = allMessages
-    .map((msg, index) => {
+    .map<Message | null>((msg, index) => {
       const isSystemNotice =
         msg.role === 'system'
         || (msg.role === 'user' && msg.content?.trim().startsWith('[系统通知]'));
@@ -291,12 +292,16 @@ const fetchSessionMessages = async (
         return null;
       }
 
+      const parsed = parseMessageContent(msg.content);
       return {
         ...baseMessage,
-        content: msg.content,
+        content: parsed.content,
+        attachments: parsed.attachments.length > 0 ? parsed.attachments : undefined,
       };
     })
-    .filter((msg): msg is Message => msg !== null && msg.content.trim() !== '');
+    .filter((msg): msg is Message => (
+      msg !== null && (msg.content.trim() !== '' || Boolean(msg.attachments?.length))
+    ));
 
   // 历史快照不含意图信息，用会话内存中的意图日志重新挂载
   return attachIntentsToMessages(messages, intentLogBySession[sessionId]);
@@ -373,7 +378,7 @@ interface ChatStore {
   ) => void;
 
   // API 操作
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, attachments?: string[]) => Promise<void>;
   interrupt: () => Promise<void>;
 
   // 安全熔断自动修复：新建会话，把安全 Agent 上下文作为用户输入交给 Spore 处置
@@ -649,9 +654,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // API 操作
     // 阶段②：前端纯浏览——只提交任务（POST /api/task/submit），
     // 循环由后端自驱，逐轮渲染由 WS task_event 事件驱动（见 handleTaskEvent）
-    sendMessage: async (content) => {
+    sendMessage: async (content, attachments = []) => {
       const { activeConversationId, addMessage, setGenerating, ensureBackend } = get();
       if (!activeConversationId) return;
+
+      const messageContent = buildMessageContent(content, attachments);
+      if (!messageContent) return;
+      const displayMessage = parseMessageContent(messageContent);
 
       const conversationId = activeConversationId;
       if (get().generatingConversations.has(conversationId)) {
@@ -673,7 +682,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
       addMessage(conversationId, {
         id: userMessageId,
         role: 'user',
-        content,
+        content: displayMessage.content,
+        attachments: displayMessage.attachments.length > 0 ? displayMessage.attachments : undefined,
         timestamp: Date.now(),
       });
       set({ inputValue: '' });
@@ -699,7 +709,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
         try {
           const taskApi = createTaskApi(port);
-          const response = await taskApi.submit(conversationId, submissionId, content);
+          const response = await taskApi.submit(
+            conversationId,
+            submissionId,
+            messageContent,
+            undefined,
+            displayMessage.content
+          );
           if (!response.success) {
             return {
               submitted: true,
@@ -1392,7 +1408,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           ];
 
           const messages: Message[] = allMessages
-            .map((msg, index) => {
+            .map<Message | null>((msg, index) => {
               const trimmed = msg.content?.trim() ?? '';
               const isSystemNotice =
                 msg.role === 'system'
@@ -1437,14 +1453,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   };
                 } else {
                   // 真实用户输入：正常显示
+                  const parsed = parseMessageContent(msg.content);
                   return {
                     ...baseMessage,
-                    content: msg.content,
+                    content: parsed.content,
+                    attachments: parsed.attachments.length > 0 ? parsed.attachments : undefined,
                   };
                 }
               }
             })
-            .filter((msg): msg is Message => msg !== null && msg.content.trim() !== ''); // 过滤掉 null 和空内容
+            .filter((msg): msg is Message => (
+              msg !== null && (msg.content.trim() !== '' || Boolean(msg.attachments?.length))
+            )); // 过滤掉 null 和空内容
 
           newConv.messages = messages;
           frontendLog(t('stores.chat.loadDone', { count: messages.length }));

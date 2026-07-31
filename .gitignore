@@ -63,6 +63,7 @@ tool_policy.json
 .spore/
 
 # 测试
+tests/
 .pytest_cache/
 .coverage
 htmlcov/

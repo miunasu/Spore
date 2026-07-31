@@ -12,6 +12,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
+  attachments?: string[];
   sent_messages?: Array<{role: string; content: string}>;  // 实际发送给LLM的消息（用于详细显示）
   raw_response?: string;  // LLM返回的原始响应（包含协议标记）
   command_intents?: CommandIntent[];  // 该轮回复中命令的意图解释（辅助代理产出）

@@ -202,10 +202,12 @@ class IPCManager:
             "message": message,
             "context": {
                 "request_id": request_id,
+                "conversation_id": conversation_id,
                 "attempt": data.get("attempt"),
                 "total": data.get("total"),
                 "delay": data.get("delay"),
                 "event": data.get("event") or "llm_retry",
+                "retry_reason": data.get("retry_reason"),
             },
         }
         try:
@@ -316,7 +318,7 @@ class IPCManager:
             request_id: 请求ID（可选，不提供则自动生成）
             use_sub_agent_config: 是否使用子 Agent 配置（默认 False）
             agent_profile: AutoAgent 颗粒化基座 profile（supervisor/mode_selector/
-                security/assistant），优先级高于 use_sub_agent_config
+                security/frontend），优先级高于 use_sub_agent_config
 
         Returns:
             request_id: 请求的唯一标识，用于获取响应
@@ -486,6 +488,7 @@ class IPCManager:
             ("agent_process", "base.agent_process", "set_ipc_manager"),
             ("supervisor", "AutoAgent.supervisor", "set_ipc_manager"),
             ("security_agent", "AutoAgent.security_agent", "set_ipc_manager"),
+            ("frontend_agent", "AutoAgent.frontend_agent", "set_ipc_manager"),
         ]
         
         for name, module_path, func_name in modules:

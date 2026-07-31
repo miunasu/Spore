@@ -398,6 +398,13 @@ def check_action_allowed(
 
     baseline = get_tools_for_mode(mode)
     if tool_name not in baseline:
+        if tool_name not in TOOL_DEFINITIONS:
+            if "=" in tool_name:
+                return (
+                    f"工具调用格式错误: {tool_name} 是参数，不是工具名；"
+                    "请先提供工具名并用空格分隔，例如 `file type=read ...`"
+                )
+            return f"未知工具: {tool_name}"
         return f"当前模式 ({mode}) 不提供工具: {tool_name}"
 
     if not is_tool_enabled(pol, tool_name):

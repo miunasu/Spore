@@ -84,6 +84,7 @@ Spore/
 │   ├── agent_process.py       # 多 Agent 派发引擎（含桌面异步派发）
 │   ├── agent_database.py      # 子 Agent 任务与工具调用记录
 │   ├── character_manager.py   # 角色选择（单角色）
+│   ├── html_artifacts.py      # `.spore/html` 持久化、索引与静态校验
 │   ├── todo_manager.py        # 声明式 TODO（按会话）
 │   ├── rule_reminder.py       # 周期性规则提醒
 │   ├── prompt_loader.py       # prompt / skills / characters 装配
@@ -102,7 +103,8 @@ Spore/
 ├── AutoAgent/                 # 辅助 Agent（通过 IPC 调 Chat）
 │   ├── mode_selector.py       # auto 模式时选择 strong/long
 │   ├── supervisor.py          # 循环/终止判定辅助
-│   └── security_agent.py      # 安全 Agent：意图分析 / 风险评估 / 恶意熔断
+│   ├── security_agent.py      # 安全 Agent：意图分析 / 风险评估 / 恶意熔断
+│   └── frontend_agent.py      # 一次性 HTML 生成、审阅、校验与持久化
 │
 ├── desktop_app/
 │   ├── resource_manager.py    # 打包环境初始化
@@ -113,7 +115,7 @@ Spore/
 │   │   ├── conversation_loop_manager.py  # 每会话独立 ConversationLoop
 │   │   ├── instance_manager.py
 │   │   ├── routes/            # chat / task / commands / files / agents /
-│   │   │                      # settings / instances / confirm / backup
+│   │   │                      # settings / instances / confirm / backup / html
 │   │   └── websocket/         # WS 推送进程（:8766）、日志桥、确认管理、
 │   │                          # 安全熔断桥、子 Agent 通知
 │   └── frontend/              # React + Tauri（含 src/i18n 中英双语）
@@ -125,12 +127,13 @@ Spore/
 │   ├── security_prompt.md     # 风险评估（basic+）
 │   ├── security_intent_prompt.md      # 意图+恶意分析（full）
 │   ├── security_remediation_prompt.md # 熔断后修复建议（full）
+│   ├── frontend_prompt.md     # 自包含沙箱 HTML 生成
 │   └── <Type>_prompt.md       # 各子 Agent 类型提示
 │
 ├── skills/                    # Claude Skills 风格技能包
 ├── characters/                # 角色 Markdown
 ├── history/                   # 对话存档与 autosave
-├── .spore/                    # 备份数据与安全审计（运行时生成）
+├── .spore/                    # 备份/审计数据与持久化 html/ 资产（运行时生成）
 ├── docs/                      # 文档（本目录；en/ 为英文版）
 └── example/                   # 案例输出
 ```
@@ -276,8 +279,9 @@ file type=read file_path="C:/demo.txt"
 | `mode_selector` | `mode_selector` | `CONTEXT_MODE=auto` 时按用户输入选择 strong/long |
 | `supervisor` | `supervisor` | 判定回合是否结束/是否重复（YES/NO） |
 | `security_agent` | `security` | 命令意图分析、风险评估、恶意熔断与修复建议（见下节） |
+| `frontend_agent` | `frontend` | 一次性 HTML 生成，以及缺失动态目标的按需补全、校验与 `.spore/html` 持久化 |
 
-三者均通过 IPC 走 Chat 进程，可经 `AGENT_SUPERVISOR_*` / `AGENT_MODE_SELECTOR_*` / `AGENT_SECURITY_*` 配置**各自独立的模型**（回退链：档位专属 → `SUB_AGENT_*` → 主配置），见 `Config.resolve_agent_llm`。
+四者均通过 IPC 走 Chat 进程，可经 `AGENT_SUPERVISOR_*` / `AGENT_MODE_SELECTOR_*` / `AGENT_SECURITY_*` / `AGENT_FRONTEND_*` 配置**各自独立的模型**（回退链：档位专属 → `SUB_AGENT_*` → 主配置），见 `Config.resolve_agent_llm`。
 
 ### 安全体系（v4.0）
 
@@ -362,9 +366,10 @@ file type=read file_path="C:/demo.txt"
 ### 日志与推送
 
 - 落盘：`base/logger.py` 按 `session_context` 写入 `logs/<启动时间>/conversations/<id>/`
+- Chat 子进程与 IPC 线程缺少 `session_context` 时，error logger 从 `context.conversation_id` 或 `context.request_id` 恢复会话路由；重试进度只由 IPC 主进程落盘一次
 - 推送：`websocket/log_bridge.py` 附加 `conversation_id`；前端 `logStore` 按会话分桶
 - 正文不嵌入 `session_id`（仅路由字段携带会话信息）
-- Raw log 默认开启：每次 LLM 调用后，把 provider 返回的完整文本、provider 原始响应体（`raw_payload`）及健康元数据（`health`，含 `api_stop_reason`/`finish_state`/`truncated`/usage 等）写入轮转 `raw.log`，不推送到桌面日志面板；成功、空响应、拒绝、截断、报错均落盘
+- Raw log 默认开启且不轮转：每个 attempt 只有一个显式 START/END 外层块，并用 `attempt_id` / `attempt_index` 区分首调与重试；非流式优先保存 HTTP body，流式只保存包含全部 content blocks 的最终聚合响应，不展开 delta，同时记录解析正文、`api_stop_reason`/`finish_state`/`truncated`/usage 及 visible/thinking 长度
 - 可解析 session 的主请求写入会话目录；辅助 Agent 等无法从 request ID 解析 session 的请求可能写入进程级 `raw.log`
 - Raw 内容不脱敏、不加密，可能包含模型复述的命令、文件内容、路径、凭据或个人数据；清空/删除会话不会删除已有日志，可用 `LOG_RAW_ENABLED=false` 禁用
 

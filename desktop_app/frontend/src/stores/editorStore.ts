@@ -30,6 +30,7 @@ interface EditorStore {
   switchFile: (path: string) => void;
   closeFile: (path?: string) => void;
   updateContent: (content: string) => void;
+  replacePersistedContent: (path: string, content: string) => void;
   saveFile: (path?: string) => Promise<void>;
 }
 
@@ -118,6 +119,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         f.path === activeFilePath
           ? { ...f, content, hasChanges: content !== f.originalContent }
           : f
+      ),
+    });
+  },
+
+  replacePersistedContent: (path, content) => {
+    set({
+      openFiles: get().openFiles.map((file) =>
+        file.path === path
+          ? { ...file, content, originalContent: content, hasChanges: false }
+          : file
       ),
     });
   },

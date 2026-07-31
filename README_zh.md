@@ -311,6 +311,7 @@ Learning episodic memory 会在每次请求前检索最多 3 条相关历史，�
 
 - `base/security_guard.py`：命令安全守卫（高危规则、白名单、评估缓存、审计日志）；
 - `AutoAgent/security_agent.py`：异步 Security Agent（意图研判、恶意判定、修复建议）；
+- `AutoAgent/frontend_agent.py`：一次性交互式 HTML 生成、审阅、校验与持久化；
 - `desktop_app/backend/confirm_manager.py`：桌面确认请求；
 - `desktop_app/backend/security_interrupt.py`：恶意判定后的会话熔断；
 - `base/backup_manager.py`：文件备份与恢复。
@@ -382,7 +383,7 @@ REST 默认使用 `127.0.0.1:8765`，并读取 `DESKTOP_API_PORT`。前端 WebSo
 
 ```text
 base/                       Agent 核心、工具、会话、IPC、策略、备份
-AutoAgent/                  Supervisor、ModeSelector、Security Agent
+AutoAgent/                  Supervisor、ModeSelector、Security、Frontend Agent
 desktop_app/backend/        FastAPI 路由、任务层、通知、WebSocket、确认
 desktop_app/frontend/       React/Tauri 桌面界面
 prompt/                     主 Agent 与辅助 Agent 提示词

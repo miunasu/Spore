@@ -14,7 +14,7 @@ import subprocess
 router = APIRouter()
 
 # 允许访问的根目录（安全限制）
-ALLOWED_ROOTS = ["output", "skills", "prompt", "history", "characters"]
+ALLOWED_ROOTS = ["output", "html", "skills", "prompt", "history", "characters"]
 
 # 允许访问的根目录文件（特殊文件）
 ALLOWED_ROOT_FILES = ["note.txt", ".env"]
@@ -48,6 +48,9 @@ def get_actual_path(requested_path: str) -> Path:
     # 只读资源目录
     readonly_roots = ["prompt", "skills", "characters"]
     
+    if root == "html":
+        relative = normalized.split('/', 1)[1] if '/' in normalized else ""
+        return Path.cwd() / ".spore" / "html" / relative
     if root in readonly_roots:
         # 从资源目录读取
         resource_dir = get_resource_base_dir()
@@ -137,6 +140,8 @@ def validate_path(path: str) -> Path:
             # 只读资源：相对于资源目录
             resource_dir = get_resource_base_dir()
             actual_path.resolve().relative_to(resource_dir.resolve())
+        elif root == "html":
+            actual_path.resolve().relative_to((Path.cwd() / ".spore" / "html").resolve())
         else:
             # 可写目录：相对于工作目录
             actual_path.resolve().relative_to(Path.cwd().resolve())
@@ -172,6 +177,10 @@ def list_directory(path: str = Query(..., description="目录路径")) -> Dict[s
             return {"path": ".", "items": items}
         
         dir_path = validate_path(path)
+
+        normalized_path = path.replace('\\', '/').strip('/')
+        if normalized_path == "html":
+            dir_path.mkdir(parents=True, exist_ok=True)
         
         if not dir_path.exists():
             raise HTTPException(status_code=404, detail="目录不存在")
@@ -181,6 +190,8 @@ def list_directory(path: str = Query(..., description="目录路径")) -> Dict[s
         
         items = []
         for item in dir_path.iterdir():
+            if normalized_path == "html" and item.name == "index.json":
+                continue
             try:
                 stat = item.stat()
                 # 计算相对路径

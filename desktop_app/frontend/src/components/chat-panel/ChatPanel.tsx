@@ -12,6 +12,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useLogStore } from '../../stores/logStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { useDragStore } from '../../stores/dragStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { commandsApi } from '../../services/api';
 import { useT, localeTag } from '../../i18n';
 
@@ -51,6 +52,8 @@ export const ChatPanel: React.FC = () => {
     openFile: openEditorFile,
   } = useEditorStore();
   const { isDragging, draggingFile, endDrag } = useDragStore();
+  const htmlRenderingEnabled = useSettingsStore((state) => state.htmlRenderingEnabled);
+  const toggleHtmlRendering = useSettingsStore((state) => state.toggleHtmlRendering);
 
   // 当前活跃标签：可能是对话或文件
   const [activeTabType, setActiveTabType] = useState<TabType>('chat');
@@ -642,6 +645,25 @@ export const ChatPanel: React.FC = () => {
 
         {/* 操作按钮 */}
         <div className="flex items-center px-2 gap-1">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={htmlRenderingEnabled}
+            onClick={toggleHtmlRendering}
+            className={`flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-xs transition-colors ${
+              htmlRenderingEnabled
+                ? 'border-spore-highlight/70 bg-spore-highlight/15 text-spore-highlight'
+                : 'border-spore-border/30 text-spore-muted hover:bg-spore-accent/30 hover:text-spore-text'
+            }`}
+            title={t(htmlRenderingEnabled ? 'chatPanel.htmlPreview.disableTitle' : 'chatPanel.htmlPreview.enableTitle')}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l-3 3 3 3m8-6l3 3-3 3m-5 3l2-12" />
+            </svg>
+            <span>HTML</span>
+            <span className={`h-1.5 w-1.5 rounded-full ${htmlRenderingEnabled ? 'bg-spore-success' : 'bg-spore-muted/50'}`} />
+          </button>
+
           {/* Token 显示 - 5个值 */}
           {tokenStats && (
             <span className="text-xs text-spore-muted/60 px-2 whitespace-nowrap">

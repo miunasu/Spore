@@ -29,6 +29,7 @@ skills/your-skill/
 | `skills/pdf` | PDF 提取、生成、合并拆分、表单等 |
 | `skills/pptx` | PowerPoint 生成与处理 |
 | `skills/pcap-analyst` | PCAP 流量分析、C2/Beacon 检测、Snort/YARA 规则产出 |
+| `skills/dynamic-html` | 交互式 HTML 生成与 `.spore/html` 生命周期管理 |
 | `skills/skill-creator` | 帮助创建新技能包（含脚手架脚本） |
 
 逆向（IDA 等）能力通常通过 **主机命令工具 + 外部工具链 + 案例目录** 完成，不强制内置在 `skills/`。案例见 `example/MalwareAnalysis/`，配套技能见 [IDA-Skill](https://github.com/miunasu/IDA-Skill)（用法见 [银狐案例](SILVERFOX.md)）。

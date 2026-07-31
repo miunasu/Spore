@@ -102,13 +102,14 @@ If the main OpenAI-compatible model service does not support embeddings, or only
 
 ### Helper-Agent Dedicated LLM (v4.0, optional)
 
-The three helper-Agent profiles can each specify their own model, with the fallback chain: **profile-specific → `SUB_AGENT_*` → main configuration** (field-by-field fallback; see `Config.resolve_agent_llm`):
+The four helper-Agent profiles can each specify their own model, with the fallback chain: **profile-specific → `SUB_AGENT_*` → main configuration** (field-by-field fallback; see `Config.resolve_agent_llm`):
 
 | Prefix | Corresponding Agent |
 |------|-----------|
 | `AGENT_SUPERVISOR_*` | Supervisor (loop / termination decision) |
 | `AGENT_MODE_SELECTOR_*` | ModeSelector (auto mode selection) |
 | `AGENT_SECURITY_*` | Security Agent (intent / risk / circuit break) |
+| `AGENT_FRONTEND_*` | Frontend Agent (HTML generation / review) |
 
 Each prefix supports the same suffixes as the main configuration: `LLM_SDK`, `OPENAI_API_KEY/API_URL/MODEL`, `ANTHROPIC_API_KEY/API_URL/MODEL`, plus effort / thinking, etc.
 
@@ -124,6 +125,8 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 | Variable | Default | Description |
 |------|------|------|
 | `MAX_OUTPUT_TOKENS` | `15000` | Upper limit for a single LLM output |
+| `FRONTEND_AGENT_TIMEOUT` | `180` | Timeout in seconds for each frontend Agent LLM request |
+| `FRONTEND_AGENT_MAX_ITERATIONS` | `3` | Generation, review, and validation-correction iterations (minimum effective value: 2) |
 | `API_TIMEOUT` | `300` | API timeout (seconds) |
 
 ### System Prompt Behavior
@@ -316,7 +319,10 @@ Directory conventions:
 
 Raw log (`LOG_RAW_ENABLED`):
 
-- After each successful LLM call and before the response returns to its caller, the provider's **complete** response text and request/model/profile/usage metadata are written without truncation, parsing, redaction, or encryption
+- Every API attempt has one outer `===== API ATTEMPT START/END =====` block. RAW data, metadata, payload, and extracted text have their own nested START/END markers.
+- Every API attempt within one user request gets a distinct `attempt_id` / `attempt_index`, so initial calls, retries, and analysis records can be paired directly.
+- Non-streaming calls prefer the HTTP body before SDK parsing. Streaming calls store only the final aggregate containing every content block (`stream_final`), without expanding token/delta events.
+- Block diagnostics report `visible_text_length` and `thinking_length` separately. `text_length` remains as a compatibility alias for `visible_text_length`.
 - This covers main, sub-, and helper-Agent calls. Main requests whose session can be parsed from the request ID go to that conversation directory; other helper requests may go to the process-level `raw.log`
 - **File only** — never pushed to the desktop log panel or the log monitor terminal; request messages and the system prompt are not logged, but replies may repeat commands, file contents, paths, credentials, or personal data
 - Clearing or deleting a session does not remove existing raw logs. Set `LOG_RAW_ENABLED=false` explicitly when this data must not be persisted; do not rely on `LOG_TO_FILE=false`
@@ -340,7 +346,7 @@ Tool / general logs pushed to the desktop frontend:
 | `OUTPUT_DIR` | `output` |
 | `UPLOAD_DIR` | `uploads` |
 
-Conversation history always uses `history/` under the working directory (including `history/autosave/`); backup data always lives in `BACKUP_DIR` (default `.spore/`).
+Conversation history always uses `history/` under the working directory (including `history/autosave/`); backup data always lives in `BACKUP_DIR` (default `.spore/`). Persistent HTML artifacts use `.spore/html/` and are exposed to the file UI only through the virtual `html/` root.
 
 ---
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dynamic HTML"
+  short_description: "Build and manage sandboxed HTML artifacts"
+  default_prompt: "Use $dynamic-html to create an interactive HTML artifact for this result."

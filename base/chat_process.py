@@ -13,7 +13,7 @@ import uuid
 
 from . import response_health
 from .client import load_openai_client, load_anthropic_client
-from .logger import log_error, log_info, log_raw_response
+from .logger import log_error, log_info
 from .config import get_config
 from . import config as _config
 
@@ -22,7 +22,7 @@ try:
     # 缺了它也不能让整个 chat 进程起不来。
     from .logger import log_raw_received  # type: ignore
 except ImportError:  # pragma: no cover - 仅在 logger 尚未提供该接口时走到
-    def log_raw_received(payload, conversation_id=None, metadata=None):  # type: ignore
+    def log_raw_received(payload, conversation_id=None):  # type: ignore
         """logger 未提供 log_raw_received 时的空实现。"""
         return None
 
@@ -225,8 +225,21 @@ class ChatProcess:
         for attempt, delay in enumerate(self._RETRY_DELAYS):
             if delay > 0:
                 # 第 attempt 次失败后的下一次重试（attempt 从 0 计，展示为第 attempt+1 次重试）
-                progress_msg = f"请求失败，{delay}秒后进行第 {attempt + 1} 次重试..."
-                log_error("LLM_API_RETRY_PROGRESS", progress_msg)
+                empty_retry = self._empty_retry_active(retry_hint)
+                if empty_retry:
+                    progress_attempt = int((retry_hint or {}).get("attempt") or 0) + 1
+                    progress_total = self._MAX_EMPTY_ATTEMPTS
+                    retry_reason = "empty_response"
+                    progress_msg = (
+                        f"上次回复没有正文，{delay}秒后进行第 {progress_attempt} 次生成尝试..."
+                    )
+                else:
+                    progress_attempt = attempt + 1
+                    progress_total = total_attempts
+                    retry_reason = "api_error"
+                    progress_msg = (
+                        f"请求失败，{delay}秒后进行第 {progress_attempt} 次请求尝试..."
+                    )
                 # 经 IPC 推送进度，供 Desktop 前端 system 日志展示（chat 进程自身 log 到不了主进程 WS）
                 try:
                     self.response_queue.put({
@@ -234,28 +247,47 @@ class ChatProcess:
                         "status": "progress",
                         "data": {
                             "event": "llm_retry",
-                            "attempt": attempt + 1,
-                            "total": total_attempts,
+                            "attempt": progress_attempt,
+                            "total": progress_total,
                             "delay": delay,
                             "message": progress_msg,
+                            "retry_reason": retry_reason,
                         },
                     })
                 except Exception:
-                    pass
+                    # 只有 IPC 投递失败时才由 Chat 子进程兜底落盘；正常路径由
+                    # IPCManager 统一记录，避免同一重试进度写两遍。
+                    log_error(
+                        "LLM_API_RETRY_PROGRESS",
+                        progress_msg,
+                        context={
+                            "request_id": request_id,
+                            "conversation_id": conversation_id_from_request_id(request_id),
+                            "attempt": progress_attempt,
+                            "total": progress_total,
+                            "delay": delay,
+                            "event": "llm_retry",
+                            "retry_reason": retry_reason,
+                        },
+                    )
                 time.sleep(delay)
             if self.global_cancel_flag.is_set():
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             if request_data.get("stream"):
                 self._emit_stream_event(request_id, "start")
-            result = self._do_single_llm_call(request_id, request_data, retry_hint=retry_hint)
+            attempt_request_data = dict(request_data)
+            attempt_request_data["_raw_attempt_index"] = attempt + 1
+            attempt_request_data["_raw_attempt_id"] = "{0}:attempt-{1}".format(
+                request_id, attempt + 1
+            )
+            result = self._do_single_llm_call(
+                request_id, attempt_request_data, retry_hint=retry_hint
+            )
             status = result.get("status")
 
             if status == "cancelled":
                 return result
-
-            # 成功与各类异常状态都要落 raw 日志，否则时间线会断在失败那一刻
-            self._log_raw_response(request_id, request_data, result)
 
             if status == "success":
                 return result
@@ -297,14 +329,24 @@ class ChatProcess:
                 return result
             log_error(
                 "LLM_API_RETRY",
-                f"API call failed (attempt {attempt + 1}/{total_attempts}): {result.get('data', '')}"
+                f"API call failed (attempt {attempt + 1}/{total_attempts}): {result.get('data', '')}",
+                context={
+                    "request_id": request_id,
+                    "conversation_id": conversation_id_from_request_id(request_id),
+                    "attempt": attempt + 1,
+                    "total": total_attempts,
+                },
             )
         return last_result
 
     @staticmethod
     def _build_empty_retry_hint(result: Dict[str, Any], empty_attempts: int) -> Dict[str, Any]:
         """把上一次空回复的关键数字压成重试提示；构造失败也要给出最小可用提示。"""
-        hint: Dict[str, Any] = {"reason": "empty_response", "attempt": empty_attempts}
+        hint: Dict[str, Any] = {
+            "reason": "empty_response",
+            "attempt": empty_attempts,
+            "request_id": result.get("request_id"),
+        }
         try:
             health = result.get("health") or {}
             usage = health.get("usage") or {}
@@ -329,54 +371,6 @@ class ChatProcess:
             "content_blocks": health.get("content_blocks"),
             "usage": health.get("usage"),
         }
-
-    def _log_raw_response(self, request_id: str, request_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """把提取后的正文与健康判定写入对应会话的 raw 日志（仅落盘）。
-
-        完整原文不在这里落 —— 它已由 `_log_received` 在"收到的那一刻"独立落盘
-        （见 log_raw_received）。这条记录只负责回答"提取/判定环节把它理解成了
-        什么"，两条对照才能区分"模型没生成正文块"与"生成了但被提取逻辑丢掉"。
-
-        由 LOG_RAW_ENABLED 控制；失败静默，绝不影响正常回复流程。
-        """
-        try:
-            if not getattr(self.config, "log_raw_enabled", False):
-                return
-            data = result.get("data")
-            data = data if isinstance(data, dict) else {}
-            health = result.get("health") or {}
-            conversation_id = conversation_id_from_request_id(request_id)
-            metadata = {
-                "request_id": request_id,
-                "conversation_id": conversation_id,
-                "model": request_data.get("model"),
-                "role": data.get("role"),
-                "sub_agent": bool(request_data.get("use_sub_agent_config")),
-                "agent_profile": request_data.get("agent_profile"),
-                "status": result.get("status"),
-                "usage": data.get("usage") or health.get("usage"),
-                # 传输层终止原因，与协议层的 @SPORE:STOP_REASON 无关
-                "api_stop_reason": health.get("api_stop_reason"),
-                "finish_state": health.get("finish_state"),
-                "truncated": health.get("truncated"),
-                "truncation_source": health.get("truncation_source"),
-                "truncation_hint": health.get("truncation_hint"),
-                "truncation_confidence": health.get("truncation_confidence"),
-                "content_blocks": health.get("content_blocks"),
-                # 正文可能跨多次调用累加（pause_turn 续调）。不标出轮数的话，
-                # 这段正文与单条原始响应对不上，看日志的人会以为记漏了。
-                "pause_turn_rounds": data.get("pause_turn_rounds") or 0,
-            }
-            if result.get("status") == "error":
-                metadata["error"] = str(result.get("data"))[:2000]
-                metadata["error_meta"] = result.get("error_meta")
-            log_raw_response(
-                data.get("content") or "",
-                conversation_id=conversation_id,
-                metadata=metadata,
-            )
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # 收到即记：原文落盘
@@ -404,6 +398,8 @@ class ChatProcess:
             if call_meta:
                 meta["sub_agent"] = bool(call_meta.get("use_sub_agent_config"))
                 meta["agent_profile"] = call_meta.get("agent_profile")
+                meta["attempt_id"] = call_meta.get("attempt_id")
+                meta["attempt_index"] = call_meta.get("attempt_index")
             if extra:
                 meta.update(extra)
         except Exception:
@@ -411,14 +407,13 @@ class ChatProcess:
         return meta
 
     def _log_received(self, payload: Any, meta: Dict[str, Any]) -> None:
-        """把收到的原文立刻落盘。受 LOG_RAW_ENABLED 控制，全程静默失败。"""
+        """收到 provider 响应后立即原样落盘，不等待或附加解析结果。"""
         try:
             if not getattr(self.config, "log_raw_enabled", False):
                 return
             log_raw_received(
                 payload,
                 conversation_id=(meta or {}).get("conversation_id"),
-                metadata=meta,
             )
         except Exception:
             pass
@@ -1047,6 +1042,8 @@ class ChatProcess:
         call_meta = {
             "use_sub_agent_config": bool(use_sub_agent_config),
             "agent_profile": agent_profile,
+            "attempt_id": request_data.get("_raw_attempt_id"),
+            "attempt_index": request_data.get("_raw_attempt_index"),
         }
 
         # 根据 SDK 类型选择不同的调用方式
@@ -1175,6 +1172,7 @@ class ChatProcess:
                 before["effort"], None
         adjust = {
             "reason": "empty_response_retry",
+            "request_id": (retry_hint or {}).get("request_id"),
             "attempt": (retry_hint or {}).get("attempt"),
             "prev_output_tokens": (retry_hint or {}).get("output_tokens"),
             "prev_max_tokens": (retry_hint or {}).get("max_tokens"),
@@ -1218,6 +1216,7 @@ class ChatProcess:
             return before["max_tokens"], before["reasoning_effort"], None
         adjust = {
             "reason": "empty_response_retry",
+            "request_id": (retry_hint or {}).get("request_id"),
             "attempt": (retry_hint or {}).get("attempt"),
             "prev_output_tokens": (retry_hint or {}).get("output_tokens"),
             "prev_max_tokens": (retry_hint or {}).get("max_tokens"),

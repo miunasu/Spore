@@ -117,7 +117,7 @@ const ANTHROPIC_COMPAT_PROFILE_KEYS = [
 // AutoAgent 颗粒化基座的全部 env key（子 Agent + 4 个 AutoAgent，openai/anthropic 两套）
 // appendValue 会跳过空值，所以两套变体全列出是安全的
 const AGENT_BASE_PROFILE_KEYS = (() => {
-  const prefixes = ['SUB_AGENT', 'AGENT_SUPERVISOR', 'AGENT_MODE_SELECTOR', 'AGENT_SECURITY'];
+  const prefixes = ['SUB_AGENT', 'AGENT_SUPERVISOR', 'AGENT_MODE_SELECTOR', 'AGENT_SECURITY', 'AGENT_FRONTEND'];
   const suffixes = [
     'LLM_SDK',
     'OPENAI_API_KEY', 'OPENAI_API_URL', 'OPENAI_MODEL',
@@ -536,6 +536,19 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
         ],
         placeholder: 'commandMenu.env.MULTI_AGENT_MONITOR_ENABLED.ph',
       },
+      {
+        key: 'FRONTEND_AGENT_TIMEOUT',
+        label: 'commandMenu.env.FRONTEND_AGENT_TIMEOUT.label',
+        type: 'text',
+        placeholder: 'commandMenu.env.FRONTEND_AGENT_TIMEOUT.ph',
+      },
+      {
+        key: 'FRONTEND_AGENT_MAX_ITERATIONS',
+        label: 'commandMenu.env.FRONTEND_AGENT_MAX_ITERATIONS.label',
+        type: 'text',
+        placeholder: 'commandMenu.env.FRONTEND_AGENT_MAX_ITERATIONS.ph',
+        description: 'commandMenu.env.FRONTEND_AGENT_MAX_ITERATIONS.desc',
+      },
     ],
   },
   {
@@ -829,6 +842,7 @@ const AGENT_BASE_TARGETS: AgentBaseTarget[] = [
   { id: 'supervisor', label: 'commandMenu.agentBase.targets.supervisorLabel', prefix: 'AGENT_SUPERVISOR', hint: 'commandMenu.agentBase.targets.supervisorHint' },
   { id: 'mode_selector', label: 'commandMenu.agentBase.targets.modeSelectorLabel', prefix: 'AGENT_MODE_SELECTOR', hint: 'commandMenu.agentBase.targets.modeSelectorHint' },
   { id: 'security', label: 'commandMenu.agentBase.targets.securityLabel', prefix: 'AGENT_SECURITY', hint: 'commandMenu.agentBase.targets.securityHint' },
+  { id: 'frontend', label: 'commandMenu.agentBase.targets.frontendLabel', prefix: 'AGENT_FRONTEND', hint: 'commandMenu.agentBase.targets.frontendHint' },
 ];
 
 // 给定配置目标前缀，返回该目标的 env key 集合（基础 + 高级）

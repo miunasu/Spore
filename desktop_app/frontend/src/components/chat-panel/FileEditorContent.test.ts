@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_HIGHLIGHT_CHARS } from '../common/SyntaxHighlighter';
-import { shouldUseMarkdownFilePreview } from './FileEditorContent';
+import { getHtmlArtifactIdFromPath, shouldUseMarkdownFilePreview } from './FileEditorContent';
+import { isHtmlFile } from '../common/HtmlPreview';
 
 describe('file preview dispatch', () => {
   it('uses semantic preview only for Markdown documents', () => {
@@ -13,5 +14,13 @@ describe('file preview dispatch', () => {
 
   it('falls back to source preview for large Markdown files', () => {
     expect(shouldUseMarkdownFilePreview('README.md', 'x'.repeat(MAX_HIGHLIGHT_CHARS + 1))).toBe(false);
+  });
+
+  it('recognizes only HTML file extensions for sandbox preview', () => {
+    expect(isHtmlFile('output/report.html')).toBe(true);
+    expect(isHtmlFile('output/report.htm')).toBe(true);
+    expect(isHtmlFile('output/report.html.txt')).toBe(false);
+    expect(getHtmlArtifactIdFromPath('html/report.html')).toBe('report');
+    expect(getHtmlArtifactIdFromPath('output/report.html')).toBeUndefined();
   });
 });

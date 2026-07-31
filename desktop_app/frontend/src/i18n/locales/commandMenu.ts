@@ -225,6 +225,12 @@ const commandMenu = {
         desc: '用于检查中断信号',
       },
       MULTI_AGENT_MONITOR_ENABLED: { label: '启用多 Agent 监控', ph: '默认: true' },
+      FRONTEND_AGENT_TIMEOUT: { label: 'Frontend Agent 超时', ph: '默认: 180 秒' },
+      FRONTEND_AGENT_MAX_ITERATIONS: {
+        label: 'Frontend Agent 最大迭代',
+        ph: '默认: 3',
+        desc: '包含首次生成、界面审阅和失败后的自修正',
+      },
 
       CHAT_MAX_WORKERS: { label: '最大并发 LLM 请求', ph: '默认: 5' },
       CHAT_RESPONSE_EXPIRE: { label: '响应缓存过期时间', ph: '默认: 300 秒' },
@@ -379,6 +385,8 @@ const commandMenu = {
         modeSelectorHint: '自动选择上下文模式；留空则继承子 Agent',
         securityLabel: 'Security（安全 Agent）',
         securityHint: '高危命令风险评估 + 普通命令意图/恶意研判；推荐 Sonnet/GPT-4o-mini 级模型；留空则继承子 Agent',
+        frontendLabel: 'Frontend（HTML 生成）',
+        frontendHint: '生成并审阅一次性交互式 HTML；推荐使用代码与前端能力较强的模型；留空则继承子 Agent',
       },
     },
 
@@ -675,6 +683,12 @@ const commandMenu = {
         desc: 'Used to check for interrupt signals',
       },
       MULTI_AGENT_MONITOR_ENABLED: { label: 'Enable multi-agent monitor', ph: 'Default: true' },
+      FRONTEND_AGENT_TIMEOUT: { label: 'Frontend Agent timeout', ph: 'Default: 180s' },
+      FRONTEND_AGENT_MAX_ITERATIONS: {
+        label: 'Frontend Agent max iterations',
+        ph: 'Default: 3',
+        desc: 'Covers initial generation, UI review, and validation retries',
+      },
 
       CHAT_MAX_WORKERS: { label: 'Max concurrent LLM requests', ph: 'Default: 5' },
       CHAT_RESPONSE_EXPIRE: { label: 'Response cache expiry', ph: 'Default: 300s' },
@@ -829,6 +843,8 @@ const commandMenu = {
         modeSelectorHint: 'Auto-selects the context mode; inherits the sub-agent if empty',
         securityLabel: 'Security (security agent)',
         securityHint: 'Risk assessment for high-risk commands + intent/malice analysis for ordinary commands; a Sonnet/GPT-4o-mini class model is recommended; inherits the sub-agent if empty',
+        frontendLabel: 'Frontend (HTML generation)',
+        frontendHint: 'Generates and reviews one-shot interactive HTML; use a model with strong coding and frontend ability; inherits the sub-agent if empty',
       },
     },
 

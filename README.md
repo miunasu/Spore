@@ -311,6 +311,7 @@ Implemented in:
 
 - `base/security_guard.py` — command guard (high-risk rules, whitelist, evaluation cache, audit log);
 - `AutoAgent/security_agent.py` — async Security Agent (intent analysis, malice detection, remediation advice);
+- `AutoAgent/frontend_agent.py` — one-shot interactive HTML generation, review, validation, and persistence;
 - `desktop_app/backend/confirm_manager.py` — desktop confirmation requests;
 - `desktop_app/backend/security_interrupt.py` — session circuit-break after a malicious verdict;
 - `base/backup_manager.py` — file backup and restore.
@@ -381,7 +382,7 @@ Endpoints bind to loopback by default. If you expose them to a LAN or the intern
 
 ```text
 base/                       Agent core, tools, sessions, IPC, policy, backup
-AutoAgent/                  Supervisor, ModeSelector, Security Agent
+AutoAgent/                  Supervisor, ModeSelector, Security, Frontend Agent
 desktop_app/backend/        FastAPI routes, task layer, notifications, WS, confirm
 desktop_app/frontend/       React/Tauri desktop UI
 prompt/                     Main and helper agent prompts

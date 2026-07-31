@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AssistantMessageContent } from './AssistantMessageContent';
+import { useSettingsStore } from '../../stores/settingsStore';
+
+afterEach(() => {
+  useSettingsStore.setState({ htmlRenderingEnabled: false });
+});
 
 describe('AssistantMessageContent', () => {
   it('renders Markdown and GFM structures', () => {
@@ -65,5 +70,16 @@ describe('AssistantMessageContent', () => {
     );
     expect(container.firstChild).toHaveClass('markdown-renderer--mini');
     expect(container.querySelector('strong')).toHaveTextContent('compact');
+  });
+
+  it('renders standalone HTML in a sandbox only when enabled', () => {
+    const content = '<!doctype html><html><body><button>Run</button></body></html>';
+    const { container, rerender } = render(<AssistantMessageContent content={content} />);
+    expect(container.querySelector('iframe')).not.toBeInTheDocument();
+
+    useSettingsStore.setState({ htmlRenderingEnabled: true });
+    rerender(<AssistantMessageContent content={content} />);
+    expect(container.querySelector('iframe')).toHaveAttribute('sandbox');
+    expect(container.querySelector('button')).not.toBeInTheDocument();
   });
 });

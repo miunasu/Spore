@@ -502,6 +502,31 @@ export const filesApi = {
     ),
 };
 
+export const htmlApi = {
+  load: (artifactId: string) =>
+    request<{
+      artifact: Record<string, unknown>;
+      content: string;
+    }>(`/api/html/${encodeURIComponent(artifactId)}`),
+
+  interact: (artifactId: string, payload: {
+    target: string;
+    request?: string;
+    action?: string;
+    trigger_text?: string;
+  }) =>
+    request<{
+      artifact: Record<string, unknown>;
+      content: string;
+      generated: boolean;
+      target: string;
+      iterations?: number;
+    }>(`/api/html/${encodeURIComponent(artifactId)}/interact`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+};
+
 // Agents API（只在主后端）
 export const agentsApi = {
   list: () =>

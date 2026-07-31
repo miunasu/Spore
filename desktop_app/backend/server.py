@@ -102,7 +102,7 @@ app.add_middleware(
 )
 
 # 注册路由
-from .routes import chat, task, commands, files, agents, instances, confirm, settings, backup
+from .routes import chat, task, commands, files, agents, instances, confirm, settings, backup, html
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(task.router, prefix="/api/task", tags=["Task"])
 app.include_router(commands.router, prefix="/api/commands", tags=["Commands"])
@@ -112,6 +112,7 @@ app.include_router(instances.router, prefix="/api/instances", tags=["Instances"]
 app.include_router(confirm.router, prefix="/api/confirm", tags=["Confirm"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(backup.router, prefix="/api/backup", tags=["Backup"])
+app.include_router(html.router, prefix="/api/html", tags=["HTML"])
 
 
 @app.get("/")

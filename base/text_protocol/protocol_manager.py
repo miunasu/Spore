@@ -747,10 +747,23 @@ class ProtocolManager:
 
     def _invalid_action_message(self, mode: ActionMode) -> str:
         if mode == "sequence":
-            return "ACTION_SEQUENCE 必须包含按顺序编号的工具调用，例如 `1. file type=read ...`"
+            return (
+                "ACTION_SEQUENCE 工具调用格式错误：编号后必须先写工具名，参数之间用空格分隔；"
+                "不能把 `type=read` 这类参数当作工具名。"
+                "例如 `1. file type=read ...`"
+            )
         if mode == "parallel":
-            return "ACTION_PARALLEL 的每个子操作必须包含唯一 task_id，例如 `task_id=readme tool=file type=read ...`"
-        return "ACTION_SINGLE 必须包含且只包含一个有效工具调用"
+            return (
+                "ACTION_PARALLEL 工具调用格式错误：每个子操作必须写成 "
+                "`task_id=<唯一ID> tool=<工具名> <参数>`，`task_id`、`tool` 和参数之间必须有空格；"
+                "不能把 `type=read` 这类参数当作工具名。"
+                "例如 `task_id=readme tool=file type=read ...`"
+            )
+        return (
+            "ACTION_SINGLE 工具调用格式错误：必须先写工具名，再用空格分隔参数；"
+            "不能直接以 `type=read` 这类参数开头。"
+            "例如 `file type=read file_path=\"C:/test.txt\"`"
+        )
 
     def format_result(self, result: Any, tool_name: Optional[str] = None) -> str:
         return self.result_formatter.format(result, tool_name)

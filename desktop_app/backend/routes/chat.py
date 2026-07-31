@@ -62,13 +62,24 @@ def extract_user_visible_content(reply: str) -> str:
     - @SPORE:STOP_REASON=<自然语言原因>
     - @SPORE:CONTENT_END
 
-    结束轮展示优先级：
-    1. 存在 REPLY 块时，只展示 REPLY 内容（忽略 STOP_REASON）
-    2. 没有 REPLY、只有 STOP_REASON 时，展示 STOP_REASON 内容
-    3. 都没有时，过滤协议标记后展示剩余文本
+    所有可见来源都会展示并拼接：
+    1. 协议块外的非空内容
+    2. 所有 REPLY 块内容
+    3. STOP_REASON 的自然语言内容
+
+    完整回复复用 ProtocolManager 的统一解析结果；不完整流式快照再走下方的
+    容错提取，避免尚未闭合的 REPLY 块在生成过程中不可见。
     """
     if not reply:
         return ""
+
+    try:
+        parsed = ProtocolManager().parse_response(reply)
+        if parsed.response_type != "protocol_error":
+            return (parsed.reply_content or "").strip()
+    except Exception:
+        # 显示提取属于旁路能力；解析器异常时继续使用下方的容错逻辑。
+        pass
 
     visible_lines = []
     in_protocol_block = False
@@ -95,7 +106,7 @@ def extract_user_visible_content(reply: str) -> str:
     if current_segment is not None:
         reply_segments.append("\n".join(current_segment).strip())
 
-    # 有 REPLY 块时优先只展示 REPLY（结束轮同时带 STOP_REASON 时不显示原因文本）
+    # 协议尚未闭合时的容错路径：至少持续显示已收到的 REPLY 内容。
     if has_reply_block:
         return "\n\n".join(seg for seg in reply_segments if seg)
 

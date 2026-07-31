@@ -27,7 +27,7 @@ current_agent_name = "Spore"
 memory_continued = False
 
 # AutoAgent 颗粒化基座：支持独立配置 LLM 基座的 Agent profile 列表
-AGENT_PROFILES = ("supervisor", "mode_selector", "security")
+AGENT_PROFILES = ("supervisor", "mode_selector", "security", "frontend")
 
 
 class Config:
@@ -133,10 +133,20 @@ class Config:
             "supervisor": "AGENT_SUPERVISOR",
             "mode_selector": "AGENT_MODE_SELECTOR",
             "security": "AGENT_SECURITY",
+            "frontend": "AGENT_FRONTEND",
         }
         self._agent_llm_overrides: dict = {
             key: self._parse_llm_layer(prefix) for key, prefix in _layer_prefixes.items()
         }
+
+        try:
+            self.frontend_agent_timeout: int = int(os.getenv("FRONTEND_AGENT_TIMEOUT", "180"))
+        except ValueError:
+            self.frontend_agent_timeout = 180
+        try:
+            self.frontend_agent_max_iterations: int = int(os.getenv("FRONTEND_AGENT_MAX_ITERATIONS", "3"))
+        except ValueError:
+            self.frontend_agent_max_iterations = 3
         
         # 系统提示文件名（不含路径，位于 prompt 目录下）
         # 可选：prompt.md（默认）、prompt_claude.md（Claude 专用）
@@ -569,7 +579,7 @@ class Config:
         """
         解析指定基座目标的 LLM 基座 + 高级参数。
 
-        profile ∈ {sub_agent, supervisor, mode_selector, security}。
+        profile ∈ {sub_agent, supervisor, mode_selector, security, frontend}。
         字段级回退：
           - sub_agent：SUB_AGENT_* → 主 Agent
           - 其余 AutoAgent：AGENT_<PROFILE>_* → SUB_AGENT_* → 主 Agent

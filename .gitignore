@@ -64,6 +64,11 @@ tool_policy.json
 
 # 测试
 tests/
+!tests/
+tests/*
+!tests/test_html_artifacts.py
+!tests/test_frontend_agent.py
+!tests/test_text_protocol_actions.py
 .pytest_cache/
 .coverage
 htmlcov/

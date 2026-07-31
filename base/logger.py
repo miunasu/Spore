@@ -9,9 +9,7 @@
     general.log / error.log / ...
     conversations/<session_id>/        # 一样本/一对话独立日志
       general.log / error.log / ...
-      raw.log                          # LLM 回复原始记录（仅落盘，不推送到 Desktop 日志栏）
-                                       #   RECEIVED       = 收到即记的完整 wire 原文，不加工不截断
-                                       #   EXTRACTED TEXT = 提取后的正文 + 健康诊断元信息
+      raw.log                          # 仅记录收到的 provider 原始响应
       agents/
 """
 import os
@@ -25,6 +23,28 @@ from pathlib import Path
 import traceback
 import json
 from typing import Optional, Dict, Any, Tuple
+
+
+_REQUEST_ID_CONVERSATION_RE = re.compile(
+    r"^(?P<cid>.+)_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _conversation_id_from_log_context(context: Optional[Dict[str, Any]]) -> Optional[str]:
+    """从日志上下文的显式会话 ID 或 request ID 解析落盘目标。"""
+    if not isinstance(context, dict):
+        return None
+    explicit = context.get("conversation_id")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    request_id = context.get("request_id")
+    if not isinstance(request_id, str):
+        return None
+    match = _REQUEST_ID_CONVERSATION_RE.match(request_id.strip())
+    if not match:
+        return None
+    conversation_id = (match.group("cid") or "").strip()
+    return conversation_id or None
 
 
 class FlushingRotatingFileHandler(RotatingFileHandler):
@@ -286,8 +306,13 @@ class SporeLogger:
         return logger
 
     def log_error(self, error_type: str, message: str, exception: Optional[Exception] = None, context: Optional[Dict[str, Any]] = None):
-        # session_id 仅用于按对话目录落盘，不写入日志正文（前端/监控已通过 conversation_id 路由）
-        loggers, _session_id = self._get_loggers_for_active_context()
+        # Chat 子进程与 IPC 分发线程没有 session_context；这类日志必须从显式
+        # conversation_id / request_id 恢复会话路由，不能落到进程级 error.log。
+        conversation_id = _conversation_id_from_log_context(context)
+        if conversation_id:
+            loggers = self._get_loggers_for_conversation(conversation_id)
+        else:
+            loggers, _session_id = self._get_loggers_for_active_context()
         log_entry: Dict[str, Any] = {"error_type": error_type, "message": message}
         if exception:
             log_entry["exception"] = {
@@ -348,14 +373,12 @@ class SporeLogger:
         self,
         payload: Any,
         conversation_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """收到 LLM 数据的那一刻立即把原文完整落盘。
+        """收到 LLM 数据的那一刻立即把 provider 数据完整落盘。
 
-        这是 raw 日志的第一现场：不提取、不裁剪、不做任何解析，只把收到的东西原样
-        写下来。之所以必须在"收到即记"这个时点写，是因为后面的提取 / 协议解析 /
-        健康判定任何一步抛异常，原文就永远消失了，空回复与截断故障也就彻底失去可
-        归因的证据。
+        非流式调用优先记录 HTTP body；流式调用记录包含全部 content blocks 的最终聚合
+        响应，不展开逐 token/delta 事件。这里不做正文提取或裁剪，并在收到后立即写入；
+        后续提取、协议解析或健康判定不会参与 raw 日志内容。
 
         payload 是字符串（wire body 原文）时原样写出，绝不 json.dumps 再包一层：
         那会把响应体变成一个带满转义的单行 JSON 字符串，保真度和可读性双输。
@@ -365,10 +388,9 @@ class SporeLogger:
         可能极大，推到 Desktop 日志栏只会把界面刷爆。
 
         Args:
-            payload: 收到的原始数据。优先传字符串（HTTP 响应体原文）；
-                拿不到 wire body 时可退回 model_dump() 之类的 dict
+            payload: 收到的 provider 数据。非流式优先传 HTTP 响应体字符串；
+                流式传最终聚合响应；拿不到时可退回 model_dump() 之类的 dict
             conversation_id: 显式对话 ID；子进程中 contextvar 不可用时必须传
-            metadata: 附带的定位信息（request_id / model / payload_kind / 轮次序号等）
         """
         from .config import get_config
         if not get_config().log_raw_enabled:
@@ -383,56 +405,7 @@ class SporeLogger:
                 body = payload
             else:
                 body = self._stringify_raw_payload(payload)
-            header = dict(metadata or {})
-            header.setdefault("payload_type", type(payload).__name__)
-            header["received_length"] = len(body)
-            raw_logger.debug("\n".join([
-                json.dumps(header, ensure_ascii=False),
-                "----- RECEIVED -----",
-                body,
-                "----- END RECEIVED -----",
-            ]))
-            # 注意：raw 日志刻意不调用 _send_to_monitor，只落地到文件
-        except Exception:
-            # raw 日志属于旁路记录，任何异常都不应影响主流程
-            pass
-
-    def log_raw_response(
-        self,
-        content: str,
-        conversation_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """记录提取后的 LLM 回复正文与健康诊断元信息。
-
-        仅落盘到对应会话目录下的 raw 日志，不推送到日志监控 / Desktop 左栏日志。
-
-        与 log_raw_received 配对：后者存"收到的原文"，本方法存"我们从原文里提取出
-        了什么、怎么判定的"。两条对照才能区分"模型没生成文本块"与"生成了但被提取
-        逻辑丢掉"——单看任何一条，这两种空回复在日志里长得一模一样。
-
-        Args:
-            content: 提取后的 LLM 回复正文（不截断、不做任何解析）
-            conversation_id: 显式对话 ID；子进程中 contextvar 不可用时必须传
-            metadata: 附带的请求元信息（model / request_id / usage /
-                api_stop_reason / finish_state / truncated / content_blocks 等）
-        """
-        from .config import get_config
-        if not get_config().log_raw_enabled:
-            return
-        try:
-            loggers = self._get_loggers_for_conversation(conversation_id)
-            raw_logger = loggers.get("raw")
-            if raw_logger is None:
-                return
-            header = dict(metadata or {})
-            header["extracted_text_length"] = len(content or "")
-            raw_logger.debug("\n".join([
-                json.dumps(header, ensure_ascii=False),
-                "----- EXTRACTED TEXT -----",
-                content or "",
-                "----- END EXTRACTED TEXT -----",
-            ]))
+            raw_logger.debug(self._format_raw_received(body))
             # 注意：raw 日志刻意不调用 _send_to_monitor，只落地到文件
         except Exception:
             # raw 日志属于旁路记录，任何异常都不应影响主流程
@@ -445,12 +418,21 @@ class SporeLogger:
         故障最需要的尾部。任何序列化失败都退化为 repr，绝不让日志旁路把主流程带崩。
         """
         try:
-            return json.dumps(payload, ensure_ascii=False, default=str)
+            return json.dumps(payload, ensure_ascii=False, default=str, indent=2)
         except Exception:
             try:
                 return repr(payload)
             except Exception:
                 return "<unserializable payload>"
+
+    @staticmethod
+    def _format_raw_received(body: str) -> str:
+        """Wrap one received payload without adding locally derived metadata."""
+        return "\n".join([
+            "===== RAW RECEIVED START =====",
+            body,
+            "===== RAW RECEIVED END =====",
+        ])
 
     def _sanitize_args(self, args: Dict) -> Dict:
         sanitized = {}
@@ -541,19 +523,9 @@ def log_info(message: str, context: Optional[Dict[str, Any]] = None, args: Optio
 def log_raw_received(
     payload: Any,
     conversation_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
     """收到即记：把收到的原始数据完整落盘（仅落盘，不上报日志监控 / Desktop 日志栏）"""
-    get_logger().log_raw_received(payload, conversation_id, metadata)
-
-
-def log_raw_response(
-    content: str,
-    conversation_id: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> None:
-    """记录提取后的回复正文与健康诊断（仅落盘，不上报日志监控 / Desktop 日志栏）"""
-    get_logger().log_raw_response(content, conversation_id, metadata)
+    get_logger().log_raw_received(payload, conversation_id)
 
 
 def delete_conversation_log_dir(conversation_id: str) -> None:

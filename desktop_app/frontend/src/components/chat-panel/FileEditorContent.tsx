@@ -7,7 +7,9 @@ import {
   getSyntaxLanguage,
 } from '../common/SyntaxHighlighter';
 import { isSemanticMarkdownFile } from '../common/codeLanguages';
+import { HtmlPreview, isHtmlFile } from '../common/HtmlPreview';
 import { useEditorStore } from '../../stores/editorStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { useT } from '../../i18n';
 
 type ViewMode = 'preview' | 'edit';
@@ -54,8 +56,15 @@ export function shouldUseMarkdownFilePreview(fileName: string, content: string) 
   return isSemanticMarkdownFile(fileName) && content.length <= MAX_HIGHLIGHT_CHARS;
 }
 
+export function getHtmlArtifactIdFromPath(filePath: string): string | undefined {
+  const normalized = filePath.replace(/\\/g, '/');
+  const match = /^html\/([a-z0-9][a-z0-9._-]{0,79})\.html$/i.exec(normalized);
+  return match?.[1].toLowerCase();
+}
+
 export const FileEditorContent: React.FC = () => {
   const t = useT();
+  const htmlRenderingEnabled = useSettingsStore((state) => state.htmlRenderingEnabled);
   const {
     openFiles,
     activeFilePath,
@@ -63,6 +72,7 @@ export const FileEditorContent: React.FC = () => {
     isSaving,
     error,
     updateContent,
+    replacePersistedContent,
     saveFile,
   } = useEditorStore();
 
@@ -79,6 +89,7 @@ export const FileEditorContent: React.FC = () => {
   const useMarkdownPreview = Boolean(
     activeFile && shouldUseMarkdownFilePreview(fileName, activeFile.content)
   );
+  const useHtmlPreview = Boolean(activeFile && htmlRenderingEnabled && isHtmlFile(fileName));
 
   const getScrollKey = useCallback(
     (mode: ViewMode) => activeFilePath ? `${activeFilePath}:${mode}` : null,
@@ -109,7 +120,7 @@ export const FileEditorContent: React.FC = () => {
     if (element instanceof HTMLTextAreaElement) {
       element.dispatchEvent(new Event('scroll'));
     }
-  }, [activeFilePath, getScrollKey, useMarkdownPreview, viewMode]);
+  }, [activeFilePath, getScrollKey, useHtmlPreview, useMarkdownPreview, viewMode]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -209,7 +220,15 @@ export const FileEditorContent: React.FC = () => {
             resetKey={`${activeFile.path}:${activeFile.content.length}:${language.id}:${activeFile.content.slice(0, 256)}`}
             fallbackText={t('chatPanel.fileEditorContent.previewFailed')}
           >
-            {useMarkdownPreview ? (
+            {useHtmlPreview ? (
+              <HtmlPreview
+                content={activeFile.content}
+                title={t('chatPanel.htmlPreview.fileTitle', { name: activeFile.name })}
+                variant="file"
+                artifactId={getHtmlArtifactIdFromPath(activeFile.path)}
+                onContentChange={(content) => replacePersistedContent(activeFile.path, content)}
+              />
+            ) : useMarkdownPreview ? (
               <SafeMarkdownRenderer
                 content={activeFile.content}
                 variant="file"

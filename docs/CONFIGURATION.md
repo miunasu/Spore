@@ -102,13 +102,14 @@ Learning 使用 OpenAI-compatible embeddings HTTP 接口（`<base_url>/v1/embedd
 
 ### 辅助 Agent 独立 LLM（v4.0，可选）
 
-三个辅助 Agent 档位可各自指定模型，回退链：**档位专属 → `SUB_AGENT_*` → 主配置**（按字段逐项回退，见 `Config.resolve_agent_llm`）：
+四个辅助 Agent 档位可各自指定模型，回退链：**档位专属 → `SUB_AGENT_*` → 主配置**（按字段逐项回退，见 `Config.resolve_agent_llm`）：
 
 | 前缀 | 对应 Agent |
 |------|-----------|
 | `AGENT_SUPERVISOR_*` | Supervisor（循环/终止判定） |
 | `AGENT_MODE_SELECTOR_*` | ModeSelector（auto 模式选择） |
 | `AGENT_SECURITY_*` | 安全 Agent（意图/风险/熔断） |
+| `AGENT_FRONTEND_*` | Frontend Agent（HTML 生成/审阅） |
 
 每个前缀支持的后缀与主配置一致：`LLM_SDK`、`OPENAI_API_KEY/API_URL/MODEL`、`ANTHROPIC_API_KEY/API_URL/MODEL` 及 effort / thinking 等。
 
@@ -124,6 +125,8 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 | 变量 | 默认 | 说明 |
 |------|------|------|
 | `MAX_OUTPUT_TOKENS` | `15000` | 单次 LLM 输出上限 |
+| `FRONTEND_AGENT_TIMEOUT` | `180` | Frontend Agent 每次 LLM 请求超时秒数 |
+| `FRONTEND_AGENT_MAX_ITERATIONS` | `3` | 生成、审阅与校验自修正迭代数（有效最小值为 2） |
 | `API_TIMEOUT` | `300` | API 超时（秒） |
 
 ### System Prompt 行为
@@ -316,7 +319,10 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 
 Raw 日志（`LOG_RAW_ENABLED`）：
 
-- 每次 LLM 调用成功后、响应返回调用方之前，把 provider 的**完整**回复文本及 request/model/profile/usage 元数据写入，不截断、不解析、不脱敏、不加密
+- 每次 API attempt 只有一个 `===== API ATTEMPT START/END =====` 外层块；内部 RAW、metadata、payload 和解析正文各有独立 START/END 标志
+- 同一用户请求的每次 API 尝试都有独立 `attempt_id` / `attempt_index`，首调、重试和最终解析结果可以直接配对
+- 非流式调用优先保存未经 SDK 解析的 HTTP body；流式调用只保存包含全部 content blocks 的最终聚合响应（`stream_final`），不展开逐 token/delta 事件
+- 块诊断分别记录 `visible_text_length` 与 `thinking_length`；`text_length` 保留为兼容字段，含义同 `visible_text_length`
 - 覆盖主 Agent、子 Agent 与辅助 Agent。可从 request ID 解析 session 的主请求写入对应会话目录；其他辅助请求可能写入进程级 `raw.log`
 - **只落盘**，不推送到 Desktop 左栏日志，也不进日志监控终端；它不记录请求 messages/system prompt，但回复可能复述命令、文件内容、路径、凭据或个人数据
 - 清空或删除会话不会删除已有 raw 日志。若这些数据不应落盘，应显式设置 `LOG_RAW_ENABLED=false`，不要依赖 `LOG_TO_FILE=false`
@@ -340,7 +346,7 @@ Raw 日志（`LOG_RAW_ENABLED`）：
 | `OUTPUT_DIR` | `output` |
 | `UPLOAD_DIR` | `uploads` |
 
-对话历史固定使用工作目录下 `history/`（含 `history/autosave/`）；备份数据固定在 `BACKUP_DIR`（默认 `.spore/`）。
+对话历史固定使用工作目录下 `history/`（含 `history/autosave/`）；备份数据固定在 `BACKUP_DIR`（默认 `.spore/`）。持久 HTML 资产固定使用 `.spore/html/`，文件界面仅通过虚拟 `html/` 根访问该子目录。
 
 ---
 

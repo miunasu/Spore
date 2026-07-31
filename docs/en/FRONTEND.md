@@ -63,7 +63,7 @@ Double-click a log area to make it fill the left column; double-click again to r
 
 ### Switching Subsystems
 
-Drag the slider to switch views: **Notes (note) / output / Agent monitor / prompt / skills / characters / history**.
+Drag the slider to switch views: **Notes (note) / output / HTML / Agent monitor / prompt / skills / characters / history**.
 
 ![Subsystem switching](../../img/RightSystem.png)
 
@@ -72,7 +72,7 @@ Drag the slider to switch views: **Notes (note) / output / Agent monitor / promp
 - Create file / folder, rename, delete, open containing location
 - Cut / copy / paste in the file manager actually copies or moves files and **interoperates with Windows Explorer** through the native file clipboard implemented by Tauri
 - Pasting files copied in Windows Explorer into the chat input only extracts their real paths and sends them as path attachments with the message; it does not copy them into the workspace, upload them, or read their contents
-- Accessible scope is the sandbox directories: `output` / `skills` / `prompt` / `history` / `characters` plus the root-level `note.txt` and `.env` (`prompt/skills/characters` are read-only)
+- Accessible scope is the sandbox directories: `output` / `html` / `skills` / `prompt` / `history` / `characters` plus the root-level `note.txt` and `.env` (`prompt/skills/characters` are read-only). The virtual `html/` root maps only to `.spore/html/`; other `.spore` data remains inaccessible.
 
 ![File operations](../../img/RightFile.png)
 
@@ -81,6 +81,7 @@ Drag the slider to switch views: **Notes (note) / output / Agent monitor / promp
 - **Double-click a text file**: edit it as a tab in the center column
 - **Double-click a folder**: enter the directory
 - You can drag a file into the center editing area
+- With the center-column **HTML** switch enabled, `.html` / `.htm` files render in a sandboxed iframe; disable it to inspect syntax-highlighted source
 
 ### Agent Monitor (v4.0)
 
@@ -97,6 +98,7 @@ The "note" page edits the root-level `note.txt`; save with `Ctrl+S`, with an uns
 ### Header Area: Mode and Session
 
 - **Mode dropdown**: `strong_context` / `long_context` / `auto` (with icons, applies to the current session)
+- **HTML switch**: immediately enable or disable sandboxed rendering for assistant HTML and HTML file previews; the setting persists locally
 - **Plus sign**: create a new session (browser-style tabs, can be mixed with file-editor tabs)
 - **Clock**: history conversation list (`history/`, supports rename/delete/load)
 - Token usage statistics refresh in real time along with the conversation
@@ -108,6 +110,8 @@ The "note" page edits the root-level `note.txt`; save with `Ctrl+S`, with an uns
 ### Conversation Area
 
 - Displays user and agent messages; during task execution, rounds are streamed as they happen (`round_reply` / tool calls / tool results)
+- A standalone HTML document or a single `html` code fence renders interactively when the HTML switch is on; otherwise it remains inert source text
+- Persistent HTML can declare on-demand pages or expansions with `data-spore-target`; the host watches iframe interactions, invokes the Frontend Agent only for a missing target, shows progress, hot-reloads the result, and writes it back to `.spore/html`
 - "View details" expands the underlying ACTION / RESULT and the raw messages sent to the LLM
 - Command intent footnotes: the security agent (full mode) generates a one-sentence "what it wants to do" explanation for each shell command, attached under the corresponding message
 

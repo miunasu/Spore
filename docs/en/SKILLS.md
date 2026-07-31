@@ -29,6 +29,7 @@ Built-in examples in the current repository:
 | `skills/pdf` | PDF extraction, generation, merging/splitting, forms, etc. |
 | `skills/pptx` | PowerPoint generation and processing |
 | `skills/pcap-analyst` | PCAP traffic analysis, C2/Beacon detection, Snort/YARA rule generation |
+| `skills/dynamic-html` | Interactive HTML generation and `.spore/html` lifecycle management |
 | `skills/skill-creator` | Helps create new skill packages (includes a scaffolding script) |
 
 Reverse-engineering (IDA, etc.) capabilities are usually accomplished through **host command tools + external toolchains + case directories**, and are not required to be built into `skills/`. See `example/MalwareAnalysis/` for cases, and [IDA-Skill](https://github.com/miunasu/IDA-Skill) for the companion skill (usage in the [SilverFox case](SILVERFOX.md)).

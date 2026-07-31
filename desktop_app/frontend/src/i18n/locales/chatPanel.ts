@@ -20,6 +20,14 @@ const chatPanel = {
     dropToViewFile: '释放以查看: {name}',
     newConversation: '新建对话',
     loadHistory: '加载历史对话',
+    htmlPreview: {
+      enableTitle: '开启 HTML 沙箱渲染',
+      disableTitle: '关闭 HTML 渲染并显示源码',
+      messageTitle: 'AI 生成的 HTML',
+      fileTitle: 'HTML 预览: {name}',
+      generatingTarget: '正在生成 {target}',
+      generationFailed: '无法生成 {target}',
+    },
     fileEditorContent: {
       previewFailed: '预览失败，请切换到编辑模式查看原始内容',
       selectFile: '选择一个文件进行查看',
@@ -51,6 +59,14 @@ const chatPanel = {
     dropToViewFile: 'Drop to view: {name}',
     newConversation: 'New conversation',
     loadHistory: 'Load history',
+    htmlPreview: {
+      enableTitle: 'Enable sandboxed HTML rendering',
+      disableTitle: 'Disable HTML rendering and show source',
+      messageTitle: 'AI-generated HTML',
+      fileTitle: 'HTML preview: {name}',
+      generatingTarget: 'Generating {target}',
+      generationFailed: 'Could not generate {target}',
+    },
     fileEditorContent: {
       previewFailed: 'Preview failed. Switch to edit mode to view the raw content.',
       selectFile: 'Select a file to view',

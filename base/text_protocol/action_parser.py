@@ -254,6 +254,13 @@ class ActionParser:
         tool_name = parts[0]
         param_text = parts[1] if len(parts) > 1 else ""
 
+        # A tool name is the leading bare token (for example ``file``).
+        # If the model omits it, a parameter such as ``type=read`` used to be
+        # accepted as the tool name and later produced the misleading policy
+        # error "current mode does not provide tool: type=read".
+        if "=" in tool_name:
+            return None
+
         if len(lines) > 1:
             remaining_lines = "\n".join(lines[1:])
             param_text = f"{param_text}\n{remaining_lines}" if param_text else remaining_lines

@@ -57,12 +57,13 @@ app.add_middleware(
 )
 
 # 注册路由
-from desktop_app.backend.routes import chat, task, commands, files, agents
+from desktop_app.backend.routes import chat, task, commands, files, agents, html
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(task.router, prefix="/api/task", tags=["Task"])
 app.include_router(commands.router, prefix="/api/commands", tags=["Commands"])
 app.include_router(files.router, prefix="/api/files", tags=["Files"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])
+app.include_router(html.router, prefix="/api/html", tags=["HTML"])
 
 
 @app.get("/")

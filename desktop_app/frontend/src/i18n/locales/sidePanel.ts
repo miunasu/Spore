@@ -3,6 +3,7 @@ const sidePanel = {
     tabs: {
       note: '笔记',
       output: '输出',
+      html: 'HTML',
       agents: '智能体',
       prompt: '提示词',
       skills: '技能',
@@ -22,6 +23,7 @@ const sidePanel = {
     tabs: {
       note: 'Note',
       output: 'Output',
+      html: 'HTML',
       agents: 'Agents',
       prompt: 'Prompt',
       skills: 'Skills',

@@ -84,6 +84,7 @@ Spore/
 │   ├── agent_process.py       # Multi-Agent dispatch engine (incl. desktop async dispatch)
 │   ├── agent_database.py      # Sub-Agent tasks and tool-call records
 │   ├── character_manager.py   # Character selection (single character)
+│   ├── html_artifacts.py      # `.spore/html` persistence, index, and static validation
 │   ├── todo_manager.py        # Declarative TODO (per session)
 │   ├── rule_reminder.py       # Periodic rule reminders
 │   ├── prompt_loader.py       # prompt / skills / characters assembly
@@ -102,7 +103,8 @@ Spore/
 ├── AutoAgent/                 # Helper Agents (call Chat via IPC)
 │   ├── mode_selector.py       # Selects strong/long in auto mode
 │   ├── supervisor.py          # Loop / termination-decision helper
-│   └── security_agent.py      # Security Agent: intent analysis / risk assessment / malicious circuit break
+│   ├── security_agent.py      # Security Agent: intent analysis / risk assessment / malicious circuit break
+│   └── frontend_agent.py      # One-shot HTML generation, review, validation, and persistence
 │
 ├── desktop_app/
 │   ├── resource_manager.py    # Packaged-environment initialization
@@ -113,7 +115,7 @@ Spore/
 │   │   ├── conversation_loop_manager.py  # Independent ConversationLoop per session
 │   │   ├── instance_manager.py
 │   │   ├── routes/            # chat / task / commands / files / agents /
-│   │   │                      # settings / instances / confirm / backup
+│   │   │                      # settings / instances / confirm / backup / html
 │   │   └── websocket/         # WS push process (:8766), log bridge, confirm manager,
 │   │                          # security circuit-break bridge, sub-Agent notifications
 │   └── frontend/              # React + Tauri (incl. src/i18n, Chinese/English bilingual)
@@ -125,12 +127,13 @@ Spore/
 │   ├── security_prompt.md     # Risk assessment (basic+)
 │   ├── security_intent_prompt.md      # Intent + malicious analysis (full)
 │   ├── security_remediation_prompt.md # Post-circuit-break remediation advice (full)
+│   ├── frontend_prompt.md     # Self-contained sandboxed HTML generation
 │   └── <Type>_prompt.md       # Prompts for each sub-Agent type
 │
 ├── skills/                    # Claude Skills-style skill packs
 ├── characters/                # Character Markdown
 ├── history/                   # Conversation archives and autosave
-├── .spore/                    # Backup data and security audit (generated at runtime)
+├── .spore/                    # Backup/audit data and persistent html/ artifacts (runtime)
 ├── docs/                      # Documentation (this directory; en/ is the English version)
 └── example/                   # Example outputs
 ```
@@ -276,8 +279,9 @@ On top of the mode baseline, **every tool and even sub-tool** can be toggled ind
 | `mode_selector` | `mode_selector` | Selects strong/long from the user input when `CONTEXT_MODE=auto` |
 | `supervisor` | `supervisor` | Decides whether a turn has ended / is repeating (YES/NO) |
 | `security_agent` | `security` | Command intent analysis, risk assessment, malicious circuit break, and remediation advice (see next section) |
+| `frontend_agent` | `frontend` | One-shot HTML generation plus on-demand completion of missing dynamic targets, validation, and `.spore/html` persistence |
 
-All three go through the Chat process via IPC, and can each be given **an independent model** via `AGENT_SUPERVISOR_*` / `AGENT_MODE_SELECTOR_*` / `AGENT_SECURITY_*` (fallback chain: profile-specific → `SUB_AGENT_*` → main configuration); see `Config.resolve_agent_llm`.
+All four go through the Chat process via IPC, and can each be given **an independent model** via `AGENT_SUPERVISOR_*` / `AGENT_MODE_SELECTOR_*` / `AGENT_SECURITY_*` / `AGENT_FRONTEND_*` (fallback chain: profile-specific → `SUB_AGENT_*` → main configuration); see `Config.resolve_agent_llm`.
 
 ### Security System (v4.0)
 
@@ -362,9 +366,10 @@ File-route sandbox: only `output` / `skills` / `prompt` / `history` / `character
 ### Logging and Push
 
 - Persistence: `base/logger.py` writes to `logs/<startup time>/conversations/<id>/` based on `session_context`
+- When Chat subprocesses or IPC threads lack `session_context`, the error logger restores conversation routing from `context.conversation_id` or `context.request_id`; retry progress is persisted once by the IPC main process
 - Push: `websocket/log_bridge.py` attaches `conversation_id`; the frontend `logStore` buckets logs by session
 - The body does not embed `session_id` (only routing fields carry session information)
-- Raw logging is enabled by default: after each LLM call (success, empty response, refusal, truncation, or error), the provider's complete response text, raw provider response body (`raw_payload`), and health metadata (`health`: `api_stop_reason`, `finish_state`, `truncated`, usage, etc.) are written to a rotating `raw.log`; not pushed to the desktop log panel
+- Raw logging is enabled by default and does not rotate. Each attempt has one explicit outer START/END block, while `attempt_id` / `attempt_index` distinguish initial calls from retries. Non-streaming calls prefer the HTTP body; streaming calls keep only the final aggregate containing all content blocks, without expanding deltas. The same block also records extracted text, health metadata, and visible/thinking lengths.
 - Main requests whose session can be parsed from their request ID are written under that conversation; helper-Agent requests that cannot be resolved this way may go to the process-level `raw.log`
 - Raw content is neither redacted nor encrypted and may include commands, file contents, paths, credentials, or personal data repeated by the model. Clearing or deleting a session does not remove existing logs; use `LOG_RAW_ENABLED=false` to disable them
 

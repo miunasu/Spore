@@ -63,7 +63,7 @@
 
 ### 切换子系统
 
-拖动滑动条可切换视图：**便签（note）/ 输出（output）/ Agent 监控 / prompt / skills / characters / history**。
+拖动滑动条可切换视图：**便签（note）/ 输出（output）/ HTML / Agent 监控 / prompt / skills / characters / history**。
 
 ![子系统切换](../img/RightSystem.png)
 
@@ -72,7 +72,7 @@
 - 创建文件 / 文件夹、重命名、删除、打开所在位置
 - 文件管理器中的剪切 / 复制 / 粘贴会真正复制或移动文件，并与 **Windows 资源管理器互通**（原生文件剪贴板，Tauri 实现）
 - 对话输入框粘贴资源管理器复制的文件时，只提取真实文件路径并作为路径附件随消息发送；不会把文件复制进工作区，也不会上传或读取文件内容
-- 可访问范围为沙箱目录：`output` / `skills` / `prompt` / `history` / `characters` 及根目录 `note.txt`、`.env`（`prompt/skills/characters` 只读）
+- 可访问范围为沙箱目录：`output` / `html` / `skills` / `prompt` / `history` / `characters` 及根目录 `note.txt`、`.env`（`prompt/skills/characters` 只读）。虚拟 `html/` 根仅映射 `.spore/html/`，不会开放 `.spore` 的其他数据。
 
 ![文件操作](../img/RightFile.png)
 
@@ -81,6 +81,7 @@
 - **双击文本文件**：以标签页形式在中栏编辑
 - **双击文件夹**：进入目录
 - 可将文件拖入中栏编辑区
+- 中栏 **HTML** 开关开启时，`.html` / `.htm` 文件在沙箱 iframe 中渲染；关闭即可查看语法高亮源码
 
 ### Agent 监控（v4.0）
 
@@ -97,6 +98,7 @@
 ### 标题区：模式与会话
 
 - **模式下拉框**：`strong_context` / `long_context` / `auto`（带图标，作用于当前会话）
+- **HTML 开关**：快速启停 Agent HTML 与 HTML 文件的沙箱渲染，状态保存在本机
 - **加号**：新建会话（浏览器式标签页，可与文件编辑标签混排）
 - **时钟**：历史对话列表（`history/`，支持重命名/删除/加载）
 - token 用量统计随对话实时刷新
@@ -108,6 +110,8 @@
 ### 对话区
 
 - 展示用户与 Agent 消息；任务执行中逐轮流式渲染（`round_reply` / 工具调用 / 工具结果）
+- 独立完整 HTML 文档或单个 `html` 代码块在开关开启时可交互渲染；关闭时保持为不可执行源码
+- 持久 HTML 可用 `data-spore-target` 声明按需页面或展开内容；宿主监听 iframe 交互，目标不存在时短暂唤起 Frontend Agent，生成期间显示占位，完成后热更新并写回 `.spore/html`
 - 「查看详情」展开底层 ACTION / RESULT 与发送给 LLM 的原始消息
 - 命令意图脚注：安全 Agent（full 模式）会为每条 shell 命令生成一句「它想干什么」的说明，附在对应消息下
 

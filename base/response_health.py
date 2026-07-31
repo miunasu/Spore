@@ -260,6 +260,21 @@ def block_text(block: Any) -> str:
     return ""
 
 
+def block_thinking(block: Any) -> str:
+    """取思考/推理块中的文本，供诊断记录长度，不作为用户可见正文。"""
+    if isinstance(block, dict):
+        for key in ("thinking", "reasoning", "reasoning_content"):
+            value = block.get(key)
+            if isinstance(value, str):
+                return value
+        return ""
+    for key in ("thinking", "reasoning", "reasoning_content"):
+        value = getattr(block, key, None)
+        if isinstance(value, str):
+            return value
+    return ""
+
+
 def is_text_bearing(block: Any) -> bool:
     """判断块是否承载给用户的正文。
 
@@ -284,6 +299,16 @@ def extract_text(response: Any) -> str:
     return "".join(parts)
 
 
+def extract_thinking(response: Any) -> str:
+    """Extract diagnostic reasoning text without treating it as user-visible content."""
+    parts: List[str] = []
+    for block in iter_content_blocks(response):
+        text = block_thinking(block)
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
 def describe_content_blocks(response: Any) -> List[Dict[str, Any]]:
     """块级诊断信息，写入 raw 日志。
 
@@ -293,13 +318,24 @@ def describe_content_blocks(response: Any) -> List[Dict[str, Any]]:
     described: List[Dict[str, Any]] = []
     for block in iter_content_blocks(response):
         try:
+            text_bearing = is_text_bearing(block)
+            visible_text_length = len(block_text(block)) if text_bearing else 0
             described.append({
                 "type": block_type(block) or type(block).__name__,
-                "text_length": len(block_text(block)),
-                "text_bearing": is_text_bearing(block),
+                # 保留 text_length 兼容已有日志消费者，但明确它只表示用户可见正文。
+                "text_length": visible_text_length,
+                "visible_text_length": visible_text_length,
+                "thinking_length": len(block_thinking(block)),
+                "text_bearing": text_bearing,
             })
         except Exception:
-            described.append({"type": "<undescribable>", "text_length": 0, "text_bearing": False})
+            described.append({
+                "type": "<undescribable>",
+                "text_length": 0,
+                "visible_text_length": 0,
+                "thinking_length": 0,
+                "text_bearing": False,
+            })
     return described
 
 
@@ -493,6 +529,16 @@ def assess(
     usage = extract_usage(response)
     usage = _merge_usage_fallback(usage, usage_fallback)
     hint = looks_truncated(text)
+    hint_scope = "text"
+    # A thinking-only response is not necessarily broken. However, when its
+    # reasoning is structurally incomplete (for example an unclosed code
+    # fence) and the gateway still says end_turn, preserve that contradiction
+    # instead of reducing it to a generic empty response.
+    if is_effectively_empty(text):
+        thinking_hint = looks_truncated(extract_thinking(response))
+        if thinking_hint is not None and thinking_hint.confidence == "high":
+            hint = thinking_hint
+            hint_scope = "thinking"
 
     truncated = False
     source = None
@@ -503,10 +549,20 @@ def assess(
     elif hit_output_cap(usage.get("output_tokens", 0), max_tokens or 0):
         truncated = True
         source = "output_cap"
-    elif finish_state == FINISH_UNKNOWN and hint is not None and hint.confidence == "high":
-        # API 字段不可用时才让文本判据说话，避免与 API 结论打架
+    elif (
+        finish_state in (FINISH_UNKNOWN, FINISH_COMPLETE)
+        and hint is not None
+        and hint.confidence == "high"
+    ):
+        # A structurally impossible tail is stronger evidence than a gateway's
+        # success label. Some compatible gateways terminate the SSE stream and
+        # synthesize end_turn even though the final content block is incomplete.
         truncated = True
-        source = "text"
+        source = (
+            hint_scope
+            if finish_state == FINISH_UNKNOWN
+            else "{0}_api_conflict".format(hint_scope)
+        )
 
     return {
         "api_stop_reason": api_stop_reason,

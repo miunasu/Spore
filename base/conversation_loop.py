@@ -625,8 +625,10 @@ class ConversationLoop:
                 reply_data = response.get("data", {})
                 usage = reply_data.get("usage", {})
                 if usage:
-                    input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
-                    output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+                    # Chat 进程已把各 SDK 的 usage 规范化为这两个 API 字段；
+                    # Desktop 统计直接使用它们，避免别名回退造成重复或口径漂移。
+                    input_tokens = usage.get("input_tokens", 0)
+                    output_tokens = usage.get("output_tokens", 0)
                     # context_tokens 含缓存命中，是判断上下文规模的唯一可靠口径
                     context_tokens = usage.get("context_tokens", 0) or input_tokens
                     if input_tokens > 0 or output_tokens > 0:
@@ -1226,31 +1228,6 @@ class ConversationLoop:
         auto_save_messages(self.state.messages, session_id=self._conversation_id_for_context())
         return "continue"
 
-    def _log_truncated_final_accepted(self, reply: str, meta: Dict[str, Any]) -> None:
-        """API 报了截断、但回复被当成完整最终答案接受时留一条警告。
-
-        没有这条日志，"最终答案少了一截"在事后完全无从排查：协议层解析成功，
-        历史里也是一条正常的 final 回复，唯一的线索只有 API 的 stop_reason。
-        诊断类逻辑，失败静默。
-        """
-        try:
-            log_error(
-                "LLM_TRUNCATED_FINAL_ACCEPTED",
-                "回复被 API 标记为截断，但协议结构完整且解析出 STOP_REASON，已按最终答案接受；"
-                "若用户反馈最终答案末尾缺内容，优先怀疑这里",
-                context={
-                    "api_stop_reason": meta.get("api_stop_reason"),
-                    "finish_state": meta.get("finish_state"),
-                    "truncation_source": meta.get("truncation_source"),
-                    "truncation_hint": meta.get("truncation_hint"),
-                    "usage": meta.get("usage"),
-                    "max_tokens": meta.get("max_tokens"),
-                    "reply_length": len(reply or ""),
-                },
-            )
-        except Exception:
-            pass
-
     def validate_and_check_response(
         self,
         reply: str,
@@ -1265,8 +1242,8 @@ class ConversationLoop:
         参数:
             reply: LLM响应内容
             reply_meta: chat 进程给出的健康信息（truncated / api_stop_reason /
-                finish_state / usage / max_tokens）。缺省表示未知，此时截断判定
-                退化为按文本特征推断。
+                finish_state / usage / max_tokens）。缺省表示传输状态未知；
+                协议结构仍由 ProtocolManager 独立校验。
 
         返回:
             如果需要中断循环返回 "break"，如果需要继续返回 "continue"，否则返回 None
@@ -1299,21 +1276,9 @@ class ConversationLoop:
 
         # 截断处理必须在 ACTION 执行之前：半截的 CONTENT 块一旦被当作正常参数执行，
         # 会把被砍断的内容真的写进文件。
-        is_truncated = bool(parsed.truncated) or (
-            parsed.protocol_error is not None
-            and parsed.protocol_error.code == self.protocol_manager.TRUNCATED_OUTPUT_CODE
-        )
-        if is_truncated and parsed.response_type != "final":
-            return self._handle_truncated_reply(reply, parsed, meta)
+        is_truncated = bool(parsed.truncated)
         if is_truncated:
-            # final 是唯一的例外：API 报了截断，但回复里干净地解析出了 STOP_REASON。
-            # _scan_protocol 对未闭合的块一律报错（missing_end_marker /
-            # invalid_stop_reason），能走到 final 说明协议结构本身是完整的，
-            # 把它当最终答案接受、而不是逼模型为一条结构完整的回复重跑一轮，是合理的。
-            # 残留风险：单行 STOP_REASON= 的自然语言原因若正好在行中被砍断，
-            # 正则仍能匹配（末尾以 $ 收尾），用户看到的最终答案就会少一小截 ——
-            # 所以这里必须留一条警告日志，否则事后无从定位。
-            self._log_truncated_final_accepted(reply, meta)
+            return self._handle_truncated_reply(reply, parsed, meta)
 
         # 正常回复：重置连续截断计数
         self._truncation_streak = 0

@@ -111,7 +111,8 @@ The "note" page edits the root-level `note.txt`; save with `Ctrl+S`, with an uns
 
 - Displays user and agent messages; during task execution, rounds are streamed as they happen (`round_reply` / tool calls / tool results)
 - A standalone HTML document or a single `html` code fence renders interactively when the HTML switch is on; otherwise it remains inert source text
-- Persistent HTML can declare on-demand pages or expansions with `data-spore-target`; the host watches iframe interactions, invokes the Frontend Agent only for a missing target, shows progress, hot-reloads the result, and writes it back to `.spore/html`
+- The host monitors trusted click, input, change, and submit operations inside a persistent HTML iframe: the first operation opens a five-second collection window, then the chronological batch plus element, control, DOM-path, and viewport context are sent to the Frontend Agent. If the Agent decides to mutate, it must emit `interrupt` first and the host immediately freezes the page. The mutation parser handles only `interrupt` plus strict JSON; the existing Spore protocol layer independently decides that the Agent operation has ended from `@SPORE:STOP_REASON=...`. Only after that terminal decision does the host apply the mutations, validate the complete document, persist and reload it, and unfreeze the page
+- Runtime Agent responses are constrained to referenced element mutations rather than complete HTML. The backend applies them structurally, validates the synthesized document, and only then hot-reloads and atomically writes valid changes to `.spore/html`
 - "View details" expands the underlying ACTION / RESULT and the raw messages sent to the LLM
 - Command intent footnotes: the security agent (full mode) generates a one-sentence "what it wants to do" explanation for each shell command, attached under the corresponding message
 

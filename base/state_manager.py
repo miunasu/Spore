@@ -35,7 +35,7 @@ class ConversationState:
         self.interrupt_epoch: int = 0
         
         # Token 统计（Desktop 模式专用）
-        self.last_input_tokens: int = 0  # 上次请求的输入 token（完整 context）
+        self.last_input_tokens: int = 0  # 上次请求的完整输入 context
         self.last_output_tokens: int = 0  # 上次请求的输出 token
         self.cumulative_input_tokens: int = 0  # 累计输入 token（用于算钱）
         self.cumulative_output_tokens: int = 0  # 累计输出 token（用于算钱）
@@ -133,7 +133,7 @@ class ConversationState:
         更新 token 统计（Desktop 模式专用）
 
         Args:
-            input_tokens: 本次请求的输入 token 数（provider 口径，可能不含缓存命中）
+            input_tokens: 本次请求的完整输入 context（已统一包含 Claude 缓存 token）
             output_tokens: 本次请求的输出 token 数
             context_tokens: 真实上下文规模（含缓存命中）。缺省时退回 input_tokens。
         """
@@ -142,8 +142,8 @@ class ConversationState:
         self.last_input_tokens = input_tokens
         self.last_output_tokens = output_tokens
         self.last_context_tokens = max(context_tokens or 0, input_tokens)
-        self.cumulative_input_tokens += input_tokens  # 累加所有 input（用于算钱）
-        self.cumulative_output_tokens += output_tokens  # 累加所有 output（用于算钱）
+        self.cumulative_input_tokens += input_tokens  # 累加每次请求的完整 input
+        self.cumulative_output_tokens += output_tokens  # 累加每次请求的 output
 
 
 class MultiSessionManager:

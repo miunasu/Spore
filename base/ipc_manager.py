@@ -417,7 +417,7 @@ class IPCManager:
             self._clear_stream_state(request_id)
     
     def cancel_request(self, request_id: Optional[str]) -> bool:
-        """逻辑取消一个精确请求：立即唤醒 waiter，并丢弃迟到的 provider 响应。"""
+        """取消一个精确请求，并通知 Chat 进程关闭在途 provider 连接。"""
         if not request_id:
             return False
 
@@ -431,6 +431,18 @@ class IPCManager:
             self._cancelled_request_ids.add(request_id)
             self._cancelled_request_times[request_id] = now
             self._response_cache[request_id] = (cancelled_response, now)
+
+        # 本地 tombstone 负责立即唤醒 waiter 和丢弃迟到响应；精确取消命令负责
+        # 关闭 Chat 子进程中仍在消费的 SSE/stream，二者缺一不可。
+        if self.process_started:
+            try:
+                self.request_queue.put({"command": "cancel", "request_id": request_id})
+            except Exception as e:
+                log_error(
+                    "IPC_CANCEL_REQUEST_ERROR",
+                    f"Failed to cancel provider request {request_id}",
+                    e,
+                )
         self._clear_stream_state(request_id)
         self._notify_waiter(request_id)
         return True

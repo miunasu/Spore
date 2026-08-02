@@ -21,6 +21,10 @@ cd /d "%~dp0"
 set "PROJECT_ROOT=%cd%"
 set "FRONTEND_DIR=%PROJECT_ROOT%\desktop_app\frontend"
 set "TAURI_DIR=%FRONTEND_DIR%\src-tauri"
+set "NSIS_PATCHER=%PROJECT_ROOT%\scripts\patch_nsis_installer.py"
+set "NSIS_SCRIPT=%TAURI_DIR%\target\release\nsis\x64\installer.nsi"
+set "NSIS_BUNDLE_DIR=%TAURI_DIR%\target\release\bundle\nsis"
+set "PROJECT_PYTHON=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 set "UV_CACHE_DIR=%PROJECT_ROOT%\.uv-cache"
 set "TOOLS_CACHE_DIR=%PROJECT_ROOT%\.tool-cache"
 set "RG_VERSION=14.1.1"
@@ -92,6 +96,11 @@ if not exist "%PROJECT_ROOT%\pyproject.toml" (
     goto :error
 )
 
+if not exist "%NSIS_PATCHER%" (
+    echo [ERROR] NSIS data guard patcher not found: %NSIS_PATCHER%
+    goto :error
+)
+
 echo [OK] Build environment check passed
 echo.
 
@@ -116,24 +125,45 @@ if exist "build\spore_backend" (
     rmdir /s /q "build\spore_backend"
 )
 
-set "PYINSTALLER_EXE=%PROJECT_ROOT%\.venv\Scripts\pyinstaller.exe"
-set "NEED_UV_SYNC=0"
-if not exist "%PYINSTALLER_EXE%" set "NEED_UV_SYNC=1"
-if /I "%FORCE_UV_SYNC%"=="1" set "NEED_UV_SYNC=1"
-
-if "%NEED_UV_SYNC%"=="1" (
-    echo [INFO] Backend dependencies missing, running uv sync...
-    call uv sync
-    if %ERRORLEVEL% neq 0 (
-        echo [ERROR] uv sync failed
-        goto :error
-    )
+set "BACKEND_DEPS_NEED_UPDATE=0"
+if not exist "%PROJECT_PYTHON%" (
+    set "BACKEND_DEPS_NEED_UPDATE=1"
 ) else (
-    echo [OK] Backend dependencies already installed ^(skip uv sync^)
+    "%PROJECT_PYTHON%" -c "import inspect; from anthropic import Anthropic; assert 'output_config' in inspect.signature(Anthropic(api_key='build-check').messages.stream).parameters" >nul 2>nul
+    if !ERRORLEVEL! neq 0 set "BACKEND_DEPS_NEED_UPDATE=1"
+    "%PROJECT_PYTHON%" -c "import PyInstaller" >nul 2>nul
+    if !ERRORLEVEL! neq 0 set "BACKEND_DEPS_NEED_UPDATE=1"
 )
 
-echo Executing PyInstaller (uv run, onefile mode)...
-call uv run pyinstaller spore_backend.spec --noconfirm
+if "!BACKEND_DEPS_NEED_UPDATE!"=="1" (
+    echo [WARN] Anthropic SDK is missing/too old or PyInstaller is unavailable.
+    echo [INFO] Updating project build dependencies automatically from uv.lock...
+) else (
+    echo [OK] Existing Anthropic SDK supports output_config.
+    echo [INFO] Checking project dependencies against uv.lock...
+)
+
+call uv sync --locked --group dev
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Automatic dependency update failed: uv sync --locked --group dev
+    goto :error
+)
+
+if not exist "%PROJECT_PYTHON%" (
+    echo [ERROR] Project Python not found after dependency update: %PROJECT_PYTHON%
+    goto :error
+)
+
+echo Verifying build SDK versions after dependency update...
+call "%PROJECT_PYTHON%" -c "import inspect, anthropic, PyInstaller; from anthropic import Anthropic; assert 'output_config' in inspect.signature(Anthropic(api_key='build-check').messages.stream).parameters, 'Anthropic SDK does not support output_config'; print('anthropic ' + anthropic.__version__ + ' (output_config supported)'); print('PyInstaller ' + PyInstaller.__version__)"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Dependency update completed, but the required SDK interface is still unavailable.
+    echo [HINT] Check pyproject.toml and uv.lock, then run: uv lock --upgrade-package anthropic
+    goto :error
+)
+
+echo Executing project PyInstaller (onefile mode)...
+call "%PROJECT_PYTHON%" -m PyInstaller spore_backend.spec --noconfirm
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] PyInstaller packaging failed
     goto :error
@@ -224,6 +254,8 @@ REM Clean frontend cache
 if exist "dist" rmdir /s /q "dist"
 if exist ".vite" rmdir /s /q ".vite"
 if exist "node_modules\.vite" rmdir /s /q "node_modules\.vite"
+REM Keep exactly one fresh NSIS artifact so the data-guard patcher can replace it safely.
+if exist "%NSIS_BUNDLE_DIR%" rmdir /s /q "%NSIS_BUNDLE_DIR%"
 
 set "NEED_NPM_INSTALL=0"
 if not exist "node_modules" set "NEED_NPM_INSTALL=1"
@@ -248,7 +280,16 @@ if %ERRORLEVEL% neq 0 (
     goto :error
 )
 
-echo [OK] Tauri build complete
+REM Tauri v1 has no lightweight installer hook. Patch its generated NSIS script
+REM so upgrades detect and protect existing .env/skills/output/history/logs/.spore data.
+echo Applying existing-data guard to NSIS installer...
+"%PROJECT_PYTHON%" "%NSIS_PATCHER%" --nsi "%NSIS_SCRIPT%" --compile --bundle-dir "%NSIS_BUNDLE_DIR%"
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to apply or compile NSIS existing-data guard
+    goto :error
+)
+
+echo [OK] Tauri build complete ^(existing-data guard enabled^)
 echo.
 
 REM ----------------------------------------

@@ -100,6 +100,13 @@ class ChatProcess:
         # 全局中断标志 - 所有线程共享
         self.global_cancel_flag = threading.Event()
 
+        # Desktop 中断必须精确到 request。Future.cancel() 无法停止已经运行的
+        # SDK 调用，因此还要保留 stream 句柄，以便收到 IPC 取消命令时主动 close。
+        self._cancelled_request_ids: set[str] = set()
+        self._cancelled_requests_lock = threading.Lock()
+        self._active_streams: Dict[str, Any] = {}
+        self._active_streams_lock = threading.Lock()
+
         # SDK 类型
         self.llm_sdk = self.config.llm_sdk
         self.sub_agent_llm_sdk = self.config.get_sub_agent_sdk()
@@ -223,6 +230,10 @@ class ChatProcess:
         # 只有"上一次是空回复"才携带提示去改参数；普通错误重试保持原参数不变
         retry_hint: Optional[Dict[str, Any]] = None
         for attempt, delay in enumerate(self._RETRY_DELAYS):
+            # Cancellation wins before retry progress or another provider attempt.
+            if self._is_request_cancelled(request_id):
+                return {"request_id": request_id, "status": "cancelled", "data": None}
+
             if delay > 0:
                 # 第 attempt 次失败后的下一次重试（attempt 从 0 计，展示为第 attempt+1 次重试）
                 empty_retry = self._empty_retry_active(retry_hint)
@@ -270,9 +281,8 @@ class ChatProcess:
                             "retry_reason": retry_reason,
                         },
                     )
-                time.sleep(delay)
-            if self.global_cancel_flag.is_set():
-                return {"request_id": request_id, "status": "cancelled", "data": None}
+                if not self._wait_retry_delay(request_id, delay):
+                    return {"request_id": request_id, "status": "cancelled", "data": None}
 
             if request_data.get("stream"):
                 self._emit_stream_event(request_id, "start")
@@ -284,6 +294,11 @@ class ChatProcess:
             result = self._do_single_llm_call(
                 request_id, attempt_request_data, retry_hint=retry_hint
             )
+            # close(stream) may end iteration normally or surface a transport error.
+            # In either case, cancellation must win before error classification/retry.
+            if self._is_request_cancelled(request_id):
+                return {"request_id": request_id, "status": "cancelled", "data": None}
+
             status = result.get("status")
 
             if status == "cancelled":
@@ -478,6 +493,8 @@ class ChatProcess:
         endpoint: Any,
         request_params: Dict[str, Any],
         meta: Dict[str, Any],
+        *,
+        compatibility: Optional[str] = None,
     ) -> Any:
         """调用 ``endpoint.create``，在返回的那一刻落盘原文，再返回解析后的响应。
 
@@ -496,7 +513,9 @@ class ChatProcess:
         raw_api = getattr(endpoint, "with_raw_response", None)
         raw_create = getattr(raw_api, "create", None)
         if callable(raw_create):
-            raw = raw_create(**request_params)
+            raw = self._call_with_compatible_kwargs(
+                raw_create, request_params, compatibility=compatibility
+            )
             parse = getattr(raw, "parse", None)
             if callable(parse):
                 # 先落盘再 parse：parse 失败时（中转返回非标准结构）原文已经在盘上
@@ -519,13 +538,48 @@ class ChatProcess:
             )
             return raw
 
-        response = endpoint.create(**request_params)
+        response = self._call_with_compatible_kwargs(
+            endpoint.create, request_params, compatibility=compatibility
+        )
         payload = self._response_payload(response)
         self._log_received(
             payload,
             {**meta, "payload_kind": "model_dump" if not isinstance(payload, str) else "repr"},
         )
         return response
+
+    @staticmethod
+    def _call_with_compatible_kwargs(
+        call: Any,
+        request_params: Dict[str, Any],
+        *,
+        compatibility: Optional[str] = None,
+    ) -> Any:
+        """Call an SDK method, dropping kwargs rejected by older SDK versions.
+
+        Anthropic added parameters such as ``output_config`` after the minimum
+        SDK version supported by Spore. A rejected keyword is raised before an
+        HTTP request is made, so retrying once without that optional parameter
+        is safe and avoids turning a version mismatch into repeated API retries.
+        """
+        params = dict(request_params)
+        while True:
+            try:
+                return call(**params)
+            except TypeError as exc:
+                if compatibility != "anthropic":
+                    raise
+                match = re.search(
+                    r"unexpected keyword argument ['\"]([^'\"]+)['\"]", str(exc)
+                )
+                unsupported = match.group(1) if match else None
+                if unsupported is None or unsupported not in params:
+                    raise
+                params.pop(unsupported)
+                log_info(
+                    "Anthropic SDK rejected an optional request parameter; retrying without it",
+                    context={"parameter": unsupported},
+                )
 
     def _emit_stream_event(self, request_id: str, event: str, content: str = "") -> None:
         """经 IPC 发送非终态流事件；失败不能影响最终响应。"""
@@ -537,6 +591,66 @@ class ChatProcess:
             })
         except Exception:
             pass
+
+    def _is_request_cancelled(self, request_id: str) -> bool:
+        if self.global_cancel_flag.is_set():
+            return True
+        with self._cancelled_requests_lock:
+            return request_id in self._cancelled_request_ids
+
+    def _wait_retry_delay(self, request_id: str, delay: float) -> bool:
+        """Wait for retry backoff; return False if this request is cancelled."""
+        deadline = time.monotonic() + max(0.0, delay)
+        while True:
+            if self._is_request_cancelled(request_id):
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            # Request cancellation uses a guarded set rather than a per-request Event.
+            # Poll briefly so Stop does not remain stuck in a 5/15/25-second backoff.
+            time.sleep(min(0.05, remaining))
+
+    def _register_stream(self, request_id: str, stream: Any) -> None:
+        with self._active_streams_lock:
+            self._active_streams[request_id] = stream
+        # 取消命令可能先于 SDK 返回 stream 句柄到达。
+        if self._is_request_cancelled(request_id):
+            self._close_stream(stream)
+
+    def _unregister_stream(self, request_id: str, stream: Any) -> None:
+        with self._active_streams_lock:
+            if self._active_streams.get(request_id) is stream:
+                self._active_streams.pop(request_id, None)
+
+    @staticmethod
+    def _close_stream(stream: Any) -> None:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+    def cancel_request(self, request_id: Optional[str]) -> bool:
+        """取消单个请求；运行中的流通过 close() 直接断开传输。"""
+        if not request_id:
+            return False
+        # 与完成回调使用相同的锁顺序，确保 callback 不会先清理、这里再留下
+        # 一个永远没有 worker 帮忙移除的过期 tombstone。
+        with self.active_requests_lock:
+            future = self.active_requests.get(request_id)
+            if future is None:
+                return False
+            with self._cancelled_requests_lock:
+                self._cancelled_request_ids.add(request_id)
+        if future is not None:
+            future.cancel()
+        with self._active_streams_lock:
+            stream = self._active_streams.get(request_id)
+        if stream is not None:
+            self._close_stream(stream)
+        return True
 
     @staticmethod
     def _field(value: Any, name: str, default: Any = None) -> Any:
@@ -565,6 +679,8 @@ class ChatProcess:
             stream_params.pop("stream_options", None)
             chunks = endpoint.create(**stream_params)
 
+        self._register_stream(request_id, chunks)
+
         text_parts = []
         response_id = None
         model = stream_params.get("model")
@@ -575,7 +691,7 @@ class ChatProcess:
 
         try:
             for chunk in chunks:
-                if self.global_cancel_flag.is_set():
+                if self._is_request_cancelled(request_id):
                     break
                 response_id = response_id or self._field(chunk, "id")
                 model = self._field(chunk, "model", model) or model
@@ -596,9 +712,8 @@ class ChatProcess:
                     text_parts.append(piece)
                     self._emit_stream_event(request_id, "delta", piece)
         finally:
-            close = getattr(chunks, "close", None)
-            if callable(close):
-                close()
+            self._unregister_stream(request_id, chunks)
+            self._close_stream(chunks)
 
         response = {
             "id": response_id,
@@ -626,12 +741,13 @@ class ChatProcess:
         stream_params = dict(request_params)
         stream_params["stream"] = True
         events = endpoint.create(**stream_params)
+        self._register_stream(request_id, events)
         text_parts = []
         final_response = None
 
         try:
             for event in events:
-                if self.global_cancel_flag.is_set():
+                if self._is_request_cancelled(request_id):
                     break
                 event_type = self._field(event, "type", "") or ""
                 if event_type == "response.output_text.delta":
@@ -642,9 +758,8 @@ class ChatProcess:
                 elif event_type in ("response.completed", "response.incomplete"):
                     final_response = self._field(event, "response")
         finally:
-            close = getattr(events, "close", None)
-            if callable(close):
-                close()
+            self._unregister_stream(request_id, events)
+            self._close_stream(events)
 
         if final_response is None:
             content = "".join(text_parts)
@@ -675,19 +790,29 @@ class ChatProcess:
     ) -> Any:
         """Anthropic 流式/非流式统一入口，流式结束后返回完整 Message。"""
         if not stream:
-            return self._create_and_log_raw(endpoint, request_params, meta)
+            return self._create_and_log_raw(
+                endpoint, request_params, meta, compatibility="anthropic"
+            )
 
         stream_factory = getattr(endpoint, "stream", None)
         if not callable(stream_factory):
             raise RuntimeError("当前 Anthropic 客户端不支持 messages.stream")
 
-        with stream_factory(**request_params) as message_stream:
-            for piece in message_stream.text_stream:
-                if self.global_cancel_flag.is_set():
-                    break
-                if isinstance(piece, str) and piece:
-                    self._emit_stream_event(request_id, "delta", piece)
-            response = message_stream.get_final_message()
+        with self._call_with_compatible_kwargs(
+            stream_factory, request_params, compatibility="anthropic"
+        ) as message_stream:
+            self._register_stream(request_id, message_stream)
+            try:
+                for piece in message_stream.text_stream:
+                    if self._is_request_cancelled(request_id):
+                        break
+                    if isinstance(piece, str) and piece:
+                        self._emit_stream_event(request_id, "delta", piece)
+                if self._is_request_cancelled(request_id):
+                    return None
+                response = message_stream.get_final_message()
+            finally:
+                self._unregister_stream(request_id, message_stream)
 
         self._log_received(
             self._response_payload(response),
@@ -806,13 +931,12 @@ class ChatProcess:
         - ``refusal``        ：模型拒答/被内容过滤且没有正文，重试无意义。
 
         API 字段全部容错读取：字段缺失只会让 finish_state 退化为 unknown，
-        此时改由文本特征判断截断，不会抛异常，也不影响非 GPT/Claude 的兼容 API。
+        不会根据正文形态猜测传输状态，也不影响非 GPT/Claude 的兼容 API。
         """
         content = content or ""
         try:
-            # usage_fallback 必须在判定之前交给 assess：某些中转的 usage 结构
-            # 非标准，通用提取拿不到 output_tokens，"贴顶 max_tokens"这条截断
-            # 判据会因为 output_tokens=0 而完全失效。
+            # usage_fallback 在判定之前交给 assess，用于兼容非标准中转的 token
+            # 统计结构；它只补齐诊断数据，不参与截断推断。
             health = response_health.assess(
                 response, content, max_tokens, usage_fallback=usage_fallback
             )
@@ -834,6 +958,7 @@ class ChatProcess:
 
         usage = dict(health.get("usage") or {})
         input_tokens = usage.get("input_tokens") or 0
+        api_input_tokens = usage.get("api_input_tokens") or input_tokens
         output_tokens = usage.get("output_tokens") or 0
         # 通用提取拿不到时，用调用路径自己解析出的数字兜底（兼容非标准返回结构）
         if usage_fallback:
@@ -844,8 +969,9 @@ class ChatProcess:
 
         cache_read = usage.get("cache_read_input_tokens") or 0
         cache_write = usage.get("cache_creation_input_tokens") or 0
-        context_tokens = usage.get("context_tokens") or 0
-        context_tokens = max(context_tokens, input_tokens + cache_read + cache_write if (cache_read or cache_write) else input_tokens)
+        # extract_usage 已按 provider 口径处理缓存：OpenAI cached_tokens 是 input
+        # 的子集，Anthropic cache_read/cache_creation 才需要加回。这里不能再次推导。
+        context_tokens = usage.get("context_tokens") or input_tokens
 
         # CLI 模式：打印 token 统计（后端自己处理累计）
         if input_tokens > 0 or output_tokens > 0:
@@ -857,11 +983,12 @@ class ChatProcess:
             "sent_messages": current_sent,
             "usage": {
                 "input_tokens": input_tokens,
+                "api_input_tokens": api_input_tokens,
                 "output_tokens": output_tokens,
                 "prompt_tokens": input_tokens,      # 兼容 OpenAI 格式
                 "completion_tokens": output_tokens,  # 兼容 OpenAI 格式
-                # 缓存 token 单独给出：Anthropic 的 input_tokens 不含缓存命中，
-                # 只看它会把上下文规模严重低估，上下文压缩因此永不触发
+                # 缓存 token 单独给出；input_tokens 已统一为完整上下文，
+                # api_input_tokens 保留 provider 主字段原值。
                 "cache_read_input_tokens": cache_read,
                 "cache_creation_input_tokens": cache_write,
                 "context_tokens": context_tokens,
@@ -1008,7 +1135,7 @@ class ChatProcess:
             响应字典，包含 request_id
         """
         # 检查是否已被取消
-        if self.global_cancel_flag.is_set():
+        if self._is_request_cancelled(request_id):
             return {"request_id": request_id, "status": "cancelled", "data": None}
 
         messages = request_data.get("messages", [])
@@ -1571,7 +1698,7 @@ class ChatProcess:
                     client.chat.completions, request_params, received_meta
                 )
 
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             # 兼容官方 ChatCompletion 对象 / dict / 部分代理返回的纯文本 str
@@ -1625,7 +1752,7 @@ class ChatProcess:
             )
 
         except Exception as exc:
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             error_context = {
@@ -1720,7 +1847,7 @@ class ChatProcess:
             else:
                 response = self._create_and_log_raw(client.responses, request_params, received_meta)
 
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             # 兼容官方 SDK 对象 / dict / 部分代理返回的 str
@@ -1753,7 +1880,7 @@ class ChatProcess:
 
             # usage / status / incomplete_details 全部走容错提取：
             # Responses API 的截断信号在 status="incomplete" + incomplete_details.reason，
-            # 字段缺失时自动退化为按文本特征判断
+            # 字段缺失时保持 unknown，由协议层独立校验回复结构
             return self._finalize_result(
                 request_id,
                 response,
@@ -1770,7 +1897,7 @@ class ChatProcess:
             )
 
         except Exception as exc:
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             error_context = {"request_id": request_id, "model": model}
@@ -1959,7 +2086,7 @@ class ChatProcess:
                 request_id, client.messages, request_params, received_meta, stream=stream
             )
 
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             mismatch = self._anthropic_protocol_mismatch(response)
@@ -1979,7 +2106,7 @@ class ChatProcess:
                 request_id, client, request_params, response, content, received_meta,
                 stream=stream,
             )
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             # 构建本次发送的消息（不包含历史记忆）
@@ -2021,7 +2148,7 @@ class ChatProcess:
             )
 
         except Exception as exc:
-            if self.global_cancel_flag.is_set():
+            if self._is_request_cancelled(request_id):
                 return {"request_id": request_id, "status": "cancelled", "data": None}
 
             error_context = {"request_id": request_id, "model": model}
@@ -2109,7 +2236,7 @@ class ChatProcess:
                 _raw, finish_state = response_health.extract_finish_reason(response)
                 if finish_state != response_health.FINISH_PAUSED:
                     break
-                if self.global_cancel_flag.is_set():
+                if self._is_request_cancelled(request_id):
                     break
                 blocks = self._serialize_content_blocks(response)
                 if not blocks:
@@ -2236,6 +2363,8 @@ class ChatProcess:
         # 从活跃请求中移除
         with self.active_requests_lock:
             self.active_requests.pop(request_id, None)
+        with self._cancelled_requests_lock:
+            self._cancelled_request_ids.discard(request_id)
         
         try:
             result = self._strip_ipc_payload(future.result())
@@ -2276,11 +2405,10 @@ class ChatProcess:
         
         # 尝试取消所有 Future（对于尚未开始的任务有效）
         with self.active_requests_lock:
-            for request_id, future in self.active_requests.items():
-                future.cancel()
-            # 清空活跃请求
-            cancelled_count = len(self.active_requests)
-            self.active_requests.clear()
+            request_ids = list(self.active_requests)
+        for request_id in request_ids:
+            self.cancel_request(request_id)
+        cancelled_count = len(request_ids)
         
         # 发送中断确认
         self.response_queue.put({"status": "interrupted", "cancelled_count": cancelled_count})
@@ -2307,6 +2435,11 @@ class ChatProcess:
                     # 中断命令 - 取消所有请求
                     if request_data.get("command") == "interrupt":
                         self.cancel_all_requests()
+                        continue
+
+                    # 精确中断：只关闭指定会话当前的 provider 请求，不影响并发会话。
+                    if request_data.get("command") == "cancel":
+                        self.cancel_request(request_data.get("request_id"))
                         continue
                     
                     # 正常请求 - 提取或生成 request_id

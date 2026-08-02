@@ -111,7 +111,8 @@
 
 - 展示用户与 Agent 消息；任务执行中逐轮流式渲染（`round_reply` / 工具调用 / 工具结果）
 - 独立完整 HTML 文档或单个 `html` 代码块在开关开启时可交互渲染；关闭时保持为不可执行源码
-- 持久 HTML 可用 `data-spore-target` 声明按需页面或展开内容；宿主监听 iframe 交互，目标不存在时短暂唤起 Frontend Agent，生成期间显示占位，完成后热更新并写回 `.spore/html`
+- 宿主会监控持久 HTML iframe 内可信的点击、输入、变更与提交操作：首个操作开启 5 秒收集窗，将完整时序和元素、控件、DOM 路径及视口上下文交给 Frontend Agent 推断意图；Agent 决定修改时必须先输出 `interrupt`，宿主随即冻结页面，直到收到 `spore:stop_reason`、完成结构化应用、完整校验与重新加载后才解除冻结
+- 运行时 Agent 只返回带宿主元素引用的局部 mutation，不返回完整 HTML；后端结构化应用 mutation 并校验合成文档，只有有效变更才会热更新并原子写回 `.spore/html`
 - 「查看详情」展开底层 ACTION / RESULT 与发送给 LLM 的原始消息
 - 命令意图脚注：安全 Agent（full 模式）会为每条 shell 命令生成一句「它想干什么」的说明，附在对应消息下
 

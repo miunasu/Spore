@@ -509,21 +509,30 @@ export const htmlApi = {
       content: string;
     }>(`/api/html/${encodeURIComponent(artifactId)}`),
 
-  interact: (artifactId: string, payload: {
-    target: string;
-    request?: string;
-    action?: string;
-    trigger_text?: string;
-  }) =>
+  interactionState: (artifactId: string) =>
+    request<{
+      artifact_id: string;
+      phase: 'idle' | 'analyzing' | 'frozen' | 'validating' | 'completed' | 'failed';
+      frozen: boolean;
+      revision: number;
+      stop_reason?: string | null;
+      error?: string | null;
+      updated_at: number;
+    }>(`/api/html/${encodeURIComponent(artifactId)}/interaction-state`),
+
+  interact: (artifactId: string, events: Array<Record<string, unknown>>) =>
     request<{
       artifact: Record<string, unknown>;
       content: string;
       generated: boolean;
-      target: string;
+      decision: 'updated' | 'no_change';
+      intent?: string;
+      event_count: number;
       iterations?: number;
+      mutation_count?: number;
     }>(`/api/html/${encodeURIComponent(artifactId)}/interact`, {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ events }),
     }),
 };
 

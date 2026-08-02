@@ -11,6 +11,8 @@ const NOTE_PATH = 'note.txt';
 export const TODO_SEPARATOR = '======TODO========';
 const DELETE_ANIMATION_MS = 220;
 const UNDO_TIMEOUT_MS = 5000;
+const TODO_DRAG_HOLD_MS = 220;
+const TODO_DRAG_MOVE_TOLERANCE = 6;
 
 // ─── 数据模型 ────────────────────────────────────────────────────────────────
 
@@ -31,6 +33,7 @@ interface NoteEditorProps {
 }
 
 type ViewMode = 'note' | 'todo';
+type TodoDropPosition = 'before' | 'after';
 
 function genId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -101,6 +104,19 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
+  const [hideCompleted, setHideCompleted] = useState(false);
+
+  // Todo 长按拖拽排序
+  const [draggedTodoId, setDraggedTodoId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; position: TodoDropPosition } | null>(null);
+  const draggedTodoIdRef = useRef<string | null>(null);
+  const dropTargetRef = useRef<{ id: string; position: TodoDropPosition } | null>(null);
+  const dragPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragClickResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragPointerIdRef = useRef<number | null>(null);
+  const dragStartPointRef = useRef<{ x: number; y: number } | null>(null);
+  const dragSourceElementRef = useRef<HTMLDivElement | null>(null);
+  const suppressTodoClickRef = useRef(false);
 
   // 新增 todo 输入
   const [newTodoText, setNewTodoText] = useState('');
@@ -134,6 +150,11 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
   }, []);
 
   useEffect(() => clearDeletionTimers, [clearDeletionTimers]);
+
+  useEffect(() => () => {
+    if (dragPressTimerRef.current) clearTimeout(dragPressTimerRef.current);
+    if (dragClickResetTimerRef.current) clearTimeout(dragClickResetTimerRef.current);
+  }, []);
 
   // ── 加载 ───────────────────────────────────────────────────────────────────
 
@@ -237,6 +258,153 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
     setTodos((prev) => prev.map((item) => (item.id === id ? { ...item, done: !item.done } : item)));
   };
 
+  const clearTodoDragTimer = () => {
+    if (dragPressTimerRef.current) {
+      clearTimeout(dragPressTimerRef.current);
+      dragPressTimerRef.current = null;
+    }
+  };
+
+  const clearTodoDrag = () => {
+    clearTodoDragTimer();
+    draggedTodoIdRef.current = null;
+    dropTargetRef.current = null;
+    dragPointerIdRef.current = null;
+    dragStartPointRef.current = null;
+    dragSourceElementRef.current = null;
+    setDraggedTodoId(null);
+    setDropTarget(null);
+  };
+
+  const reorderTodo = (sourceId: string, targetId: string, position: TodoDropPosition) => {
+    const movedItem = todos.find((item) => item.id === sourceId);
+    if (!movedItem || sourceId === targetId) return;
+
+    setTodos((prev) => {
+      const sourceIndex = prev.findIndex((item) => item.id === sourceId);
+      if (sourceIndex === -1) return prev;
+
+      const reordered = [...prev];
+      const [sourceItem] = reordered.splice(sourceIndex, 1);
+      const targetIndex = reordered.findIndex((item) => item.id === targetId);
+      if (targetIndex === -1) return prev;
+      reordered.splice(position === 'after' ? targetIndex + 1 : targetIndex, 0, sourceItem);
+      return reordered;
+    });
+    setAnnouncement(t('noteEditor.todoReordered', { text: movedItem.text }));
+  };
+
+  const handleTodoPointerDown = (event: React.PointerEvent<HTMLDivElement>, id: string) => {
+    const dragBlocked = editingId !== null
+      || pendingDeletion?.phase === 'staged'
+      || pendingDeletion?.phase === 'exiting';
+    if (event.button !== 0 || dragBlocked) return;
+
+    clearTodoDragTimer();
+    const pointerId = event.pointerId;
+    const sourceElement = event.currentTarget;
+    dragPointerIdRef.current = pointerId;
+    dragStartPointRef.current = { x: event.clientX, y: event.clientY };
+    dragSourceElementRef.current = sourceElement;
+
+    dragPressTimerRef.current = setTimeout(() => {
+      if (dragPointerIdRef.current !== pointerId) return;
+      draggedTodoIdRef.current = id;
+      suppressTodoClickRef.current = true;
+      setDraggedTodoId(id);
+      setAnnouncement(t('noteEditor.todoDragStarted', { text: todos.find((item) => item.id === id)?.text ?? '' }));
+      try {
+        sourceElement.setPointerCapture?.(pointerId);
+      } catch {
+        // Pointer may already have been released by the WebView.
+      }
+      dragPressTimerRef.current = null;
+    }, TODO_DRAG_HOLD_MS);
+  };
+
+  const handleTodoPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragPointerIdRef.current !== event.pointerId) return;
+
+    const sourceId = draggedTodoIdRef.current;
+    if (!sourceId) {
+      const start = dragStartPointRef.current;
+      if (
+        start
+        && Math.hypot(event.clientX - start.x, event.clientY - start.y) > TODO_DRAG_MOVE_TOLERANCE
+      ) {
+        clearTodoDragTimer();
+        dragPointerIdRef.current = null;
+        dragStartPointRef.current = null;
+        dragSourceElementRef.current = null;
+      }
+      return;
+    }
+
+    event.preventDefault();
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-todo-id]'));
+    const targetRow = rows.find((row) => {
+      const rect = row.getBoundingClientRect();
+      return event.clientY >= rect.top && event.clientY <= rect.bottom;
+    });
+    const targetId = targetRow?.dataset.todoId;
+    if (!targetRow || !targetId || targetId === sourceId) {
+      dropTargetRef.current = null;
+      setDropTarget(null);
+      return;
+    }
+
+    const rect = targetRow.getBoundingClientRect();
+    const nextTarget = {
+      id: targetId,
+      position: (event.clientY < rect.top + rect.height / 2 ? 'before' : 'after') as TodoDropPosition,
+    };
+    dropTargetRef.current = nextTarget;
+    setDropTarget((current) =>
+      current?.id === nextTarget.id && current.position === nextTarget.position
+        ? current
+        : nextTarget,
+    );
+  };
+
+  const finishTodoPointerDrag = (event: React.PointerEvent<HTMLDivElement>, shouldReorder: boolean) => {
+    if (dragPointerIdRef.current !== event.pointerId) return;
+
+    const sourceId = draggedTodoIdRef.current;
+    const target = dropTargetRef.current;
+    clearTodoDragTimer();
+    if (sourceId && shouldReorder && target) {
+      reorderTodo(sourceId, target.id, target.position);
+    }
+
+    try {
+      if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+        event.currentTarget.releasePointerCapture?.(event.pointerId);
+      }
+    } catch {
+      // Ignore WebView pointer-capture races.
+    }
+    clearTodoDrag();
+
+    if (sourceId) {
+      if (dragClickResetTimerRef.current) clearTimeout(dragClickResetTimerRef.current);
+      dragClickResetTimerRef.current = setTimeout(() => {
+        suppressTodoClickRef.current = false;
+        dragClickResetTimerRef.current = null;
+      }, 0);
+    }
+  };
+
+  const handleTodoPointerLeave = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragPointerIdRef.current !== event.pointerId || draggedTodoIdRef.current) return;
+    clearTodoDrag();
+  };
+
+  const handleTodoClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!suppressTodoClickRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const deleteTodo = (id: string) => {
     if (pendingDeletion?.phase === 'staged' || pendingDeletion?.phase === 'exiting') return;
 
@@ -330,13 +498,16 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
 
   const doneCount = effectiveTodos.filter((item) => item.done).length;
   const pendingCount = effectiveTodos.length - doneCount;
-  const visibleTodos = [...todos];
-  if (pendingDeletion?.phase === 'staged' || pendingDeletion?.phase === 'exiting') {
-    visibleTodos.splice(
-      Math.min(pendingDeletion.index, visibleTodos.length),
-      0,
-      pendingDeletion.item,
-    );
+  const visibleTodos = todos.filter((item) => !hideCompleted || !item.done);
+  if (
+    (pendingDeletion?.phase === 'staged' || pendingDeletion?.phase === 'exiting')
+    && (!hideCompleted || !pendingDeletion.item.done)
+  ) {
+    const deletionVisibleIndex = todos
+      .slice(0, pendingDeletion.index)
+      .filter((item) => !hideCompleted || !item.done)
+      .length;
+    visibleTodos.splice(deletionVisibleIndex, 0, pendingDeletion.item);
   }
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -488,7 +659,7 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
           className="h-full flex flex-col overflow-hidden"
         >
           {effectiveTodos.length > 0 && (
-            <div className="flex items-center gap-2 px-4 py-1.5 border-b border-spore-border/20 animate-fade-in motion-reduce:animate-none">
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-spore-border/20 animate-fade-in motion-reduce:animate-none">
               <div
                 role="progressbar"
                 aria-label={t('noteEditor.todoProgress')}
@@ -505,6 +676,27 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
               <span className="text-xs text-spore-muted flex-shrink-0">
                 {t('noteEditor.todoStats', { done: doneCount, total: effectiveTodos.length })}
               </span>
+              <button
+                type="button"
+                aria-pressed={hideCompleted}
+                disabled={doneCount === 0}
+                onClick={() => setHideCompleted((hidden) => !hidden)}
+                title={t(hideCompleted ? 'noteEditor.todoShowCompleted' : 'noteEditor.todoHideCompleted')}
+                className={`flex items-center gap-1 flex-shrink-0 px-1.5 py-0.5 rounded text-xs transition-colors duration-200 motion-reduce:transition-none ${focusRing} ${
+                  doneCount > 0
+                    ? 'text-spore-muted hover:text-spore-text hover:bg-spore-accent/40'
+                    : 'text-spore-muted/30 cursor-not-allowed'
+                }`}
+              >
+                <svg aria-hidden="true" className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {hideCompleted ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3l18 18M10.6 10.7a2 2 0 002.7 2.7M9.9 4.2A10.8 10.8 0 0112 4c5.5 0 9 5 9 5a16.2 16.2 0 01-2.1 2.5M6.6 6.6C4.4 8.1 3 10 3 10s3.5 5 9 5c1 0 1.9-.2 2.7-.5" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10s3.5-5 9-5 9 5 9 5-3.5 5-9 5-9-5-9-5zm9 2a2 2 0 100-4 2 2 0 000 4z" />
+                  )}
+                </svg>
+                {t(hideCompleted ? 'noteEditor.todoShowCompleted' : 'noteEditor.todoHideCompleted')}
+              </button>
             </div>
           )}
 
@@ -514,7 +706,11 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
                 <svg aria-hidden="true" className="w-10 h-10 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
-                <span className="text-sm opacity-40">{t('noteEditor.todoEmpty')}</span>
+                <span className="text-sm opacity-40">
+                  {hideCompleted && todos.length > 0
+                    ? t('noteEditor.todoCompletedHidden')
+                    : t('noteEditor.todoEmpty')}
+                </span>
               </div>
             )}
 
@@ -524,13 +720,33 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ active = true }) => {
               return (
                 <div
                   key={item.id}
-                  className={`group overflow-hidden transition-[max-height,opacity,transform,margin] duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none ${
+                  data-todo-id={item.id}
+                  onPointerDown={(event) => handleTodoPointerDown(event, item.id)}
+                  onPointerMove={handleTodoPointerMove}
+                  onPointerUp={(event) => finishTodoPointerDrag(event, true)}
+                  onPointerCancel={(event) => finishTodoPointerDrag(event, false)}
+                  onPointerLeave={handleTodoPointerLeave}
+                  onClickCapture={handleTodoClickCapture}
+                  className={`group select-none overflow-hidden border-spore-highlight transition-[max-height,opacity,transform,margin,border-color] duration-200 ease-out motion-reduce:transition-none motion-reduce:transform-none ${
                     isExiting
                       ? 'max-h-0 opacity-0 -translate-y-1 my-0 pointer-events-none'
                       : 'max-h-20 opacity-100 translate-y-0 my-0.5'
-                  } ${enteringId === item.id ? 'animate-fade-in motion-reduce:animate-none' : ''}`}
+                  } ${enteringId === item.id ? 'animate-fade-in motion-reduce:animate-none' : ''} ${
+                    dropTarget?.id === item.id
+                      ? dropTarget.position === 'before'
+                        ? 'border-t-2'
+                        : 'border-b-2'
+                      : 'border-y-0'
+                  }`}
                 >
-                  <div className={`flex items-center gap-2 mx-2 px-2 py-1.5 rounded-lg transition-[background-color,opacity] duration-200 hover:bg-spore-accent/20 motion-reduce:transition-none ${item.done ? 'opacity-50' : ''}`}>
+                  <div
+                    title={t('noteEditor.todoDragHint')}
+                    className={`flex items-center gap-2 mx-2 px-2 py-1.5 rounded-lg transition-[background-color,opacity,box-shadow] duration-200 hover:bg-spore-accent/20 motion-reduce:transition-none ${item.done ? 'opacity-50' : ''} ${
+                      draggedTodoId === item.id
+                        ? 'opacity-40 shadow-glow cursor-grabbing'
+                        : 'cursor-grab'
+                    }`}
+                  >
                     <button
                       type="button"
                       role="checkbox"

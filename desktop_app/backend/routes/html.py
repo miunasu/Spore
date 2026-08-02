@@ -1,11 +1,12 @@
 """HTML artifact API."""
 
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from base.html_artifacts import get_html_artifact_store, validate_html
+from base.html_interaction_state import get_html_interaction_state
 
 
 router = APIRouter()
@@ -34,10 +35,7 @@ class HtmlGenerateRequest(BaseModel):
 
 
 class HtmlInteractionRequest(BaseModel):
-    target: str
-    request: str = ""
-    action: str = "click"
-    trigger_text: str = ""
+    events: List[Dict[str, Any]]
 
 
 @router.get("")
@@ -102,18 +100,17 @@ def generate_html_artifact(request: HtmlGenerateRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@router.get("/{artifact_id}/interaction-state")
+def load_html_interaction_state(artifact_id: str):
+    return get_html_interaction_state(artifact_id)
+
+
 @router.post("/{artifact_id}/interact")
 def interact_with_html_artifact(artifact_id: str, request: HtmlInteractionRequest):
     try:
-        from AutoAgent.frontend_agent import expand_html
+        from AutoAgent.frontend_agent import process_html_interactions
 
-        return expand_html(
-            artifact_id,
-            request.target,
-            request.request,
-            action=request.action,
-            trigger_text=request.trigger_text,
-        )
+        return process_html_interactions(artifact_id, request.events)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

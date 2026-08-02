@@ -580,27 +580,11 @@ class ProtocolManager:
 
         return "".join(parts).strip()
 
-    # Protocol errors that a truncated reply produces as a side effect.
-    # Reporting these as "you wrote the marker wrong" makes the model re-send the
-    # same oversized content, which hits the same cap again — an infinite loop.
-    _TRUNCATION_MASKED_CODES = frozenset({"missing_end_marker", "invalid_stop_reason"})
-
-    TRUNCATED_OUTPUT_CODE = "truncated_output"
     TRUNCATED_OUTPUT_MESSAGE = (
         "上一轮回复在输出上限处被截断，标识符本身没写错，不要原样重发同一份内容。"
         "请改为分批产出：先输出/写入前一部分，再用追加方式补齐剩余部分，"
         "单次输出规模明显减小。"
     )
-
-    def _detect_truncation(self, response: str) -> bool:
-        """仅凭回复文本判断是否被截断（调用方未提供 API 信号时的兜底）。"""
-        try:
-            from ..response_health import looks_truncated
-
-            hint = looks_truncated(response)
-            return bool(hint and hint.confidence == "high")
-        except Exception:
-            return False
 
     def parse_response(
         self,
@@ -611,8 +595,8 @@ class ProtocolManager:
 
         Args:
             response: LLM 回复原文
-            truncated: 调用方从 API 字段得到的截断结论。None 表示未知，
-                此时退化为按文本特征自行判断。
+            truncated: 调用方从 API 字段得到的截断结论。None 表示未知。
+                协议层只解析结构，不根据回复文本推断传输状态。
         """
         if not response:
             return ParsedResponse(response_type="continue", raw_response="")
@@ -620,19 +604,6 @@ class ProtocolManager:
         blocks, error, outside_content = self._scan_protocol(response)
         if error:
             is_truncated = bool(truncated) if truncated is not None else False
-            if error.code in self._TRUNCATION_MASKED_CODES and (
-                is_truncated or self._detect_truncation(response)
-            ):
-                # 未闭合的块是截断的结果，不是模型写错了标识符：
-                # 必须按截断反馈，否则模型会重发同样超长的内容再次撞上限
-                return ParsedResponse(
-                    response_type="protocol_error",
-                    raw_response=response,
-                    protocol_error=ProtocolError(
-                        self.TRUNCATED_OUTPUT_CODE, self.TRUNCATED_OUTPUT_MESSAGE
-                    ),
-                    truncated=True,
-                )
             return ParsedResponse(
                 response_type="protocol_error",
                 raw_response=response,
@@ -642,8 +613,7 @@ class ProtocolManager:
 
         outside_text = (outside_content or "").strip()
         protocol_warning = self.CONTENT_OUTSIDE_WARNING if outside_text else None
-        # 解析成功的回复只采信 API 明确给出的截断结论：文本弱特征（例如 REPLY 里
-        # 恰好有奇数个代码围栏）会把正常回复误判成截断。
+        # 协议解析结果与传输状态彼此独立；这里只透传调用方给出的明确结论。
         is_truncated = bool(truncated)
 
         final_blocks = [block for block in blocks if block["name"] == "STOP_REASON"]

@@ -548,23 +548,9 @@ class SubAgentThread(threading.Thread):
                 )
 
                 # ── 截断回复特殊处理 ─────────────────────────────────────────
-                # final 是例外，与主 Agent（conversation_loop.validate_and_check_response）
-                # 保持一致：_scan_protocol 对未闭合的协议块一律报错，能解析出 final
-                # 说明协议结构本身完整，不必为一条结构完整的回复再跑一轮截断重试。
-                # 但要留一条警告：单行 STOP_REASON= 的原因若正好在行中被砍断，
-                # 结果里就会少一小截，事后只有这条日志能指向真正原因。
-                if (is_truncated or parsed.truncated) and parsed.response_type == "final":
-                    self.log_output(
-                        "最终回复被标记为截断，但协议结构完整，按任务完成处理", "WARNING"
-                    )
-                    self._log_to_agent_file(
-                        f"截断但按 final 接受 (迭代 {iteration}, "
-                        f"api_stop_reason={reply_meta.get('api_stop_reason')!r}, "
-                        f"truncation_source={reply_meta.get('truncation_source')!r})："
-                        f"若结果末尾缺内容，优先怀疑这里",
-                        "WARNING",
-                    )
-                elif is_truncated or parsed.truncated:
+                # 传输层明确报告截断时统一重试；即使文本碰巧能解析成 final，
+                # 单行终止原因也可能只生成了一半，不能作为完成结果接受。
+                if is_truncated or parsed.truncated:
                     _truncation_streak += 1
                     self.log_output(
                         f"回复被截断 ({_truncation_streak}/{_MAX_TRUNCATION_STREAK})，"

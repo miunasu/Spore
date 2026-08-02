@@ -284,7 +284,20 @@ export interface TaskInfo {
   worker_done: boolean;
 }
 
-export type WSEvent = WSLogEvent | WSAgentOutputEvent | WSAgentStatusEvent | WSAgentRegisterEvent | WSChatChunkEvent | WSTodoUpdateEvent | WSConfirmRequestEvent | WSConfirmCancelEvent | WSConfirmResultEvent | WSTaskEvent;
+export interface WSHtmlInteractionStateEvent {
+  type: 'html_interaction_state';
+  data: {
+    artifact_id: string;
+    phase: 'idle' | 'analyzing' | 'frozen' | 'validating' | 'completed' | 'failed';
+    frozen: boolean;
+    revision: number;
+    stop_reason?: string | null;
+    error?: string | null;
+    updated_at: number;
+  };
+}
+
+export type WSEvent = WSLogEvent | WSAgentOutputEvent | WSAgentStatusEvent | WSAgentRegisterEvent | WSChatChunkEvent | WSTodoUpdateEvent | WSConfirmRequestEvent | WSConfirmCancelEvent | WSConfirmResultEvent | WSTaskEvent | WSHtmlInteractionStateEvent;
 
 // Tab 类型
 export type TabType = 'output' | 'html' | 'skills' | 'prompt' | 'history' | 'agents' | 'note' | 'characters';

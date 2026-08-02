@@ -6,20 +6,13 @@ LLM 响应健康检查
 
     正常说完 / 被 max_tokens 截断 / 拒答或被内容过滤 / 需要续调 / 空回复
 
-本模块提供两条互补的判据来恢复这个区分能力：
+截断只根据提供方返回的明确终止状态判断。回复文本可以包含任意原始代码和协议
+示例，不能可靠证明传输是否截断；协议结构是否完整由 ProtocolManager 独立处理。
 
-1. **API 字段**：只识别 OpenAI（GPT）与 Anthropic（Claude）两家的字段。
-   全部容错读取 —— 字段缺失、被第三方中转裁剪、类型不符、对象换成 dict，
-   一律降级为 UNKNOWN，绝不抛异常。这样换任何一家兼容 API 都不会因为
-   少一个字段而崩掉。
-
-2. **回复文本自身的特征**：完全不依赖 API 字段。中转不返回 stop_reason 时，
-   靠未闭合的协议块、残缺的标识符尾巴、未闭合的代码围栏等特征判断截断。
-
-两条判据由调用方合并使用：API 字段说了算，没说才看文本特征。
+API 字段全部容错读取：字段缺失、被第三方中转裁剪、类型不符、对象换成 dict，
+一律降级为 UNKNOWN，绝不抛异常。
 """
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 归一化的终止状态
@@ -160,22 +153,27 @@ def extract_finish_reason(response: Any) -> Tuple[Optional[str], str]:
 
 
 def extract_usage(response: Any) -> Dict[str, int]:
-    """容错提取 usage，并补齐两家的缓存 token。
+    """兼容 OpenAI 两套 API 与 Anthropic Messages 的 usage 字段。
 
-    两家对 input 的口径不同，必须分开处理，否则上下文规模会被严重低估：
+    官方字段如下：
 
-    - Anthropic: ``input_tokens`` **不含**缓存命中部分，缓存量单独放在
+    - OpenAI Chat Completions: ``prompt_tokens`` / ``completion_tokens``；
+      缓存明细在 ``prompt_tokens_details.cached_tokens``。
+    - OpenAI Responses: ``input_tokens`` / ``output_tokens``；
+      缓存明细在 ``input_tokens_details.cached_tokens``。
+    - Anthropic Messages: ``input_tokens`` / ``output_tokens``；缓存量单独在
       ``cache_read_input_tokens`` / ``cache_creation_input_tokens``。
-      只读 input_tokens 会得到个位数，上下文压缩因此永远不触发。
-    - OpenAI: ``prompt_tokens`` **已含**缓存部分，``cached_tokens`` 只是其中的
-      子集，再加一遍就重复计算了。
+
+    OpenAI 的 cached_tokens 是 input/prompt_tokens 的子集，不能重复相加；
+    Anthropic 的两个缓存字段不含在 input_tokens 中，计算真实上下文时需要补回。
 
     Returns:
-        含 input_tokens / output_tokens / cache_read_input_tokens /
-        cache_creation_input_tokens / context_tokens 的 dict。
-        context_tokens 表示"真实上下文规模"，供上下文压缩判断使用。
+        ``input_tokens`` 是跨 provider 统一后的完整输入上下文，始终与
+        ``context_tokens`` 相等；``api_input_tokens`` 保留提供方主字段原值。
+        Claude 开启缓存时二者不同，因为缓存 token 由独立 API 字段返回。
     """
     result = {
+        "api_input_tokens": 0,
         "input_tokens": 0,
         "output_tokens": 0,
         "cache_read_input_tokens": 0,
@@ -187,34 +185,42 @@ def extract_usage(response: Any) -> Dict[str, int]:
         return result
 
     try:
-        anthropic_style = False
-
         raw_input = _get(usage, "input_tokens")
         if raw_input is not None:
-            anthropic_style = True
             base_input = _int(raw_input)
         else:
             base_input = _int(_get(usage, "prompt_tokens"))
 
-        base_output = _int(_get(usage, "output_tokens"))
-        if base_output == 0:
+        raw_output = _get(usage, "output_tokens")
+        if raw_output is not None:
+            base_output = _int(raw_output)
+        else:
             base_output = _int(_get(usage, "completion_tokens"))
 
-        cache_read = _int(_get(usage, "cache_read_input_tokens"))
-        cache_write = _int(_get(usage, "cache_creation_input_tokens"))
-        if cache_read or cache_write:
-            anthropic_style = True
-        else:
-            # OpenAI 把缓存命中放在 prompt_tokens_details.cached_tokens（属于 prompt_tokens 的子集）
-            cache_read = _int(_get(_get(usage, "prompt_tokens_details"), "cached_tokens"))
+        anthropic_cache_read = _get(usage, "cache_read_input_tokens")
+        anthropic_cache_write = _get(usage, "cache_creation_input_tokens")
+        is_anthropic = (
+            anthropic_cache_read is not None or anthropic_cache_write is not None
+        )
+        cache_write = _int(anthropic_cache_write)
 
-        result["input_tokens"] = base_input
+        if is_anthropic:
+            cache_read = _int(anthropic_cache_read)
+        else:
+            # Responses 与 Chat Completions 的 details 字段名称不同。
+            responses_details = _get(usage, "input_tokens_details")
+            chat_details = _get(usage, "prompt_tokens_details")
+            cache_read = _int(_get(responses_details, "cached_tokens"))
+            if responses_details is None:
+                cache_read = _int(_get(chat_details, "cached_tokens"))
+
+        full_input = base_input + cache_read + cache_write if is_anthropic else base_input
+        result["api_input_tokens"] = base_input
+        result["input_tokens"] = full_input
         result["output_tokens"] = base_output
         result["cache_read_input_tokens"] = cache_read
         result["cache_creation_input_tokens"] = cache_write
-        # Anthropic 口径要把缓存补回来，OpenAI 口径不能重复累加
-        context = base_input + cache_read + cache_write if anthropic_style else base_input
-        result["context_tokens"] = max(context, base_input)
+        result["context_tokens"] = full_input
     except Exception:
         pass
     return result
@@ -299,16 +305,6 @@ def extract_text(response: Any) -> str:
     return "".join(parts)
 
 
-def extract_thinking(response: Any) -> str:
-    """Extract diagnostic reasoning text without treating it as user-visible content."""
-    parts: List[str] = []
-    for block in iter_content_blocks(response):
-        text = block_thinking(block)
-        if text:
-            parts.append(text)
-    return "\n".join(parts)
-
-
 def describe_content_blocks(response: Any) -> List[Dict[str, Any]]:
     """块级诊断信息，写入 raw 日志。
 
@@ -339,140 +335,13 @@ def describe_content_blocks(response: Any) -> List[Dict[str, Any]]:
     return described
 
 
-# ---------------------------------------------------------------------------
-# 二、文本判据（完全不依赖 API 字段）
-# ---------------------------------------------------------------------------
-@dataclass
-class TruncationHint:
-    """文本截断线索。
-
-    confidence 为 "high" 时可单独作为截断判定依据；"low" 只作日志线索，
-    避免把正常回复误判成截断。
-    """
-    reason: str
-    confidence: str
-
-
-_DEFAULT_CONTENT_START = "@SPORE:CONTENT_START"
-_DEFAULT_CONTENT_END = "@SPORE:CONTENT_END"
-_EXTRA_MARKERS = ("@SPORE:STOP_REASON", "@SPORE:RESULT")
-
-# 句子/代码块的正常收尾字符
-_TERMINAL_CHARS = frozenset("。！？；：、）】》」』…\"'`)]}>.!?;:,\n")
-
-
-def _spore_markers() -> Tuple[Dict[str, Tuple[str, str]], str, str]:
-    """取协议块标识符，以 protocol_manager 为唯一事实来源。
-
-    延迟导入避免模块加载期的循环依赖；导入失败时退回内置常量，
-    保证本模块在任何情况下都可用。
-    """
-    try:
-        from .text_protocol.protocol_manager import (
-            CONTENT_END_MARKER,
-            CONTENT_START_MARKER,
-            ProtocolManager,
-        )
-        return dict(ProtocolManager.BLOCK_MARKERS), CONTENT_START_MARKER, CONTENT_END_MARKER
-    except Exception:
-        return {}, _DEFAULT_CONTENT_START, _DEFAULT_CONTENT_END
-
-
-def _all_marker_names(
-    markers: Dict[str, Tuple[str, str]], content_start: str, content_end: str
-) -> Iterable[str]:
-    for pair in markers.values():
-        for marker in pair:
-            yield marker
-    yield content_start
-    yield content_end
-    for marker in _EXTRA_MARKERS:
-        yield marker
-
-
-def _has_partial_marker_tail(
-    text: str, markers: Dict[str, Tuple[str, str]], content_start: str, content_end: str
-) -> bool:
-    """尾部是不是一个写到一半的协议标识符。"""
-    tail = text[-64:]
-    at_pos = tail.rfind("@")
-    if at_pos < 0:
-        return False
-    fragment = tail[at_pos:]
-    if "\n" in fragment or len(fragment) < 2:
-        return False
-    for marker in _all_marker_names(markers, content_start, content_end):
-        if marker.startswith(fragment) and fragment != marker:
-            return True
-    return False
-
-
-def _ends_cleanly(text: str) -> bool:
-    stripped = text.rstrip()
-    if not stripped:
-        return True
-    last_line = stripped.rsplit("\n", 1)[-1].strip()
-    # 以协议标识符收尾属于正常结束（标识符本身不带标点）
-    if last_line.startswith("@SPORE:"):
-        return True
-    return stripped[-1] in _TERMINAL_CHARS
-
-
-def looks_truncated(text: Optional[str]) -> Optional[TruncationHint]:
-    """仅凭回复文本判断是否被截断，不依赖任何 API 字段。
-
-    用于中转不返回 stop_reason / finish_reason 的场景。
-    """
-    if not text or not text.strip():
-        return None
-
-    markers, content_start, content_end = _spore_markers()
-
-    # CONTENT 块未闭合 —— 最强判据：正文写到一半就断了
-    if text.count(content_start) > text.count(content_end):
-        return TruncationHint("unclosed_content_block", "high")
-
-    # 协议块未闭合
-    for name, pair in markers.items():
-        start_marker, end_marker = pair
-        if text.count(start_marker) > text.count(end_marker):
-            return TruncationHint("unclosed_block:{0}".format(name), "high")
-
-    # 尾部是残缺的协议标识符
-    if _has_partial_marker_tail(text, markers, content_start, content_end):
-        return TruncationHint("partial_marker_tail", "high")
-
-    # 代码围栏未闭合
-    if text.count("```") % 2 == 1:
-        return TruncationHint("unclosed_code_fence", "high")
-
-    # 收尾没有任何终止性字符（弱判据，只作线索）
-    if not _ends_cleanly(text):
-        return TruncationHint("no_terminal_punctuation", "low")
-
-    return None
-
-
-def hit_output_cap(
-    output_tokens: int, max_tokens: int, tolerance: float = 0.98
-) -> bool:
-    """输出 token 数是否贴住上限。
-
-    与 API 字段无关的第三条判据：即使中转把 stop_reason 抹掉了，
-    output_tokens 贴着 max_tokens 也几乎必然意味着被砍断。
-    """
-    if not output_tokens or not max_tokens or max_tokens <= 0:
-        return False
-    return output_tokens >= max_tokens * tolerance
-
-
 def is_effectively_empty(text: Optional[str]) -> bool:
     """回复是否为空（含纯空白）。"""
     return not text or not text.strip()
 
 
 # ---------------------------------------------------------------------------
-# 三、合并判定
+# 二、合并判定
 # ---------------------------------------------------------------------------
 def _merge_usage_fallback(
     usage: Dict[str, int], usage_fallback: Optional[Tuple[int, int]]
@@ -489,16 +358,13 @@ def _merge_usage_fallback(
         merged = dict(usage)
         if not merged.get("input_tokens"):
             merged["input_tokens"] = fb_input
+        if not merged.get("api_input_tokens"):
+            merged["api_input_tokens"] = fb_input
         if not merged.get("output_tokens"):
             merged["output_tokens"] = fb_output
-        # context_tokens 同步兜底，否则上下文压缩仍会低估规模
+        # input_tokens 已统一为完整上下文，context 不再重复叠加缓存明细。
         if not merged.get("context_tokens"):
-            merged["context_tokens"] = max(
-                merged.get("input_tokens") or 0,
-                (merged.get("input_tokens") or 0)
-                + (merged.get("cache_read_input_tokens") or 0)
-                + (merged.get("cache_creation_input_tokens") or 0),
-            )
+            merged["context_tokens"] = merged.get("input_tokens") or 0
         return merged
     except Exception:
         return usage
@@ -510,16 +376,14 @@ def assess(
     max_tokens: Optional[int] = None,
     usage_fallback: Optional[Tuple[int, int]] = None,
 ) -> Dict[str, Any]:
-    """综合 API 字段与文本特征，给出这次回复的健康状况。
+    """根据 API 终止状态给出回复健康信息，并附带 usage 与内容块诊断。
 
     Args:
         response: provider 返回的原始响应对象（对象或 dict 均可）
         text: 已提取出的用户可见正文
-        max_tokens: 本次请求设置的输出上限，用于"贴顶"判据
+        max_tokens: 保留的调用兼容参数；截断判定不再根据 token 用量推断
         usage_fallback: 调用路径自己解析出的 ``(input_tokens, output_tokens)``。
-            通用提取拿不到 usage 时（第三方中转返回非标准 usage 结构）用它兜底 ——
-            少了这个兜底，output_tokens 会是 0，"贴顶 max_tokens"这条截断判据
-            等于完全失效。
+            通用提取拿不到 usage 时用于补齐诊断与统计字段。
 
     Returns:
         含 api_stop_reason / finish_state / truncated / truncation_source /
@@ -528,49 +392,17 @@ def assess(
     api_stop_reason, finish_state = extract_finish_reason(response)
     usage = extract_usage(response)
     usage = _merge_usage_fallback(usage, usage_fallback)
-    hint = looks_truncated(text)
-    hint_scope = "text"
-    # A thinking-only response is not necessarily broken. However, when its
-    # reasoning is structurally incomplete (for example an unclosed code
-    # fence) and the gateway still says end_turn, preserve that contradiction
-    # instead of reducing it to a generic empty response.
-    if is_effectively_empty(text):
-        thinking_hint = looks_truncated(extract_thinking(response))
-        if thinking_hint is not None and thinking_hint.confidence == "high":
-            hint = thinking_hint
-            hint_scope = "thinking"
-
-    truncated = False
-    source = None
-    if finish_state == FINISH_TRUNCATED:
-        # API 明说了，优先采信
-        truncated = True
-        source = "api"
-    elif hit_output_cap(usage.get("output_tokens", 0), max_tokens or 0):
-        truncated = True
-        source = "output_cap"
-    elif (
-        finish_state in (FINISH_UNKNOWN, FINISH_COMPLETE)
-        and hint is not None
-        and hint.confidence == "high"
-    ):
-        # A structurally impossible tail is stronger evidence than a gateway's
-        # success label. Some compatible gateways terminate the SSE stream and
-        # synthesize end_turn even though the final content block is incomplete.
-        truncated = True
-        source = (
-            hint_scope
-            if finish_state == FINISH_UNKNOWN
-            else "{0}_api_conflict".format(hint_scope)
-        )
+    truncated = finish_state == FINISH_TRUNCATED
+    source = "api" if truncated else None
 
     return {
         "api_stop_reason": api_stop_reason,
         "finish_state": finish_state,
         "truncated": truncated,
         "truncation_source": source,
-        "truncation_hint": hint.reason if hint else None,
-        "truncation_confidence": hint.confidence if hint else None,
+        # 保留字段兼容日志与现有消费者；文本启发式不再参与截断判定。
+        "truncation_hint": None,
+        "truncation_confidence": None,
         "empty": is_effectively_empty(text),
         "refusal": finish_state == FINISH_REFUSAL,
         "paused": finish_state == FINISH_PAUSED,

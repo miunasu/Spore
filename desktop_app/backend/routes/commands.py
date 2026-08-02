@@ -235,9 +235,9 @@ def calculate_tokens(conversation_id: Optional[str] = None) -> Dict[str, Any]:
         return {
             "input": state.last_input_tokens,
             "output": state.last_output_tokens,
-            "cumulative_input": state.cumulative_input_tokens,  # 累加所有 input（用于算钱）
-            "cumulative_output": state.cumulative_output_tokens,  # 累加所有 output（用于算钱）
-            "context": state.last_input_tokens  # context = 当前的 input
+            "cumulative_input": state.cumulative_input_tokens,
+            "cumulative_output": state.cumulative_output_tokens,
+            "context": state.last_input_tokens  # 统一语义：完整 input 就是 context
         }
     except Exception as e:
         return {

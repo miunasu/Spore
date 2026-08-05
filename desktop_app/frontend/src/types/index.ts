@@ -288,10 +288,32 @@ export interface WSHtmlInteractionStateEvent {
   type: 'html_interaction_state';
   data: {
     artifact_id: string;
-    phase: 'idle' | 'analyzing' | 'frozen' | 'validating' | 'completed' | 'failed';
+    phase: 'idle' | 'collecting' | 'intent_ready' | 'analyzing' | 'superseded' | 'cancelled' |
+      'frozen' | 'barrier_committed' | 'protocol_retry_frozen' | 'validating' | 'persisting' |
+      'artifact_committed' | 'reloading' | 'interaction_ready' | 'pending_confirmation' |
+      'awaiting_user_decision' | 'implementing' | 'discarded' |
+      'completed' | 'failed' | 'failed_before_barrier' | 'failed_after_barrier' | 'orphaned' | 'recovering';
     frozen: boolean;
     revision: number;
-    stop_reason?: string | null;
+    state_revision?: number;
+    intent_epoch?: number;
+    active_intent_epoch?: number;
+    latest_pending_intent_epoch?: number;
+    coordinator_latest_epoch?: number | null;
+    agent_request_id?: string;
+    operation_id?: string;
+    base_html_revision?: number;
+    base_html_sha256?: string;
+    html_revision?: number;
+    html_sha256?: string;
+    agent_stop_reason?: string | null;
+    operation_outcome?: string | null;
+    validation_result?: unknown;
+    artifact_commit_result?: unknown;
+    document_load_result?: unknown;
+    lease_owner?: string | null;
+    lease_expires_at?: number | null;
+    heartbeat_at?: number | null;
     error?: string | null;
     updated_at: number;
   };

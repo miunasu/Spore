@@ -68,6 +68,10 @@ tests/
 tests/*
 !tests/test_html_artifacts.py
 !tests/test_frontend_agent.py
+!tests/test_chat_process_retry.py
+!tests/test_frontend_agent_transactions.py
+!tests/test_html_semantic_intent.py
+!tests/test_html_interaction_persistence.py
 !tests/test_text_protocol_actions.py
 !tests/test_patch_nsis_installer.py
 .pytest_cache/

@@ -502,38 +502,189 @@ export const filesApi = {
     ),
 };
 
+export type HtmlInteractionRequestMetadata = {
+  intent_epoch: number;
+  agent_request_id: string;
+  operation_id: string;
+  base_html_revision: number;
+  base_sha256: string;
+  state_revision: number;
+};
+
+export type HtmlInteractionState = {
+  artifact_id: string;
+  phase: 'idle' | 'collecting' | 'intent_ready' | 'analyzing' | 'superseded' | 'cancelled' |
+    'frozen' | 'barrier_committed' | 'protocol_retry_frozen' | 'validating' | 'persisting' |
+    'artifact_committed' | 'reloading' | 'interaction_ready' | 'pending_confirmation' |
+    'awaiting_user_decision' | 'implementing' | 'discarded' |
+    'completed' | 'failed' | 'failed_before_barrier' | 'failed_after_barrier' | 'orphaned' | 'recovering';
+  frozen: boolean;
+  revision: number;
+  state_revision?: number;
+  episode_id?: string;
+  intent_epoch?: number;
+  active_intent_epoch?: number;
+  latest_pending_intent_epoch?: number;
+  coordinator_latest_epoch?: number | null;
+  agent_request_id?: string;
+  operation_id?: string;
+  base_html_revision?: number;
+  base_html_sha256?: string;
+  html_revision?: number;
+  html_sha256?: string;
+  agent_stop_reason?: string | null;
+  operation_outcome?: string | null;
+  validation_result?: unknown;
+  artifact_commit_result?: unknown;
+  document_load_result?: unknown;
+  readiness_report?: Record<string, unknown> | null;
+  document_generation_id?: string | null;
+  restore_attempt_id?: string | null;
+  lease_owner?: string | null;
+  lease_expires_at?: number | null;
+  heartbeat_at?: number | null;
+  error?: string | null;
+  updated_at: number;
+};
+
+export type HtmlInteractResult = {
+  artifact: Record<string, unknown>;
+  content: string;
+  generated: boolean;
+  decision: 'updated' | 'no_change' | 'superseded' | 'aborted' | 'pending_confirmation' | 'awaiting_user_decision' | 'discarded';
+  intent?: string;
+  reason?: string;
+  question?: string;  // present when decision === 'awaiting_user_decision'
+  event_count: number;
+  iterations?: number;
+  mutation_count?: number;
+  intent_epoch?: number;
+  agent_request_id?: string;
+  operation_id?: string;
+  base_html_revision?: number;
+  base_html_sha256?: string;
+  html_revision?: number;
+  html_sha256?: string;
+  state_revision?: number;
+  coordinator_latest_epoch?: number | null;
+  requires_interaction_ready_ack?: boolean;
+  document_generation_id?: string;
+  restore_attempt_id?: string;
+  bridge_capability?: string;
+  operation_outcome?: string;
+};
+
 export const htmlApi = {
   load: (artifactId: string) =>
     request<{
       artifact: Record<string, unknown>;
       content: string;
+      html_revision?: number;
+      html_sha256?: string;
     }>(`/api/html/${encodeURIComponent(artifactId)}`),
 
   interactionState: (artifactId: string) =>
-    request<{
-      artifact_id: string;
-      phase: 'idle' | 'analyzing' | 'frozen' | 'validating' | 'completed' | 'failed';
-      frozen: boolean;
-      revision: number;
-      stop_reason?: string | null;
-      error?: string | null;
-      updated_at: number;
-    }>(`/api/html/${encodeURIComponent(artifactId)}/interaction-state`),
+    request<HtmlInteractionState>(`/api/html/${encodeURIComponent(artifactId)}/interaction-state`),
 
-  interact: (artifactId: string, events: Array<Record<string, unknown>>) =>
-    request<{
-      artifact: Record<string, unknown>;
-      content: string;
-      generated: boolean;
-      decision: 'updated' | 'no_change';
-      intent?: string;
-      event_count: number;
-      iterations?: number;
-      mutation_count?: number;
-    }>(`/api/html/${encodeURIComponent(artifactId)}/interact`, {
+  interact: (
+    artifactId: string,
+    events: Array<Record<string, unknown>>,
+    identity: HtmlInteractionRequestMetadata,
+    intentEpisode: { episode_id: string } & Record<string, unknown>,
+  ) =>
+    request<HtmlInteractResult>(`/api/html/${encodeURIComponent(artifactId)}/interact`, {
       method: 'POST',
-      body: JSON.stringify({ events }),
+      body: JSON.stringify({
+        events,
+        episode_id: intentEpisode.episode_id,
+        intent_epoch: identity.intent_epoch,
+        agent_request_id: identity.agent_request_id,
+        operation_id: identity.operation_id,
+        base_html_revision: identity.base_html_revision,
+        base_html_sha256: identity.base_sha256,
+        state_revision: identity.state_revision,
+        intent_snapshot: {
+          ...intentEpisode,
+          intent_epoch: identity.intent_epoch,
+          request_identity: {
+            episode_id: intentEpisode.episode_id,
+            intent_epoch: identity.intent_epoch,
+            agent_request_id: identity.agent_request_id,
+            operation_id: identity.operation_id,
+            base_html_revision: identity.base_html_revision,
+            base_sha256: identity.base_sha256,
+            state_revision: identity.state_revision,
+          },
+        },
+      }),
     }),
+
+  interactionHeartbeat: (artifactId: string, operationId: string, agentRequestId: string) =>
+    request<HtmlInteractionState>(`/api/html/${encodeURIComponent(artifactId)}/interaction-heartbeat`, {
+      method: 'POST',
+      body: JSON.stringify({ operation_id: operationId, agent_request_id: agentRequestId }),
+    }),
+
+  interactionCancel: (
+    artifactId: string,
+    payload: {
+      operation_id: string;
+      agent_request_id: string;
+      intent_epoch: number;
+      reason?: string;
+    },
+  ) => request<HtmlInteractionState>(`/api/html/${encodeURIComponent(artifactId)}/interaction-cancel`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+
+  interactionReady: (
+    artifactId: string,
+    payload: {
+      operation_id: string;
+      agent_request_id: string;
+      html_sha256: string;
+      state_revision: number;
+      document_generation_id: string;
+      restore_attempt_id: string;
+      bridge_capability: string;
+      readiness_report?: Record<string, unknown>;
+      ready: boolean;
+      error?: string;
+    },
+  ) => request<HtmlInteractionState>(`/api/html/${encodeURIComponent(artifactId)}/interaction-ready`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }),
+
+  interactionRecover: (
+    artifactId: string,
+    payload: { operation_id: string; agent_request_id: string; expected_state_revision: number },
+  ) => request<{ recovered: boolean; operation_id?: string; state: HtmlInteractionState }>(
+    `/api/html/${encodeURIComponent(artifactId)}/interaction-recover`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  ),
+
+  interactionConfirm: (
+    artifactId: string,
+    payload: { operation_id: string; agent_request_id: string },
+  ) => request<HtmlInteractResult>(
+    `/api/html/${encodeURIComponent(artifactId)}/interaction-confirm`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  ),
+
+  interactionResume: (
+    artifactId: string,
+    payload: {
+      operation_id: string;
+      agent_request_id: string;
+      user_agreed: boolean;
+      user_response?: string;
+    },
+  ) => request<HtmlInteractResult>(
+    `/api/html/${encodeURIComponent(artifactId)}/interaction-resume`,
+    { method: 'POST', body: JSON.stringify(payload) },
+  ),
 };
 
 // Agents API（只在主后端）
@@ -705,6 +856,12 @@ export const settingsApi = {
     request<{ success: boolean; path?: string; error?: string }>(
       '/api/settings/env/open',
       { method: 'POST' }
+    ),
+
+  saveEnvFile: (content: string) =>
+    request<{ success: boolean; error?: string }>(
+      '/api/settings/env/save',
+      { method: 'POST', body: JSON.stringify({ content }), headers: { 'Content-Type': 'application/json' } }
     ),
 
   applyEnvFile: () =>

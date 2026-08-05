@@ -11,7 +11,7 @@ IPC 由 base.ipc_manager.initialize_ipc_system() 统一初始化。
 from .supervisor import supervisor, end_check
 from .mode_selector import select_context_mode, get_mode_description
 from .security_agent import security_check, analyze_command_async, analyze_commands_async
-from .frontend_agent import expand_html, generate_html, process_html_interactions
+from .frontend_agent import expand_html, process_html_interactions
 
 __all__ = [
     "supervisor",
@@ -21,7 +21,6 @@ __all__ = [
     "security_check",
     "analyze_command_async",
     "analyze_commands_async",
-    "generate_html",
     "expand_html",
     "process_html_interactions",
 ]

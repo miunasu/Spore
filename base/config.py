@@ -144,9 +144,9 @@ class Config:
         except ValueError:
             self.frontend_agent_timeout = 180
         try:
-            self.frontend_agent_max_iterations: int = int(os.getenv("FRONTEND_AGENT_MAX_ITERATIONS", "3"))
+            self.frontend_agent_max_iterations: int = int(os.getenv("FRONTEND_AGENT_MAX_ITERATIONS", "10"))
         except ValueError:
-            self.frontend_agent_max_iterations = 3
+            self.frontend_agent_max_iterations = 10
         
         # 系统提示文件名（不含路径，位于 prompt 目录下）
         # 可选：prompt.md（默认）、prompt_claude.md（Claude 专用）
@@ -612,6 +612,7 @@ class Config:
                 "effort": pick("anthropic_effort"),
                 "thinking_mode": pick("anthropic_thinking_mode"),
                 "thinking_budget_tokens": pick("anthropic_thinking_budget_tokens"),
+                "max_output_tokens": pick("max_output_tokens"),
             }
         return {
             "sdk": "openai",
@@ -623,6 +624,7 @@ class Config:
             "effort": None,
             "thinking_mode": None,
             "thinking_budget_tokens": None,
+            "max_output_tokens": pick("max_output_tokens"),
         }
 
     def _main_llm_layer(self) -> dict:
@@ -661,6 +663,12 @@ class Config:
         ura = g_lower("USE_RESPONSES_API")
         use_resp = True if ura == "true" else (False if ura == "false" else None)
 
+        max_tokens_raw = g("MAX_OUTPUT_TOKENS")
+        try:
+            max_output_tokens = int(max_tokens_raw) if max_tokens_raw else None
+        except ValueError:
+            max_output_tokens = None
+
         return {
             "sdk": g_lower("LLM_SDK"),
             "openai_api_key": g("OPENAI_API_KEY"),
@@ -674,6 +682,7 @@ class Config:
             "anthropic_effort": g_lower("ANTHROPIC_EFFORT"),
             "anthropic_thinking_mode": g_lower("ANTHROPIC_THINKING_MODE"),
             "anthropic_thinking_budget_tokens": budget,
+            "max_output_tokens": max_output_tokens,
         }
     
     def get_max_tokens(self) -> int:

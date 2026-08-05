@@ -109,3 +109,31 @@ def test_html_virtual_root_is_created_and_hides_managed_index(monkeypatch, tmp_p
 def test_artifact_id_rejects_unsafe_values(artifact_id):
     with pytest.raises(ValueError):
         validate_artifact_id(artifact_id)
+
+
+def test_save_if_sha256_is_an_atomic_compare_and_swap(tmp_path):
+    store = HtmlArtifactStore(tmp_path / "html")
+    first = store.save("demo", VALID_HTML)
+    base_sha = first["artifact"]["sha256"]
+
+    updated = store.save_if_sha256(
+        "demo",
+        VALID_HTML.replace("Run", "Agent update"),
+        expected_sha256=base_sha,
+    )
+    assert "Agent update" in updated["content"]
+
+    with pytest.raises(RuntimeError, match="revision conflict"):
+        store.save_if_sha256(
+            "demo",
+            VALID_HTML.replace("Run", "Stale update"),
+            expected_sha256=base_sha,
+        )
+    assert "Agent update" in store.load("demo")["content"]
+
+
+def test_save_if_sha256_rejects_invalid_digest(tmp_path):
+    store = HtmlArtifactStore(tmp_path / "html")
+    store.save("demo", VALID_HTML)
+    with pytest.raises(ValueError, match="expected_sha256"):
+        store.save_if_sha256("demo", VALID_HTML, expected_sha256="not-a-sha")

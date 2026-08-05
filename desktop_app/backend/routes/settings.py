@@ -278,10 +278,22 @@ def apply_env_file() -> Dict[str, Any]:
     try:
         return apply_runtime_config()
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
+
+
+class EnvSaveRequest(BaseModel):
+    content: str
+
+
+@router.post("/env/save")
+def save_env_file(request: EnvSaveRequest) -> Dict[str, Any]:
+    """Write full .env content and reload runtime config."""
+    try:
+        env_path = _get_env_path()
+        env_path.write_text(request.content, encoding="utf-8")
+        return apply_runtime_config()
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 @router.get("/profiles/list")

@@ -123,6 +123,17 @@ def extract_stop_reason_blocks(text: str) -> tuple[List[Dict[str, Any]], Optiona
         if err:
             return blocks, err
         end = head_end + consumed
+        if consumed == 0 and (value or "").strip().startswith(CONTENT_START_MARKER):
+            content_start_in_value = value.find(CONTENT_START_MARKER)
+            content_end_in_value = value.find(
+                CONTENT_END_MARKER,
+                content_start_in_value + len(CONTENT_START_MARKER),
+            )
+            if content_end_in_value >= 0:
+                # The head regex spans the whole line. Keep the protocol span
+                # bounded by CONTENT_END so same-line trailing content remains
+                # visible to terminal-boundary validation.
+                end = match.start(1) + content_end_in_value + len(CONTENT_END_MARKER)
         blocks.append({
             "name": "STOP_REASON",
             "start": head_start,
@@ -461,6 +472,14 @@ class ProtocolManager:
             final_spans.append((stop_block["start"], stop_block["end"]))
         stop_spans = list(final_spans)
 
+        if len(final_spans) > 1:
+            return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:STOP_REASON ="), ""
+        if final_spans and response[final_spans[0][1]:].strip():
+            return blocks, ProtocolError(
+                "content_after_stop_reason",
+                "@SPORE:STOP_REASON ???????????????????JSON ????",
+            ), ""
+
         # Standard block markers only; STOP_REASON spans are handled above.
         marker_regex = re.compile(r"(?m)^[ \t]*(@SPORE:[A-Z_]+(?:_START|_END)?@?)[ \t]*(?:\r?\n|$)")
         markers = list(marker_regex.finditer(response))
@@ -554,8 +573,6 @@ class ProtocolManager:
                 ), ""
             return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: {end_marker}"), ""
 
-        if len(final_spans) > 1:
-            return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:STOP_REASON ="), ""
         if final_spans:
             content_spans.append(final_spans[0])
 

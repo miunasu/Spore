@@ -359,6 +359,7 @@ const commandMenu = {
       adaptiveRecommended: 'adaptive（推荐）',
       enabledManual: 'enabled（手动 budget）',
       noneExplicit: 'none（明确不传此参数）',
+      disabled: 'disable（关闭思考）',
     },
 
     agentBase: {
@@ -376,6 +377,7 @@ const commandMenu = {
       anthropicModel: 'Anthropic 模型',
       advancedParams: '高级参数 · {sdk}（留空继承上层基座）',
       useResponsesApi: '使用 Responses API',
+      maxOutputTokens: '最大输出 Token 数',
       targets: {
         subAgentLabel: '子 Agent（默认基座）',
         subAgentHint: '所有子 Agent / AutoAgent 的默认基座；留空则继承主 Agent',
@@ -817,6 +819,7 @@ const commandMenu = {
       adaptiveRecommended: 'adaptive (recommended)',
       enabledManual: 'enabled (manual budget)',
       noneExplicit: 'none (explicitly omit this param)',
+      disabled: 'disable (thinking off)',
     },
 
     agentBase: {
@@ -834,6 +837,7 @@ const commandMenu = {
       anthropicModel: 'Anthropic model',
       advancedParams: 'Advanced params · {sdk} (leave empty to inherit upper base)',
       useResponsesApi: 'Use Responses API',
+      maxOutputTokens: 'Max Output Tokens',
       targets: {
         subAgentLabel: 'Sub-agent (default base)',
         subAgentHint: 'Default base for all sub-agents / AutoAgents; inherits the main agent if empty',

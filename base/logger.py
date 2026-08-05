@@ -91,6 +91,7 @@ class SporeLogger:
     # 类变量：当前进程的日志根会话目录（所有实例共享）
     _session_log_dir: Optional[Path] = None
     _handler_lock = threading.RLock()
+    _frontend_agent_logger: Optional[logging.Logger] = None
 
     def __init__(self, log_dir: Optional[str] = None, start_monitor: bool = True):
         if getattr(sys, "frozen", False):
@@ -369,6 +370,49 @@ class SporeLogger:
         loggers["general"].debug(log_message)
         self._send_to_monitor("general", log_message)
 
+    def _get_frontend_agent_logger(self) -> logging.Logger:
+        """懒初始化进程级前端 Agent 日志器（单例，不区分会话）。"""
+        with SporeLogger._handler_lock:
+            if SporeLogger._frontend_agent_logger is not None:
+                return SporeLogger._frontend_agent_logger
+            log_file = self.get_process_log_dir() / "frontend_agent.log"
+            SporeLogger._frontend_agent_logger = self._create_logger(
+                "frontend_agent.process", log_file
+            )
+            return SporeLogger._frontend_agent_logger
+
+    def log_frontend_agent(self, event: str, data: Optional[Dict[str, Any]] = None) -> None:
+        """前端 Agent 专用日志，落盘到进程级会话目录下的 frontend_agent.log。
+
+        不区分会话、不区分正常/异常，全量记录前端 Agent 的操作流水。
+        属于旁路记录，任何异常都不影响主流程。
+        """
+        try:
+            entry: Dict[str, Any] = {"event": event}
+            if data:
+                entry.update(data)
+            self._get_frontend_agent_logger().debug(
+                json.dumps(entry, ensure_ascii=False, default=str)
+            )
+        except Exception:
+            pass
+
+    def log_frontend_agent_raw(self, payload: Any) -> None:
+        """前端 Agent LLM 响应原文落盘到 frontend_agent.log（分隔符格式，不 JSON 封装）。
+
+        与 log_raw_received 格式一致，但写入 frontend_agent.log 而非会话 raw.log。
+        属于旁路记录，任何异常都不影响主流程。
+        """
+        try:
+            body = payload if isinstance(payload, str) else self._stringify_raw_payload(payload)
+            self._get_frontend_agent_logger().debug(
+                "===== FRONTEND AGENT RAW START =====\n"
+                + body
+                + "\n===== FRONTEND AGENT RAW END ====="
+            )
+        except Exception:
+            pass
+
     def log_raw_received(
         self,
         payload: Any,
@@ -518,6 +562,16 @@ def log_tool_error(tool_name: str, error_message: str, args: Optional[Dict] = No
 
 def log_info(message: str, context: Optional[Dict[str, Any]] = None, args: Optional[Dict[str, Any]] = None):
     get_logger().log_info(message, context, args)
+
+
+def log_frontend_agent(event: str, data: Optional[Dict[str, Any]] = None) -> None:
+    """前端 Agent 专用日志（进程级，不区分会话）。旁路记录，不抛异常。"""
+    get_logger().log_frontend_agent(event, data)
+
+
+def log_frontend_agent_raw(payload: Any) -> None:
+    """前端 Agent LLM 响应原文落盘到 frontend_agent.log（分隔符格式）。旁路记录。"""
+    get_logger().log_frontend_agent_raw(payload)
 
 
 def log_raw_received(

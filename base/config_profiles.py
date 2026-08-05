@@ -77,9 +77,16 @@ PROFILE_ENV_KEYS: List[str] = [
     "SUB_AGENT_OPENAI_API_KEY",
     "SUB_AGENT_OPENAI_API_URL",
     "SUB_AGENT_OPENAI_MODEL",
+    # SUB_AGENT advanced params (were missing — caused silent drop on save/apply)
+    "SUB_AGENT_USE_RESPONSES_API",
+    "SUB_AGENT_OPENAI_REASONING_EFFORT",
     "SUB_AGENT_ANTHROPIC_API_KEY",
     "SUB_AGENT_ANTHROPIC_API_URL",
     "SUB_AGENT_ANTHROPIC_MODEL",
+    "SUB_AGENT_ANTHROPIC_EFFORT",
+    "SUB_AGENT_ANTHROPIC_THINKING_MODE",
+    "SUB_AGENT_ANTHROPIC_THINKING_BUDGET_TOKENS",
+    "SUB_AGENT_MAX_OUTPUT_TOKENS",
     "LLM_STREAM_ENABLED",
     "CLEAN_SDK_HEADERS",
     "CLEAN_AUTH_HEADER",
@@ -90,6 +97,27 @@ PROFILE_ENV_KEYS: List[str] = [
     "CONTEXT_WARNING_THRESHOLD",
     "MAX_SINGLE_MESSAGE_RATIO",
     "API_TIMEOUT",
+]
+
+# Granular per-agent base keys (AGENT_SUPERVISOR/MODE_SELECTOR/SECURITY/FRONTEND).
+# Generated to stay in sync with the frontend AGENT_BASE_PROFILE_KEYS constant.
+# All were missing from PROFILE_ENV_KEYS, causing silent drop on profile save/apply.
+_AGENT_BASE_PREFIXES = [
+    "AGENT_SUPERVISOR",
+    "AGENT_MODE_SELECTOR",
+    "AGENT_SECURITY",
+    "AGENT_FRONTEND",
+]
+_AGENT_BASE_SUFFIXES = [
+    "LLM_SDK",
+    "OPENAI_API_KEY", "OPENAI_API_URL", "OPENAI_MODEL",
+    "USE_RESPONSES_API", "OPENAI_REASONING_EFFORT",
+    "ANTHROPIC_API_KEY", "ANTHROPIC_API_URL", "ANTHROPIC_MODEL",
+    "ANTHROPIC_EFFORT", "ANTHROPIC_THINKING_MODE", "ANTHROPIC_THINKING_BUDGET_TOKENS",
+    "MAX_OUTPUT_TOKENS",
+]
+PROFILE_ENV_KEYS = PROFILE_ENV_KEYS + [
+    f"{p}_{s}" for p in _AGENT_BASE_PREFIXES for s in _AGENT_BASE_SUFFIXES
 ]
 
 VALID_SDKS = set(MAIN_SDK_PROFILE_KEYS.keys())
@@ -197,6 +225,12 @@ def _normalize_values(values: Dict[str, Any]) -> Dict[str, str]:
         and "CLEAN_AUTH_HEADER" in raw_values
     ):
         normalized["CLEAN_AUTH_HEADER"] = raw_values["CLEAN_AUTH_HEADER"]
+
+    # Granular per-agent base keys — copy all that survived the whitelist filter.
+    for key in PROFILE_ENV_KEYS:
+        if key.startswith(tuple(p + "_" for p in _AGENT_BASE_PREFIXES)):
+            if key in raw_values and key not in normalized:
+                normalized[key] = raw_values[key]
 
     return normalized
 

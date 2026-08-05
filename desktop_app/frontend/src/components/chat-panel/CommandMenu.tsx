@@ -203,6 +203,7 @@ const ENV_BASIC_CONFIG_GROUPS: EnvConfigGroup[] = [
         label: 'Reasoning Effort',
         type: 'select',
         options: [
+          { value: 'disable', label: 'commandMenu.opts.disabled' },
           { value: 'low', label: 'low' },
           { value: 'medium', label: 'medium' },
           { value: 'high', label: 'high' },
@@ -860,6 +861,8 @@ const agentBaseKeys = (prefix: string) => ({
   anthropicEffort: `${prefix}_ANTHROPIC_EFFORT`,
   thinkingMode: `${prefix}_ANTHROPIC_THINKING_MODE`,
   thinkingBudget: `${prefix}_ANTHROPIC_THINKING_BUDGET_TOKENS`,
+  // SDK 无关
+  maxOutputTokens: `${prefix}_MAX_OUTPUT_TOKENS`,
 });
 
 // Agent 基座（颗粒化）编辑器：下拉切换配置目标，字段按有效 SDK 动态映射
@@ -968,6 +971,7 @@ const AgentBaseEditor: React.FC<{
                 className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50"
               >
                 <option value="">{inheritHint}</option>
+                <option value="disable">{t('commandMenu.opts.disabled')}</option>
                 <option value="none">{t('commandMenu.opts.noneExplicit')}</option>
                 {['low', 'medium', 'high', 'xhigh'].map((o) => (
                   <option key={o} value={o}>{o}</option>
@@ -1017,6 +1021,17 @@ const AgentBaseEditor: React.FC<{
             </div>
           </>
         )}
+        {/* Max Output Tokens — SDK 无关 */}
+        <div className="space-y-1">
+          <label className="text-xs text-spore-muted">{t('commandMenu.agentBase.maxOutputTokens')}</label>
+          <input
+            type="text"
+            value={envValues[keys.maxOutputTokens] || ''}
+            onChange={(e) => updateEnvValue(keys.maxOutputTokens, e.target.value)}
+            placeholder={inheritHint}
+            className="w-full px-3 py-2 text-sm bg-spore-bg border border-spore-border/50 rounded-lg text-spore-text focus:outline-none focus:border-spore-highlight/50 font-mono"
+          />
+        </div>
       </div>
     </div>
   );
@@ -1731,17 +1746,17 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     setEnvError(null);
     try {
       const newContent = updateEnvContent(envContent, envValues);
-      await filesApi.write('.env', newContent);
-      const applyResponse = await settingsApi.applyEnvFile();
-      if (!applyResponse.success) {
-        throw new Error(applyResponse.error || t('commandMenu.err.applyEnv'));
+      const saveResponse = await settingsApi.saveEnvFile(newContent);
+      if (!saveResponse.success) {
+        throw new Error(saveResponse.error || t('commandMenu.err.saveFailed'));
       }
+      // /env/save already calls apply_runtime_config on the backend — no separate apply needed.
       setEnvContent(newContent);
       await loadConfigProfiles();
       setEnvError(null);
       setModalContent({
         title: t('common.success'),
-        content: applyResponse.message || t('commandMenu.env.saved'),
+        content: t('commandMenu.env.saved'),
       });
     } catch (err) {
       setEnvError(err instanceof Error ? err.message : t('commandMenu.err.saveFailed'));

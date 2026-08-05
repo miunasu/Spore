@@ -1,862 +1,655 @@
-﻿# 动态 HTML 用户语义意图与 Frontend Agent 调度策略
+# 动态 HTML 语义意图与修改事务协议（已实施）
 
-> 状态：策略设计稿
->
-> 本文描述动态 HTML 场景下，如何从用户的连续操作中归纳当前语义意图，并将其交给 Frontend Agent 判断和执行。本文不规定具体代码实现。
+> 状态：已实施协议说明
+> 适用范围：Spore HTML artifact 的用户行为采集、语义意图归纳、Frontend Agent 调度、领域知识供给、HTML mutation、冻结、校验、加载与解冻。
+> 本文使用“必须 / MUST”描述协议不变量，不再作为候选设计或固定五秒采集方案。
 
-## 1. 背景与目标
+## 1. 协议目标
 
-主 Agent 可以生成结构完整的动态 HTML，但页面内容或交互能力不一定完整。例如，PE 文件结构页面已经展示 `IMAGE_SECTION_HEADER` 的所有字段，却没有解释 `PointerToRawData` 等底层字段的含义。
+动态 HTML 页面可能已经具备完整结构和本地交互，但缺少某些内容或能力。例如，PE 文件结构页面可以展示 `IMAGE_SECTION_HEADER.PointerToRawData` 及当前值，却没有解释字段定义和该值在当前文件中的意义。
 
-用户可能通过双击字段名、选中文字、点击字段值、连续查看多个字段等行为表达需求。系统需要理解这些行为背后的目的，而不是把全部原始事件按时间顺序发送给 Frontend Agent。
+系统不把鼠标和键盘流水直接排队交给 Agent，而是维护当前语义焦点，将相关信号归纳为一个可替换的 semantic intent episode。只有页面尚未满足且意图足够明确时，才调用 Frontend Agent。只有 Frontend Agent 决定持久修改 HTML 时，才进入 `interrupt` barrier、冻结、mutation 校验、CAS 持久化、重载、恢复、ready 后端确认与解冻流程。
 
-本策略的目标是：
+协议保证：
 
-1. 准确识别用户当前关注的语义对象。
-2. 将连续、模糊的低层操作归纳为一个可理解的意图片段。
-3. 只把仍然有效、页面尚未满足的意图交给 Frontend Agent。
-4. 避免网络延迟和 FIFO 队列导致 Agent 持续处理过时操作。
-5. 保持“用户意图”和“修改 HTML”之间的边界。
-6. 只有 Frontend Agent 确认需要修改 HTML 时，才进入 `interrupt`、冻结、修改、校验和解冻流程。
-
----
-
-## 2. 核心原则
-
-### 2.1 不把原始操作流水直接交给 Agent
-
-系统可以采集可信的用户事件，但 Frontend Agent 不应读取完整事件流水。
-
-原始行为可能是：
-
-```text
-单击表格
-鼠标按下
-拖动
-选择文字
-松开鼠标
-双击字段
-点击字段值
-滚动页面
-```
-
-Agent 应收到的是归纳后的当前意图快照：
-
-```text
-用户当前聚焦 IMAGE_SECTION_HEADER.PointerToRawData。
-用户双击字段名，随后关注当前值 0x00000400。
-页面没有提供解释，也没有对该操作产生本地响应。
-最可能意图是了解字段定义，并结合当前值解释其实际作用。
-```
-
-### 2.2 观察、推断和确认必须分层
-
-系统应区分：
-
-1. **行为信号**：客观发生了什么。
-2. **语义焦点**：用户正在关注什么对象。
-3. **候选意图**：用户可能想获得什么结果。
-4. **最终意图**：经强信号、显式动作或 Agent 综合判断后形成的当前请求。
-
-本地系统负责整理证据和候选，不应在信息不足时武断地确定最终意图。
-
-### 2.3 用户意图不等于 HTML 修改请求
-
-用户双击 `PointerToRawData` 的目的通常是“了解这个字段”，而不是“修改网页”。
-
-Frontend Agent 应先判断：
-
-- 页面是否已经有可展开的解释；
-- 页面是否已经有可更新的语义说明区；
-- 是否只需要使用现有交互；
-- 是否确实存在内容或交互能力缺口；
-- 是否需要修改 HTML 才能满足用户。
-
-只有最后一种情况才进入 HTML 修改协议。
-
-### 2.4 当前意图优先，不处理历史操作队列
-
-系统不应为每个操作或每个采集批次建立 FIFO Agent 任务。
-
-每个 HTML artifact 原则上只维护：
-
-```text
-当前正在分析的意图
-最新待处理意图
-```
-
-新意图出现后，旧的未承诺请求应被覆盖、合并或取消，而不是继续排队。
-
-### 2.5 页面本地已经满足的操作不升级给 Agent
-
-在形成 Agent 请求之前，应先判断页面是否已经响应，例如：
-
-- 内容已经展开；
-- 标签页已经切换；
-- 过滤结果已经变化；
-- 说明区域已经更新；
-- 目标内容已经出现；
-- 选择状态或控件值已经改变。
-
-如果页面已经满足用户行为，就不调用 Frontend Agent。
+1. 普通浏览不会持续触发 Agent。
+2. 模糊选择先在本地消歧。
+3. 复制、取消和新焦点可以在 barrier 前取消旧意图。
+4. 网络延迟不会形成 FIFO 历史任务队列。
+5. iframe 信号仅作为不可信候选证据。
+6. 语义对象、展示位置和 mutation 目标使用不同引用。
+7. 领域事实由主 Agent、专业 Agent 或批准的知识源提供。
+8. `interrupt` 只负责 Freeze Signal，不代表 mutation 已被接受。
+9. `@SPORE:STOP_REASON` 只结束 Agent 生命周期，不代表 HTML 事务成功。
+10. 页面只有在提交、加载、状态恢复和后端 ready ACK 完成后才正常解冻。
 
 ---
 
-## 3. 总体处理链路
+## 2. 实施链路
+
+一个完整交互按以下阶段处理：
 
 ```text
-可信用户行为
-    ↓
-识别语义对象
-    ↓
-检测页面本地响应
-    ↓
-合并为当前意图片段
-    ↓
-动态窗口判断是否继续等待
-    ↓
-评估意图强度与候选意图
-    ↓
-弱信号：只记录或取消
-模糊信号：提供本地意图操作入口
-强/明确信号：生成当前意图快照
-    ↓
-Latest Wins 调度
-    ↓
-Frontend Agent 判断是否需要改变页面
-    ↓
-无需修改：结束或使用现有页面能力
-需要修改：输出 interrupt，进入冻结事务
+可信浏览器事件
+→ iframe bridge 生成有界候选观察
+→ Host 归一化、裁剪敏感值
+→ 更新 artifact focus memory
+→ 动态窗口合并或切分意图片段
+→ 本地响应判断
+→ 弱信号仅更新焦点 / 模糊信号显示本地候选工具条
+→ 形成 semantic intent episode
+→ Latest Wins 注册、替换或取消请求
+→ 必要时通过主 Agent 知识链路取得 knowledge_packet
+→ Frontend Agent 判断 no_change 或 mutate
+→ mutate 的首个非空输出为独立 interrupt
+→ 当前请求建立 barrier 并冻结整个预览
+→ Spore 通用协议结束 Agent 输出
+→ mutation schema、引用、语法与安全校验
+→ 基础版本检查与 CAS 持久化
+→ 加载新文档并恢复运行时状态
+→ iframe init/restore ready
+→ 后端匹配 operation 的 ready ACK
+→ 解冻并执行唯一 latest pending intent
 ```
+
+观察、意图、知识、页面表达和提交事务是五个不同职责层。任何一层都不得把自己的成功等同于下一层成功。
 
 ---
 
-## 4. 四层意图模型
+## 3. 信号等级与本地处理
 
-### 4.1 行为信号层
+### 3.1 弱信号
 
-行为信号只描述事实，不直接解释目的。
+典型事件：
 
-典型信号包括：
+- 单次普通点击；
+- 短暂停留；
+- 无显式请求的键盘导航；
+- 页面已完成预期响应的控件操作。
 
-- 普通单击；
-- 双击；
-- 最终文本选择；
-- 复制；
-- 点击相邻字段值；
-- 连续选择两个同类对象；
-- 点击“解释”“对比”“展开”等显式动作；
-- 页面在行为后是否发生相关变化；
-- 用户是否迅速转移焦点。
+处理：
 
-高频中间状态不应成为独立意图，例如拖选过程中的每次选区变化。
+- 更新 focus memory；
+- 不直接调用 Agent；
+- 可以作为同一焦点后续强信号的上下文；
+- 焦点转移到无关结构时关闭旧片段。
 
-### 4.2 语义焦点层
+### 3.2 模糊信号
 
-系统应尽量确定用户操作对应的语义对象，而不只是 DOM 节点或文字字符串。
-
-语义焦点应包含：
-
-- 对象名称；
-- 对象类型，例如字段、值、节点、代码符号、协议项、表格行；
-- 所属领域；
-- 标题层级和结构路径；
-- 所在表格及行列关系；
-- 当前值、大小、偏移等实例数据；
-- 附近相关对象；
-- 页面是否已经存在该对象的解释；
-- 页面是否存在统一的解释出口。
-
-PE 示例：
-
-```text
-领域：PE 文件结构
-路径：Section Table → IMAGE_SECTION_HEADER → PointerToRawData
-对象类型：字段
-当前值：0x00000400
-大小：4 bytes
-偏移：0x14
-现有解释：无
-```
-
-同一个操作只有与语义焦点结合后才有意义：
-
-```text
-双击 + 普通段落词语
-双击 + PE 结构字段
-双击 + 字段当前值
-```
-
-这三者不应产生相同推断。
-
-### 4.3 候选意图层
-
-本地系统根据语义焦点、行为信号和页面状态生成有限数量的候选意图。
-
-例如：
-
-```text
-候选一：解释 PointerToRawData 的标准定义。
-候选二：解释当前值 0x400 在该 PE 文件中的实际意义。
-候选三：展开 IMAGE_SECTION_HEADER 的完整字段说明。
-```
-
-候选意图应附带证据和明确程度，但不需要伪造过度精确的概率。
-
-### 4.4 最终意图层
-
-最终意图由以下任一方式形成：
-
-1. 用户点击了明确的本地动作，例如“解释”；
-2. 多个相关强信号共同指向同一目标；
-3. Frontend Agent 根据候选和上下文完成最终判断；
-4. 用户的连续行为将原候选增强为更具体的意图。
-
-最终意图描述用户希望得到的结果，不描述具体 mutation：
-
-```text
-解释 PointerToRawData 的含义，并结合当前值 0x00000400 说明它在该 PE 文件中的作用。
-```
-
----
-
-## 5. 意图片段与工作记忆
-
-### 5.1 意图片段
-
-“意图片段”是用户围绕同一个语义目标进行的一组相关行为。
-
-例如：
-
-```text
-双击 PointerToRawData
-→ 选择字段名
-→ 点击同一行的值 0x400
-```
-
-这些行为应合并成一个意图片段，而不是三个 Agent 请求：
-
-```text
-解释 PointerToRawData，并结合当前值 0x400 说明。
-```
-
-### 5.2 工作记忆
-
-每个 HTML artifact 只维护短期、可替换的当前意图工作记忆。概念上包含：
-
-```text
-当前语义焦点
-可能相关的第二焦点
-少量高价值行为证据
-候选意图
-是否有显式动作
-页面本地响应结果
-意图片段状态
-当前页面版本
-```
-
-工作记忆不是完整用户行为历史。它不应无限积累事件。
-
-### 5.3 合并规则
-
-以下行为通常可以合并：
-
-- 同一字段的双击和最终选择；
-- 字段名称与同一行字段值；
-- 同一结构内短时间关注的两个字段；
-- 重复操作同一个未响应对象；
-- 连续查看同类字段形成的浏览模式。
-
-以下情况通常开始新片段：
-
-- 焦点转移到无关章节；
-- 操作对象跨越完全不同的语义结构；
-- 用户执行了新的显式动作；
-- 页面导航导致上下文发生明显变化；
-- 前一个意图已提交并完成。
-
----
-
-## 6. 动态窗口策略
-
-### 6.1 不采用固定五秒采集轮次
-
-系统不应每隔固定五秒把期间的全部操作打包给 Agent。
-
-固定窗口会带来：
-
-- 明确意图被无谓延迟；
-- 无关行为被打包到一起；
-- 快速切换焦点时产生过时任务；
-- 网络延迟与固定批次延迟叠加；
-- Agent 持续追赶历史操作。
-
-应采用**动态窗口期**：窗口由用户行为语义和意图片段状态决定，可提前结束、延长、取消或被新片段替换。
-
-这里需要区分“事件采集”和“意图提交”：
-
-- 可信事件可以在本地即时采集，避免遗漏关键行为；
-- 高频中间事件只用于更新当前工作记忆，不直接触发 Agent；
-- 是否形成意图片段、何时提交 Agent，由动态窗口决定；
-- 因此动态窗口替代的是固定批次提交，不是把底层监控改成周期性抽样。
-
-### 6.2 动态窗口不是单一计时器
-
-动态窗口至少应考虑：
-
-- 信号强度；
-- 行为是否显式；
-- 当前语义对象是否明确；
-- 页面是否可能正在本地响应；
-- 用户是否仍在输入、选择或补充上下文；
-- 新行为是否与当前片段相关；
-- 当前是否已经存在 Agent 请求；
-- 当前请求是否已经输出 `interrupt`；
-- 用户操作节奏；
-- 网络和 Agent 的实际响应状态。
-
-### 6.3 建议的窗口类别
-
-本文不将具体时长定为最终标准。后续应结合实际使用数据继续确定参数。
-
-#### 立即提交窗口
-
-适用于：
-
-- 用户点击“解释”“对比”“展开”等显式动作；
-- 页面通过明确控件声明需要 Agent 协助；
-- 用户直接发出不可歧义的语义请求。
-
-策略：不等待固定批次，立即形成意图。
-
-#### 短稳定窗口
-
-适用于：
-
-- 双击明确的技术术语；
-- 对同一未响应对象重复操作；
-- 强语义焦点已经形成，但用户可能继续点击其当前值或相关对象。
-
-策略：短暂等待用户是否补充相关上下文；若没有新相关信号，尽快提交。若出现字段值等相关信号，则增强原意图后提交。
-
-#### 输入静默窗口
-
-适用于：
-
-- 文本输入；
-- 搜索；
-- 连续键盘选择；
-- 尚未结束的编辑动作。
-
-策略：只在用户停止输入后归纳，不以每次输入变化建立任务。
-
-#### 模糊选择窗口
-
-适用于：
+典型事件：
 
 - 拖选文字；
-- 选择一段技术内容但未表明目的；
-- 同时存在“解释、复制、对比”等多种可能。
+- 选择技术内容但没有说明用途；
+- 两个对象可能用于解释或对比。
 
-策略：保持本地候选，提供轻量意图操作入口，不默认直接调用 Agent。用户复制、取消选择或转移焦点时，结束或取消候选。
+处理：
 
-#### 本地响应观察窗口
+- 保留为本地 candidate；
+- 显示轻量候选工具条，例如“解释 / 对比 / 取消”；
+- 未确认前不默认调用 Agent；
+- 复制、选择折叠、取消或无关焦点转移会撤销候选；
+- 用户点击工具条后，将显式请求写入新的高置信度 episode。
 
-适用于：
+### 3.3 强信号
 
-- 点击可展开结构；
-- 标签切换；
-- 过滤、勾选、折叠等页面可能自行处理的行为。
+典型事件：
 
-策略：先观察页面是否已经满足意图。只有没有相关响应时，才考虑升级给 Agent。
+- 双击结构化技术字段；
+- touch long press；
+- 对同一未响应对象重复操作；
+- 同一对象的字段名、字段值和结构上下文形成稳定组合。
 
-#### 最大存活窗口
+处理：
 
-动态窗口仍需要最大存活边界，避免模糊片段长期悬挂。
+- 进入短稳定窗口；
+- 等待可能的相关补充信号；
+- 若用户复制、取消或切换无关焦点，则取消；
+- 页面没有本地满足时形成 Agent 候选。
 
-该边界不是固定采集周期，也不代表到期后必须调用 Agent。到期后的动作可以是：
+### 3.4 明确信号
 
-- 形成当前候选；
-- 显示意图操作入口；
-- 仅保留语义焦点；
-- 因证据不足而取消；
-- 若信号已经足够强，则提交 Agent。
+典型事件：
 
-最大存活时长应作为可调策略参数，后续结合真实交互数据确定。
+- 页面明确的“解释”“对比”“补充内容”按钮；
+- `data-spore-request` 声明的请求；
+- submit 或其他不可歧义动作。
 
-### 6.4 动态窗口的结束条件
+处理：
 
-意图片段在以下情况下可以提前结束：
+- 立即关闭当前动态窗口；
+- 形成高置信度 episode；
+- 参与 Latest Wins 仲裁，不等待固定批次。
 
-1. 用户给出显式意图；
-2. 强信号稳定且没有等待更多上下文的必要；
-3. 页面已经本地满足意图；
-4. 用户复制内容，表明当前行为更可能是信息提取；
-5. 用户取消选择或转移到无关对象；
-6. 新语义焦点明确替代旧焦点；
-7. 达到最大存活边界；
-8. 当前片段被新的 latest intent 覆盖；
-9. 页面版本或上下文已经变化，旧片段不再有效。
+### 3.5 取消信号
 
-### 6.5 动态窗口后续需要重点验证的问题
+以下操作不仅取消本地候选，也会在 `interrupt` 前使旧 Agent 请求失效：
 
-后续策略设计应重点研究：
+- 选择后复制；
+- 选择折叠或显式取消；
+- 新语义焦点替代旧焦点；
+- 页面本地响应已经满足请求；
+- artifact 基础版本发生变化。
 
-- 双击技术术语后，应等待多久以接收字段值等补充信号；
-- 不同用户的操作节奏是否需要自适应；
-- 哪些页面响应需要更长观察时间；
-- 如何区分“连续浏览多个字段”和“对比两个字段”；
-- 模糊选择操作条应在何时出现和消失；
-- 网络延迟是否应影响新意图覆盖旧请求的阈值；
-- 最大存活窗口应按行为类型还是按页面类型配置；
-- 是否需要根据历史纠正率动态调整强信号判断。
+取消信号必须推进 intent epoch 或以等价取消身份通知调度层，不能只隐藏工具条。
 
 ---
 
-## 7. 意图强度与处理策略
+## 4. 动态窗口协议
 
-不建议依赖看似精确的浮点置信度。可以使用离散等级表达处理策略。
+### 4.1 动态窗口不是固定采样周期
 
-| 等级 | 典型行为 | 系统策略 |
+底层可信事件即时采集；动态窗口控制的是“何时提交意图”，不是每隔固定时间抽样。系统不使用固定五秒批次，也不累积无界事件流水。
+
+动态窗口依据以下状态变化：
+
+- 信号强度和显式程度；
+- 当前语义焦点是否稳定；
+- 新事件与当前片段是否相关；
+- 页面是否可能仍在本地响应；
+- 用户是否仍在输入、选择或补充上下文；
+- 当前是否存在 Agent 请求；
+- 当前请求是否已建立 `interrupt` barrier；
+- 用户操作节奏；
+- Agent、网络和页面加载状态；
+- 最大存活边界。
+
+### 4.2 已实施窗口类别
+
+| 类别 | 适用信号 | 行为 |
 |---|---|---|
-| 弱 | 普通单击、短暂停留 | 只更新语义焦点，不调用 Agent |
-| 模糊 | 拖选文字、选择一段内容 | 保留候选，显示“解释/对比”等本地入口 |
-| 强 | 双击技术字段、重复操作未响应对象 | 进入短稳定窗口，形成 Agent 候选 |
-| 明确 | 点击“解释/对比/展开” | 立即形成最终意图 |
-| 已处理 | 页面已经产生预期响应 | 不调用 Agent |
-| 取消 | 复制、取消选择、切换无关焦点 | 结束或丢弃当前候选 |
+| immediate | 显式请求、submit | 尽快提交当前意图 |
+| short_stable | dblclick、long press、重复未响应操作 | 短暂等待同焦点补充证据 |
+| input_silence | input、change | 用户停止输入后归纳 |
+| ambiguous_selection | selection | 保持本地候选，不直接提交 |
+| local_outcome_observation | 普通控件操作 | 先观察页面本地响应 |
+| maximum_lifetime | 所有未决片段 | 到期后提交强意图、保留候选或取消，不保证调用 Agent |
 
-等级不是对用户心理的绝对判断，而是系统下一步动作的依据。
+具体毫秒数是策略配置，不是协议语义。代码和提示词不得再把 episode 描述为 `window_ms=5000` 的固定批次。
 
----
+### 4.3 片段合并与切分
 
-## 8. 选择、双击与复制的策略
+通常合并：
 
-### 8.1 普通单击
+- 同一语义对象的 click、dblclick 和最终 selection；
+- 字段名称与同一行当前值；
+- 同一结构内明确相关的两个对象；
+- 同一未响应对象的重复操作。
 
-普通单击只更新语义焦点，不默认触发 Agent。
+必须切分或替换：
 
-### 8.2 双击
+- 新焦点位于无关章节；
+- 对象跨越不同领域或语义结构；
+- 用户给出新的显式动作；
+- 页面导航或 artifact 版本变化；
+- 前一 episode 已提交完成；
+- 取消信号结束旧候选。
 
-双击结构化技术对象属于强信号，但不是绝对的“解释”指令。
-
-系统应结合以下条件判断：
-
-- 对象是否是字段、代码符号、协议项等可解释语义对象；
-- 页面是否缺少对应解释；
-- 用户是否迅速复制；
-- 用户是否继续关注对应值或相关字段；
-- 页面是否已经响应。
-
-### 8.3 拖选
-
-拖选本身可能表示解释、复制、对比或阅读标记，不应默认触发 Agent。
-
-推荐将其转化为本地显式动作：
-
-```text
-解释 | 对比 | 展开相关结构
-```
-
-### 8.4 复制
-
-选择后立即复制通常意味着用户目标是提取内容。系统应取消隐式解释候选，除非用户已经显式点击“解释”。
-
-### 8.5 两个对象
-
-短时间内选择两个同类对象可以形成“对比”候选，但最好通过本地操作入口让用户确认，不直接进行侵入式页面修改。
+相同 DOM parent 或相同容器只能作为相关性证据，不能单独证明两个对象属于同一意图。
 
 ---
 
-## 9. 交给 Frontend Agent 的当前意图快照
+## 5. Focus Memory 与本地候选工具条
 
-Frontend Agent 不应只收到：
-
-```text
-selected_text = PointerToRawData
-```
-
-完整意图快照应包含以下语义部分。
-
-### 9.1 当前焦点
-
-- 对象名称；
-- 对象类型；
-- 语义路径；
-- 页面目标引用；
-- 当前值和实例数据。
-
-### 9.2 用户证据
-
-- 操作方式；
-- 相关行为顺序；
-- 是否显式确认；
-- 是否复制；
-- 是否反复操作；
-- 是否关注第二对象。
-
-### 9.3 页面结果
-
-- DOM 或可视状态是否变化；
-- 内容是否已展开；
-- 解释是否已出现；
-- 是否存在可复用说明区；
-- 页面是否已经满足用户。
-
-### 9.4 候选意图
-
-- 最可能意图；
-- 必要时提供少量备选；
-- 每个候选对应的证据；
-- 当前明确程度。
-
-### 9.5 有效性信息
-
-- 意图片段标识；
-- 当前交互代次；
-- 基础 HTML 版本；
-- 是否仍是最新意图；
-- 是否允许替代旧请求。
-
-PE 示例的语义表达：
+每个 artifact 维护短期、可替换的 focus memory：
 
 ```text
-当前焦点：IMAGE_SECTION_HEADER.PointerToRawData
-当前值：0x00000400
-行为证据：双击字段名称，随后点击当前值，没有复制
-页面结果：没有出现字段解释，页面未产生相关响应
-最可能意图：解释字段定义，并结合当前值说明文件偏移意义
-备选意图：只解释字段的通用定义
-明确程度：强
+primary semantic focus
+optional secondary focus
+semantic path and container
+current value / instance data
+recent high-value evidence
+local outcome
+candidate intents
+confidence
+current intent epoch
+base artifact version
 ```
+
+focus memory 不是完整行为历史。普通点击即使不形成 Agent 请求，也必须更新 primary focus。第二焦点只有在对象关系足够明确时保留。
+
+模糊 selection 形成的 candidate toolbar 属于 Host 本地 UI：
+
+- `Explain`：把当前候选提升为显式解释请求；
+- `Compare`：把 primary 和 secondary focus 提升为显式对比请求；
+- `Dismiss`：结束候选并使其不能继续触发 Agent；
+- copy、selection collapse 或无关焦点转移自动执行等价 dismiss。
 
 ---
 
-## 10. Latest Wins 与网络延迟策略
+## 6. Semantic Intent Episode
 
-### 10.1 禁止按事件或固定批次排队
+提交给调度层和 Frontend Agent 的不是原始事件队列，而是一个有界 episode。核心结构包括：
 
-以下序列：
-
-```text
-解释 VirtualSize
-解释 VirtualAddress
-解释 PointerToRawData
+```json
+{
+  "episode_id": "episode-...",
+  "intent_epoch": 12,
+  "started_at_ms": 0,
+  "ended_at_ms": 0,
+  "semantic_focus_ref": "...",
+  "presentation_target_ref": "...",
+  "mutation_target_ref": "...",
+  "focus": {},
+  "secondary_focus": null,
+  "evidence": [],
+  "candidate_intents": [],
+  "confidence": "low|medium|high",
+  "local_outcome": "satisfied|not_satisfied|unknown"
+}
 ```
 
-不应形成三个等待执行的任务。
+### 6.1 语义上下文
 
-系统应尽量只保留当前仍有效的最新意图。
+primary 和 secondary focus 按可用性包含：
 
-### 10.2 `interrupt` 前允许替换
+- object name；
+- object type；
+- domain；
+- semantic path；
+- container ref；
+- selected text；
+- current value；
+- instance data；
+- related refs；
+- explanation present；
+- inspector ref。
 
-Frontend Agent 尚未输出 `interrupt` 时，说明它还没有承诺修改页面。
+多个对象用于 compare 时，不能只传第二对象的字符串 ref；必须保留其对象类型、语义路径和实例上下文，以便 Agent 区分“浏览多个字段”和“比较两个同类对象”。
 
-此时如果出现更新、更明确的用户意图：
+### 6.2 Local Outcome
 
-- 相关意图可以合并；
-- 旧 pending intent 可以被新意图覆盖；
-- 旧 Agent 请求可以取消；
-- 旧请求的迟到输出应被视为过时；
-- 过时请求输出的 `interrupt` 不应冻结页面。
+Local Outcome 表示页面本地行为是否已经满足用户，而不只是 DOM 是否发生任意变化。至少区分：
 
-### 10.3 `interrupt` 后进入提交边界
+- observed；
+- relevant change；
+- reveal succeeded；
+- target visible；
+- explanation present；
+- satisfied / not satisfied / unknown。
 
-Frontend Agent 输出 `interrupt` 后，当前任务进入已承诺的页面修改事务：
+任意 body 长度、无关动画或控件状态变化不能单独判定 satisfied。
+
+---
+
+## 7. 三类引用协议
+
+三类引用必须保持职责分离：
+
+### 7.1 `semantic_focus_ref`
+
+标识用户所关注的领域对象，例如：
+
+```text
+PE.IMAGE_SECTION_HEADER.PointerToRawData
+```
+
+它用于意图理解，不自动具备 DOM mutation 权限。
+
+### 7.2 `presentation_target_ref`
+
+标识结果应该展示的位置，优先级通常为：
+
+1. 已有稳定 inspector；
+2. 当前结构的说明区域；
+3. 与焦点对象稳定关联的展示容器；
+4. 必要时创建的新 inspector。
+
+它不能因为与 semantic focus 名称相同就自动视为 mutation target。
+
+### 7.3 `mutation_target_ref`
+
+标识 Host 已解析并授权给当前请求的结构目标。它必须来自后端 supplied references，例如当前元素、父容器、inspector、presentation target、`document-head` 或 `document-body`。
+
+DOM path、element id、`data-spore-*` 和 iframe 声明只能用于 Host 解析候选节点。Frontend Agent 最终 mutation 必须使用 Host 提供并接受的 `target_ref`，不得直接使用任意选择器或自造引用。
+
+---
+
+## 8. 不可信 iframe 候选与隐私边界
+
+iframe bridge 是观察源，不是认证边界。以下内容全部视为不可信 artifact data：
+
+- 可见文本；
+- 标签、ARIA、title；
+- `data-spore-request`；
+- `data-spore-semantic-ref`；
+- domain、object type、semantic path；
+- inspector ref；
+- local outcome；
+- iframe 发出的 ready 候选。
+
+Host 必须执行：
+
+- 事件类型白名单；
+- 字符串、数组和嵌套深度裁剪；
+- password、token、secret、支付信息等敏感值裁剪；
+- 引用重新解析；
+- 请求身份和 artifact 版本校验；
+- 不把 artifact 文本当作系统指令。
+
+`data-spore-*` 可以增强语义准确度，但不能绕过 Host mutation 引用和事务校验。
+
+---
+
+## 9. 主 Agent 领域知识责任链路
+
+Frontend Agent 负责：
+
+- 解析当前页面意图；
+- 判断页面是否需要改变；
+- 选择稳定展示位置；
+- 将已经提供且有依据的知识忠实表达为 HTML。
+
+Frontend Agent 不负责凭空生成权威领域事实。解释 PE、协议、AST、数据库 schema、反汇编、医学、法律或其他专业对象时，知识链路如下：
+
+```text
+semantic intent episode
+→ Host 判断 knowledge_requirement
+→ 主 Agent / 专业 Agent / 批准知识源处理语义知识请求
+→ semantic knowledge prompt 约束严格 JSON
+→ 校验 knowledge_packet
+→ Frontend Agent 忠实页面表达
+```
+
+`knowledge_packet` 的顶层字段固定为：
+
+```json
+{
+  "status": "grounded|uncertain|unavailable|error",
+  "answer": "...",
+  "facts": [],
+  "uncertainties": [],
+  "sources": []
+}
+```
+
+责任规则：
+
+- `grounded`：Frontend Agent 可以忠实表达 answer 和 facts；
+- `uncertain`：必须在页面中明确展示 uncertainties，不能把推断写成确定事实；
+- `unavailable`：不得补写领域解释，可返回 `no_change` 或仅建立明确的待补充知识区域；
+- `error`：不得把错误、空响应或模型猜测当作知识；
+- packet 缺失、结构非法或来源不合格时，按 unavailable 处理；
+- Frontend Agent 不得扩写 packet 中没有依据的新事实。
+
+知识内容来源和页面表达是两个不同提交物。Frontend Agent 的布局能力不能替代领域知识责任。
+
+---
+
+## 10. Latest Wins、取消与队列语义
+
+每个 artifact 只允许：
+
+```text
+一个 active operation
+一个 latest pending intent
+```
+
+不存在 FIFO 历史意图队列。
+
+### 10.1 Barrier 前
+
+在当前请求尚未建立有效 `interrupt` barrier 时：
+
+- 新 intent epoch 替代旧请求；
+- 新相关证据可以合并成更新 episode；
+- copy、dismiss、selection collapse、本地满足和无关焦点转移可以取消旧请求；
+- provider 请求应被取消；
+- 无法立即取消时，旧结果仍因身份过期而不可执行；
+- 旧请求迟到的输出和 `interrupt` 均无效。
+
+### 10.2 Barrier 后
+
+有效 `interrupt` 建立 barrier 后：
+
+- 当前 mutation 事务不可被新意图替换；
+- 新意图只覆盖 `latest pending intent`；
+- 当前事务结束、失败恢复或 ready ACK 后，才启动最新 pending intent；
+- 中间 pending intent 被更新版本直接替换。
+
+---
+
+## 11. 五类身份与版本
+
+每次提交必须携带并校验五类身份/版本：
+
+| 类别 | 字段 | 作用 |
+|---|---|---|
+| 意图片段身份 | `episode_id`、`intent_epoch` | 判断当前用户意图及新旧顺序 |
+| Agent 请求身份 | `agent_request_id` | 绑定一次 provider/Frontend Agent 请求 |
+| HTML 事务身份 | `operation_id` | 绑定 barrier、heartbeat、ready 和 recovery |
+| Artifact 基础版本 | `base_html_revision`、`base_html_sha256` | 防止在过时 HTML 上应用 mutation |
+| 交互状态版本 | `state_revision` | 丢弃乱序 WebSocket、polling 和 ACK 状态 |
+
+任何迟到结果在 mutation 应用前都必须再次检查这五类身份。只要 intent、operation、artifact 或 state 已过期，结果不得冻结、持久化或解冻当前页面。
+
+---
+
+## 12. `interrupt` Barrier 协议
+
+### 12.1 合法输出形式
+
+`mutate` 响应的首个非空输出必须是独立一行：
 
 ```text
 interrupt
-→ 冻结页面
-→ Agent 完成自身多轮操作
-→ Spore 通用协议判断 Agent 生命周期结束
-→ 应用 mutation
-→ 语法与完整性校验
-→ 持久化并加载
-→ 解冻页面
 ```
 
-此阶段不再用新意图替换当前 mutation 事务。
-
-### 10.4 迟到结果必须进行有效性检查
-
-Agent 成功返回不代表结果仍可执行。应用前必须确认策略上仍满足：
-
-- 结果对应当前有效意图；
-- 请求没有被更新意图替代；
-- 页面仍基于同一基础版本；
-- 页面没有通过其他方式满足需求；
-- 结果没有越过过期的交互代次。
-
----
-
-## 11. Frontend Agent 的判断职责
-
-Frontend Agent 收到意图快照后，应依次判断：
-
-1. 用户真正希望获得的结果是什么；
-2. 页面是否已经满足该结果；
-3. 是否可以使用页面现有交互满足；
-4. 是否只需要更新已有的解释区域；
-5. 是否需要补充新的页面能力；
-6. 修改范围是否与用户意图相称；
-7. 当前意图和基础页面是否仍然有效。
-
-Agent 的决策可以是：
-
-- `no_change`：页面已满足、证据不足或不应修改；
-- 使用现有页面能力：无需 HTML mutation；
-- `mutate`：确实需要改变 HTML。
-
-只有 `mutate` 才要求首先输出独立的：
+之后才输出一个严格 JSON mutation object。`no_change` 禁止输出 `interrupt`。
 
 ```text
 interrupt
+{"decision":"mutate","intent":"...","mutations":[...]}
+@SPORE:STOP_REASON=frontend operation finished
 ```
 
-`interrupt` 是页面修改提交边界，不是用户意图识别信号。
+首个非空输出不是独立 `interrupt` 的 mutate 响应必须拒绝。正文、JSON 字符串或解释文字中偶然出现 `interrupt`，不能被视为合法 barrier。
 
-Agent 的多轮结束仍由 Spore 通用 Agent 生命周期协议判断，mutation 协议不自行定义专用 stop reason。
+### 12.2 Freeze Signal 与 Commit Acceptance
+
+`interrupt` 的含义仅为：
+
+```text
+当前有效请求承诺尝试修改页面；Host 进入冻结事务。
+```
+
+它不是 Commit Acceptance。建立 barrier 后，Host 仍必须完成：
+
+1. 当前 active/superseded 身份检查；
+2. mutation JSON schema 校验；
+3. allowed operation 校验；
+4. supplied target ref 校验；
+5. fragment 语法、安全与大小校验；
+6. 完整 HTML 合成和文档校验；
+7. artifact 基础 revision/SHA 校验；
+8. CAS 持久化；
+9. 新文档加载、恢复和 ready ACK。
+
+只有当前未 supersede 的请求可以建立 barrier。过时请求的 `interrupt` 永远无效。
 
 ---
 
-## 12. 复杂语义页面的稳定解释出口
+## 13. STOP_REASON 边界
 
-对于 PE 结构、协议结构、AST、数据库 Schema、反汇编结果等页面，不建议每次解释都在原位置追加新卡片。
+`@SPORE:STOP_REASON=<natural language reason>` 属于 Spore 通用 Agent 生命周期协议，只表示 Frontend Agent 已结束本轮或多轮输出。
 
-推荐使用稳定的语义 inspector：
+它不表示：
+
+- mutation JSON 合法；
+- target refs 有效；
+- HTML 校验通过；
+- artifact 已持久化；
+- CAS 成功；
+- iframe 已加载；
+- 运行时状态已恢复；
+- 页面已经解冻；
+- 用户意图已经满足。
+
+状态模型必须分别记录：
 
 ```text
-主体区域：结构或数据
-说明区域：当前语义对象的解释
+agent_stop_reason
+operation_outcome
+validation_result
+artifact_commit_result
+document_load_result
 ```
 
-说明区域可以展示：
-
-- 字段名称；
-- 所属结构；
-- 标准定义；
-- 当前值；
-- 当前值在本实例中的意义；
-- 与相邻字段的关系；
-- 必要的计算或定位过程。
-
-策略上：
-
-- 页面已有 inspector 时，优先更新；
-- 页面没有 inspector 且用户表现出持续解释需求时，可以创建；
-- 不因一次模糊选择就重构整个页面；
-- 避免说明卡片无限增长和布局持续跳动。
+mutation parser 不定义专用 `html_update_complete` stop reason。Agent 使用通用 STOP_REASON 自行结束，Host 独立判断事务结果。
 
 ---
 
-## 13. PE 场景示例
+## 14. Mutation、校验与 CAS
 
-### 13.1 双击单个字段
+允许的 mutation operation：
 
-行为：
+- `append`
+- `prepend`
+- `before`
+- `after`
+- `replace_inner`
+- `replace_outer`
+- `set_attributes`
+- `remove`
 
-```text
-双击 PointerToRawData
-```
+约束：
 
-归纳：
-
-```text
-焦点：PointerToRawData
-候选：解释该字段
-强度：强
-窗口：短稳定窗口
-```
-
-如果没有后续补充信号，则形成解释字段的当前意图。
-
-### 13.2 双击字段后点击字段值
-
-行为：
-
-```text
-双击 PointerToRawData
-点击 0x00000400
-```
-
-归纳为一个增强意图：
-
-```text
-解释 PointerToRawData，并结合当前值 0x00000400 说明它指向文件中的什么位置。
-```
-
-不建立两个 Agent 请求。
-
-### 13.3 依次选择两个字段
-
-行为：
-
-```text
-选择 VirtualAddress
-选择 PointerToRawData
-```
-
-归纳：
-
-```text
-候选：比较内存地址与文件偏移的区别
-强度：模糊或强，取决于其他证据
-```
-
-推荐显示“解释当前字段 / 对比两个字段”，由用户进一步确认。
-
-### 13.4 连续查看多个字段
-
-行为：
-
-```text
-VirtualSize
-VirtualAddress
-SizeOfRawData
-PointerToRawData
-```
-
-高层模式可能是：
-
-```text
-用户正在系统性浏览 IMAGE_SECTION_HEADER 的字段定义。
-```
-
-Frontend Agent 可以考虑维护统一说明区，而不是为每个字段不断追加临时内容。
-
-### 13.5 选择后复制
-
-行为：
-
-```text
-选择 PointerToRawData
-复制
-```
-
-归纳：
-
-```text
-当前目标更可能是复制术语，不调用 Agent，取消隐式解释候选。
-```
+- 只能使用当前请求 supplied `target_ref`；
+- HTML 字段必须是 fragment，不得返回完整文档；
+- mutation 数量和总字节数有界；
+- 禁止替换或删除核心 document structure；
+- 整批 mutation 原子校验，任一失败则整批拒绝；
+- 应用后对完整 HTML 执行语法、安全和完整性校验；
+- 保存使用 `base_html_sha256` 的 compare-and-swap；
+- CAS 冲突不得覆盖较新页面；
+- STOP_REASON 或 Agent 成功返回不能绕过 CAS。
 
 ---
 
-## 14. 页面语义可识别性策略
+## 15. Freeze、ready、restore、init 与后端 ACK
 
-主 Agent 生成 HTML 时，应尽量让重要对象具备稳定的语义身份，例如：
+### 15.1 冻结范围
 
-- 可检查对象；
-- 领域；
-- 对象种类；
-- 稳定语义 ID；
-- 结构关系；
-- 可复用说明区域。
+有效 barrier 建立后，Host 冻结整个 HTML preview：
 
-但 Frontend Agent 的理解不能完全依赖专用标记。缺少显式语义信息时，仍应可以通过以下结构回退：
+- overlay 拦截 pointer；
+- iframe 失去焦点；
+- `tabIndex=-1`；
+- iframe body 进入 inert/frozen 状态；
+- bridge 停止发布新的交互候选。
 
-- 标题路径；
-- 表格标题；
-- 表头；
-- 当前行和当前列；
-- 相邻内容；
-- ARIA、title 和可见文本；
-- 当前展开结构。
+冻结持续覆盖协议重试、validation、persistence、reload、restore 和 ready ACK。
 
-原则是：显式语义标记用于增强准确度，页面自然结构提供基础可理解性。
+### 15.2 文档加载与状态恢复
 
----
+CAS 成功后，Host 生成新的 document token 并加载新 `srcDoc`。恢复信息按可用性包括：
 
-## 15. 风险与防误判策略
+- scroll position；
+- active element；
+- selection；
+- input/select/textarea state；
+- details open state；
+- expanded/selected/hidden toggles；
+- semantic presentation target。
 
-### 15.1 双击不总是解释
+### 15.3 ready 候选
 
-双击可能只是选词，因此它属于强信号而不是绝对命令。复制、快速切换和页面本地响应都可以改变判断。
+bridge 只有在以下阶段完成后才发送 ready 候选：
 
-### 15.2 选择不总是请求
+1. bridge 已安装；
+2. 新 document token 已生效；
+3. artifact 初始化已完成或明确报告状态；
+4. runtime restore 已完成或明确报告失败；
+5. 核心交互面已可使用。
 
-拖选是模糊信号，默认应通过轻量操作入口消除歧义。
+ready 候选至少绑定 artifact、document token 和 restore/init 结果。它仍是不可信 iframe 消息，不能直接解冻。
 
-### 15.3 不让 Agent 放大一次弱操作
+### 15.4 后端 ready ACK
 
-一次普通单击不应导致大范围页面重构。修改规模必须与意图明确程度和实际内容缺口相称。
+Host 收到 ready 候选后调用后端 ACK。后端必须匹配：
 
-### 15.4 防止旧结果覆盖新焦点
+- `operation_id`；
+- `agent_request_id`；
+- committed HTML SHA-256；
+- 允许的 `state_revision`；
+- 当前 phase 必须处于 committed/reloading 且 frozen。
 
-任何迟到的 Agent 结果都必须通过最新意图和页面版本检查。
-
-### 15.5 防止页面反复冻结
-
-只有当前有效请求输出合法的 `interrupt` 时才冻结页面。已被替换请求的迟到 `interrupt` 无效。
-
-### 15.6 防止页面内容无限膨胀
-
-复杂页面优先复用 inspector，而不是反复追加说明内容。
-
----
-
-## 16. 策略评估指标
-
-后续验证不能只看“事件有没有采集到”，还应关注：
-
-- **意图命中率**：Agent 的理解是否符合用户下一步行为；
-- **误触发率**：普通选择或复制是否错误调用 Agent；
-- **本地解决率**：已经由页面处理的操作是否被正确过滤；
-- **过时请求率**：Agent 返回时意图已经失效的比例；
-- **覆盖有效率**：latest-wins 是否减少了历史任务执行；
-- **意图确认率**：用户是否经常点击“解释/对比”等入口；
-- **纠正率**：用户是否在 Agent 响应后立即切换或撤销；
-- **冻结准确率**：是否只在有效 mutation 事务中冻结；
-- **响应延迟**：从明确意图形成到页面产生有效结果的时间；
-- **页面稳定性**：解释行为是否导致布局膨胀或频繁重构。
-
-这些指标应反过来用于调整动态窗口、信号等级和页面交互策略。
+只有后端返回匹配 operation 的 `interaction_ready` 且 `frozen=false`，Host 才解除冻结。ready=false、restore/init 失败或超时进入失败恢复，不得伪装为正常完成。
 
 ---
 
-## 17. 推荐的产品规则摘要
+## 16. Heartbeat、Lease 与 Recovery
 
-1. 普通单击只更新语义焦点。
-2. 双击结构化技术对象形成强候选意图，进入短稳定窗口。
-3. 拖选文字不直接调用 Agent，优先显示“解释/对比”等操作入口。
-4. 选择后复制时取消隐式解释候选。
-5. 同一对象的相关行为合并为一个意图片段。
-6. 字段名与字段值可以组合成更具体的解释意图。
-7. 两个同类对象可形成对比候选，但优先让用户确认。
-8. 页面本地已响应时不调用 Agent。
-9. 不采用固定五秒采集轮次，改用按行为类型和意图状态变化的动态窗口。
-10. 动态窗口可以提前结束、延长、取消或被新焦点替换。
-11. 每个 artifact 只保留当前意图和最新待处理意图，不积累 FIFO 队列。
-12. `interrupt` 前允许更新、取消和覆盖旧 Agent 请求。
-13. 过时请求的输出和 `interrupt` 均无效。
-14. `interrupt` 后进入冻结且不可替换的页面修改事务。
-15. Agent 生命周期结束由 Spore 通用协议判断，不由 mutation 协议定义专用 stop reason。
-16. Agent 应优先复用稳定的语义 inspector，避免页面无限追加内容。
+冻结事务使用 lease 防止应用崩溃、WebSocket 丢失或浏览器加载异常造成永久冻结。
+
+- barrier 建立后写入 `lease_expires_at`；
+- Agent 继续输出、协议重试和冻结页面期间发送 heartbeat；
+- heartbeat 必须绑定当前 `operation_id`，可同时校验 `agent_request_id`；
+- heartbeat 只能延长当前 frozen operation；
+- lease 过期进入 orphaned/recovering；
+- recovery 将事务标记为失败并解除冻结；
+- recovery 不把未知加载结果标记为成功；
+- recovery 结束后释放 active operation，并启动唯一 latest pending intent；
+- 强制 recovery 只用于明确的 ready 超时或人工恢复路径。
 
 ---
 
-## 18. 最终设计结论
+## 17. Frontend Agent 决策协议
 
-Frontend Agent 不需要知道用户产生了多少鼠标和键盘事件，而需要知道：
+Frontend Agent 按顺序判断：
 
-```text
-用户当前关注什么语义对象；
-对该对象做了哪些有意义的操作；
-这些操作共同指向哪些候选意图；
-页面是否已经满足用户；
-该意图有多明确；
-该意图现在是否仍然有效；
-是否确实需要修改 HTML。
-```
+1. 当前 episode 是否仍有效；
+2. 用户真正希望获得什么结果；
+3. 页面是否已本地满足；
+4. 是否有现有 inspector 或本地交互可以满足；
+5. 是否需要领域知识以及 `knowledge_packet` 是否可用；
+6. uncertainty 是否需要可见表达；
+7. 是否确实需要持久 HTML mutation；
+8. mutation 范围是否与意图和置信度相称。
 
-动态窗口负责等待“足够但不过时”的证据；意图片段负责合并相关行为；Latest Wins 负责消除网络延迟造成的历史任务；`interrupt` 则只负责标记页面修改已经进入不可替换的提交阶段。
+决策：
 
-这四者应保持职责分离：
+- `no_change`：页面已满足、证据不足、知识不可用或不应持久修改；
+- `mutate`：使用最小、连贯、受限 mutation 更新稳定展示区域。
 
-```text
-动态窗口：何时形成意图
-意图片段：哪些行为属于同一意图
-Latest Wins：哪个意图仍然值得处理
-interrupt：何时正式承诺修改页面
-```
+一次弱操作不得触发大范围重构。复杂技术页面优先复用 inspector，避免无限追加说明卡片。
 
+---
 
+## 18. 实施文件映射
+
+| 协议职责 | 主要文件 |
+|---|---|
+| 产品与事务协议说明 | `docs/HTML_SEMANTIC_INTENT_STRATEGY.md` |
+| iframe 事件、语义上下文、runtime state、freeze/ready bridge | `desktop_app/frontend/src/components/common/htmlBridge.ts` |
+| 信号归一、动态窗口、焦点相关性、episode 与 refs | `desktop_app/frontend/src/components/common/htmlIntent.ts` |
+| focus memory、候选工具条、Latest Wins 客户端、冻结与 ready | `desktop_app/frontend/src/components/common/HtmlPreview.tsx` |
+| 前端 API 身份、interaction、heartbeat、ready、recovery | `desktop_app/frontend/src/services/api.ts` |
+| 后端 HTTP 路由和 ready/recovery 请求模型 | `desktop_app/backend/routes/html.py` |
+| 候选事件与 episode 的隐私归一化 | `base/html_semantic_intent.py` |
+| 交互状态、revision、heartbeat、lease、ready ACK、recovery | `base/html_interaction_state.py` |
+| Latest Wins coordinator、Agent 调用、interrupt barrier、mutation、CAS | `AutoAgent/frontend_agent.py` |
+| Frontend Agent 页面表达和事务提示词 | `prompt/frontend_prompt.md` |
+| 主/专业 Agent 语义知识包提示词 | `prompt/semantic_knowledge_prompt.md` |
+| mutation 与事务后端测试 | `tests/test_frontend_agent.py`、`tests/test_frontend_agent_transactions.py` |
+| iframe、候选工具条、Latest Wins、ready 前端测试 | `desktop_app/frontend/src/components/common/HtmlPreview.test.tsx` |
+
+---
+
+## 19. 协议不变量摘要
+
+1. 不存在固定五秒事件批次。
+2. 普通点击只更新 focus memory。
+3. 模糊选择先显示本地工具条。
+4. copy、取消和无关焦点在 barrier 前撤销旧意图。
+5. 每个 artifact 只有 active 和 latest pending。
+6. iframe 元数据和 ready 都是不可信候选。
+7. semantic、presentation 和 mutation refs 不得混用。
+8. 领域事实必须来自已校验 `knowledge_packet`。
+9. `uncertain` 必须在页面中显示不确定性。
+10. 缺失或失败的知识包不得由 Frontend Agent 补写事实。
+11. mutate 的首个非空输出必须是独立 `interrupt`。
+12. Freeze Signal 不等于 Commit Acceptance。
+13. STOP_REASON 不等于 HTML 操作成功。
+14. 所有 mutation 必须通过身份、版本、schema、语法、安全和 CAS 校验。
+15. 正常解冻必须经过 load、restore/init、ready candidate 和后端 ACK。
+16. heartbeat/lease/recovery 保证冻结事务最终可收敛。

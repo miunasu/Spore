@@ -259,6 +259,49 @@ class HtmlArtifactStore:
             self._write_index(index)
             return {"artifact": metadata, "validation": validation, "content": content}
 
+    def save_if_sha256(
+        self,
+        artifact_id: str,
+        content: str,
+        *,
+        expected_sha256: str,
+        title: Optional[str] = None,
+        semantic_label: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Atomically save only while the persisted artifact still matches the caller's base.
+
+        The comparison and write share the store lock, so a Frontend Agent result based on an
+        older document cannot overwrite a newer manual or agent save.
+        """
+
+        with self._lock:
+            safe_id = validate_artifact_id(artifact_id)
+            expected = (expected_sha256 or "").strip().lower()
+            if not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise ValueError("expected_sha256 must be a lowercase 64-character SHA-256 digest")
+
+            path = self._artifact_path(safe_id)
+            if not path.is_file():
+                raise FileNotFoundError(f"HTML artifact not found: {safe_id}")
+
+            current_content = path.read_text(encoding="utf-8")
+            current_sha256 = validate_html(current_content)["sha256"]
+            if current_sha256 != expected:
+                raise RuntimeError(
+                    f"HTML artifact revision conflict for {safe_id}: "
+                    f"expected {expected}, found {current_sha256}"
+                )
+
+            # RLock intentionally permits reuse of the regular validation/stamping save path.
+            return self.save(
+                safe_id,
+                content,
+                title=title,
+                semantic_label=semantic_label,
+                conversation_id=conversation_id,
+            )
+
     def remove(self, artifact_id: str) -> Dict[str, Any]:
         with self._lock:
             safe_id = validate_artifact_id(artifact_id)

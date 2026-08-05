@@ -5,6 +5,7 @@ Chat 进程模块 - 独立进程负责与 LLM 通信
 import multiprocessing as mp
 from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, Future
+import json
 import re
 import threading
 import signal
@@ -210,6 +211,72 @@ class ChatProcess:
             return True
         return code not in cls._NON_RETRYABLE_STATUS_CODES
 
+    @classmethod
+    def _retry_error_detail(cls, result: Optional[Dict[str, Any]], limit: int = 1000) -> str:
+        """从标准化错误结果中提取适合重试进度展示的服务端错误详情。"""
+        if not isinstance(result, dict):
+            return ""
+
+        def extract(value: Any) -> str:
+            if isinstance(value, dict):
+                error = value.get("error")
+                if error is not None:
+                    detail = extract(error)
+                    if detail:
+                        return detail
+                for key in ("message", "detail", "error_description"):
+                    if key in value:
+                        detail = extract(value[key])
+                        if detail:
+                            return detail
+                for nested in value.values():
+                    detail = extract(nested)
+                    if detail:
+                        return detail
+                return ""
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    detail = extract(item)
+                    if detail:
+                        return detail
+                return ""
+            if not isinstance(value, str):
+                return ""
+
+            text = value.strip()
+            if not text:
+                return ""
+            if text[:1] in ("{", "["):
+                try:
+                    parsed = json.loads(text)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    detail = extract(parsed)
+                    if detail:
+                        return detail
+            return text
+
+        raw_payload = result.get("raw_payload")
+        candidates = []
+        if isinstance(raw_payload, dict):
+            candidates.extend([
+                raw_payload.get("body"),
+                raw_payload.get("response_text"),
+                raw_payload.get("message"),
+            ])
+        candidates.append(result.get("data"))
+
+        for candidate in candidates:
+            detail = extract(candidate)
+            if not detail:
+                continue
+            detail = re.sub(r"\s+", " ", detail).strip()
+            if len(detail) > limit:
+                detail = detail[: max(0, limit - 3)].rstrip() + "..."
+            return detail
+        return ""
+
     def _do_llm_call(self, request_id: str, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行 LLM 调用（带重试）
@@ -248,9 +315,16 @@ class ChatProcess:
                     progress_attempt = attempt + 1
                     progress_total = total_attempts
                     retry_reason = "api_error"
-                    progress_msg = (
-                        f"请求失败，{delay}秒后进行第 {progress_attempt} 次请求尝试..."
-                    )
+                    error_detail = self._retry_error_detail(last_result)
+                    if error_detail:
+                        progress_msg = (
+                            f"请求失败：{error_detail}；{delay}秒后进行第 "
+                            f"{progress_attempt} 次请求尝试..."
+                        )
+                    else:
+                        progress_msg = (
+                            f"请求失败，{delay}秒后进行第 {progress_attempt} 次请求尝试..."
+                        )
                 # 经 IPC 推送进度，供 Desktop 前端 system 日志展示（chat 进程自身 log 到不了主进程 WS）
                 try:
                     self.response_queue.put({
@@ -424,6 +498,12 @@ class ChatProcess:
     def _log_received(self, payload: Any, meta: Dict[str, Any]) -> None:
         """收到 provider 响应后立即原样落盘，不等待或附加解析结果。"""
         try:
+            agent_profile = (meta or {}).get("agent_profile")
+            if agent_profile == "frontend":
+                # frontend agent 的 raw 响应落到 frontend_agent.log，不写 raw.log
+                from .logger import log_frontend_agent_raw
+                log_frontend_agent_raw(payload)
+                return
             if not getattr(self.config, "log_raw_enabled", False):
                 return
             log_raw_received(
@@ -1228,7 +1308,7 @@ class ChatProcess:
     # 推理档位下调阶梯。只有一次重试机会，所以一步降到 low 而不是逐档下调；
     # 不降到 minimal（仅 gpt-5 系支持，其他模型会 400），也不整个删掉
     # reasoning（删掉等于回到服务端默认档位，通常是 medium，可能更糟）。
-    _OPENAI_EFFORT_DOWNGRADE = {"high": "low", "medium": "low", "low": "low", "minimal": "minimal"}
+    _OPENAI_EFFORT_DOWNGRADE = {"high": "low", "medium": "low", "low": "low", "minimal": "minimal", "disable": "disable"}
 
     @staticmethod
     def _empty_retry_active(retry_hint: Optional[Dict[str, Any]]) -> bool:
@@ -1664,7 +1744,7 @@ class ChatProcess:
 
         try:
             timeout = self.config.api_timeout
-            max_tokens = self.config.get_max_tokens()
+            max_tokens = self._adv(overrides, "max_output_tokens", "max_output_tokens") or self.config.get_max_tokens()
 
             # 如果配置了 reasoning_effort，添加到请求中（none/off 表示明确不传）
             eff = self._adv_effort(overrides, "reasoning_effort", "openai_reasoning_effort")
@@ -1681,7 +1761,10 @@ class ChatProcess:
                 "timeout": timeout,
             }
 
-            if eff:
+            if eff == "disable":
+                # 非 Responses 路径的显式关闭格式与 Claude 相同
+                request_params["extra_body"] = {"thinking": {"type": "disabled"}}
+            elif eff:
                 request_params["extra_body"] = {"reasoning_effort": eff}
 
             received_meta = self._received_meta(
@@ -1815,7 +1898,7 @@ class ChatProcess:
         try:
             # 构建请求参数
             # Responses API 不支持 temperature，instructions 对应 system prompt
-            max_tokens = self.config.get_max_tokens()
+            max_tokens = self._adv(overrides, "max_output_tokens", "max_output_tokens") or self.config.get_max_tokens()
 
             # 如果配置了 reasoning_effort，添加到请求中（none/off 表示明确不传）
             eff = self._adv_effort(overrides, "reasoning_effort", "openai_reasoning_effort")
@@ -1832,7 +1915,10 @@ class ChatProcess:
             if system and not self.config.system_as_user:
                 request_params["instructions"] = system
 
-            if eff:
+            if eff == "disable":
+                # Responses API 用 effort="none" 显式关闭推理，不同于内部 none sentinel（不传）
+                request_params["reasoning"] = {"effort": "none"}
+            elif eff:
                 request_params["reasoning"] = {"effort": eff}
 
             received_meta = self._received_meta(
@@ -2018,7 +2104,7 @@ class ChatProcess:
             }
 
         try:
-            max_tokens = self.config.get_max_tokens()
+            max_tokens = self._adv(overrides, "max_output_tokens", "max_output_tokens") or self.config.get_max_tokens()
 
             # 构建请求参数
             request_params = {
@@ -2039,6 +2125,11 @@ class ChatProcess:
             # none/off 哨兵 → 明确不传 effort（且不会触发 adaptive thinking 的自动推断）
             effort = self._adv_effort(overrides, "effort", "anthropic_effort")
             budget_tokens = self._adv(overrides, "thinking_budget_tokens", "anthropic_thinking_budget_tokens")
+
+            # 'disable' 哨兵：明确关闭思考（不论是否已有 thinking_mode 配置均强制覆盖）
+            if effort == "disable":
+                thinking_mode = "disabled"
+                effort = None
 
             if thinking_mode is None:
                 if effort:

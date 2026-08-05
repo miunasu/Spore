@@ -1,5 +1,7 @@
 from unittest.mock import Mock
 
+import pytest
+
 from base.conversation_loop import ConversationLoop
 from base.response_health import assess, extract_usage
 from base.text_protocol.protocol_manager import ProtocolManager
@@ -219,3 +221,77 @@ def test_explicitly_truncated_final_uses_recovery_instead_of_being_accepted():
 
     assert result == "continue"
     loop._handle_truncated_reply.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("response", "expected_reason"),
+    [
+        ("@SPORE:STOP_REASON=done", "done"),
+        ("@SPORE:STOP_REASON = done", "done"),
+        (
+            "@SPORE:STOP_REASON=@SPORE:CONTENT_START\ndone\nwith details\n@SPORE:CONTENT_END",
+            "done\nwith details",
+        ),
+        (
+            "@SPORE:STOP_REASON = @SPORE:CONTENT_START done @SPORE:CONTENT_END",
+            "done",
+        ),
+    ],
+)
+def test_stop_reason_legal_forms_allow_only_trailing_whitespace(response, expected_reason):
+    parsed = ProtocolManager().parse_response(response + "\n \t\r\n")
+
+    assert parsed.response_type == "final"
+    assert parsed.protocol_error is None
+    assert parsed.final_content == expected_reason
+
+
+@pytest.mark.parametrize(
+    "terminator",
+    [
+        "@SPORE:STOP_REASON=done",
+        "@SPORE:STOP_REASON=@SPORE:CONTENT_START\ndone\n@SPORE:CONTENT_END",
+    ],
+    ids=["plain", "content"],
+)
+@pytest.mark.parametrize(
+    "trailing",
+    [
+        "ordinary text",
+        '{"decision":"mutate"}',
+        "@SPORE:REPLY_START\nlate reply\n@SPORE:REPLY_END",
+        (
+            "@SPORE:ACTION_SINGLE_START\n"
+            'file type=read file_path="C:/report.py"\n'
+            "@SPORE:ACTION_SINGLE_END"
+        ),
+    ],
+    ids=["text", "json", "reply", "action"],
+)
+def test_stop_reason_rejects_all_nonempty_trailing_content(terminator, trailing):
+    parsed = ProtocolManager().parse_response(f"{terminator}\n{trailing}")
+
+    assert parsed.response_type == "protocol_error"
+    assert parsed.protocol_error is not None
+    assert parsed.protocol_error.code == "content_after_stop_reason"
+
+
+def test_content_stop_reason_rejects_same_line_content_after_content_end():
+    parsed = ProtocolManager().parse_response(
+        "@SPORE:STOP_REASON=@SPORE:CONTENT_START done "
+        "@SPORE:CONTENT_END trailing text"
+    )
+
+    assert parsed.response_type == "protocol_error"
+    assert parsed.protocol_error is not None
+    assert parsed.protocol_error.code == "content_after_stop_reason"
+
+
+def test_content_before_stop_reason_remains_legal_and_visible():
+    parsed = ProtocolManager().parse_response(
+        "context before final\n@SPORE:STOP_REASON=done"
+    )
+
+    assert parsed.response_type == "final"
+    assert parsed.protocol_error is None
+    assert parsed.reply_content == "context before final\n\ndone"

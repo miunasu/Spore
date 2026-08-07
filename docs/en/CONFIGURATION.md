@@ -1,4 +1,4 @@
-# Configuration Guide (v4.0)
+# Configuration Guide (v4.1)
 
 > [中文](../CONFIGURATION.md)
 
@@ -100,7 +100,7 @@ If the main OpenAI-compatible model service does not support embeddings, or only
 | `SUB_AGENT_OPENAI_API_KEY` / `SUB_AGENT_OPENAI_API_URL` / `SUB_AGENT_OPENAI_MODEL` | Sub-Agent OpenAI |
 | `SUB_AGENT_ANTHROPIC_API_KEY` / `SUB_AGENT_ANTHROPIC_API_URL` / `SUB_AGENT_ANTHROPIC_MODEL` | Sub-Agent Anthropic |
 
-### Helper-Agent Dedicated LLM (v4.0, optional)
+### Helper-Agent Dedicated LLM (v4.1, optional)
 
 The four helper-Agent profiles can each specify their own model, with the fallback chain: **profile-specific → `SUB_AGENT_*` → main configuration** (field-by-field fallback; see `Config.resolve_agent_llm`):
 
@@ -176,7 +176,7 @@ At runtime, you can switch via CLI `mode ...` or the GUI mode dropdown; it appli
 
 ---
 
-## Security (v4.0)
+## Security (v4.1)
 
 ### Security Agent
 

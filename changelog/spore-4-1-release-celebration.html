@@ -1,0 +1,1246 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spore 4.1 发布庆祝</title>
+  <style>
+    :root {
+      --bg0: #070b14;
+      --bg1: #0d1424;
+      --bg2: #121c31;
+      --card: rgba(18, 28, 49, 0.82);
+      --card-border: rgba(120, 170, 255, 0.18);
+      --text: #e8eefc;
+      --muted: #9aabc8;
+      --accent: #6ea8ff;
+      --accent2: #8b7bff;
+      --accent3: #3fe0c5;
+      --warn: #ffb454;
+      --danger: #ff7b9c;
+      --ok: #57e389;
+      --glow: 0 0 40px rgba(110, 168, 255, 0.25);
+      --radius: 18px;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+      --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: Consolas, "Cascadia Mono", "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: radial-gradient(1200px 700px at 10% -10%, #1a2a55 0%, transparent 55%),
+                  radial-gradient(900px 600px at 100% 0%, #2a1850 0%, transparent 50%),
+                  linear-gradient(160deg, var(--bg0), var(--bg1) 45%, #0a1020);
+      color: var(--text);
+      font-family: var(--font);
+    }
+
+    body {
+      overflow-x: hidden;
+    }
+
+    #fx {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .shell {
+      position: relative;
+      z-index: 1;
+      width: min(1120px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 28px 0 56px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.35fr 0.9fr;
+      gap: 22px;
+      align-items: stretch;
+      margin-bottom: 22px;
+    }
+
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero-main {
+      padding: 28px 28px 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-main::before {
+      content: "";
+      position: absolute;
+      width: 280px;
+      height: 280px;
+      right: -80px;
+      top: -90px;
+      background: radial-gradient(circle, rgba(110,168,255,0.28), transparent 65%);
+      pointer-events: none;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+    }
+
+    .badge.live {
+      color: #d8fff0;
+      border-color: rgba(63,224,197,0.35);
+      background: rgba(63,224,197,0.12);
+    }
+
+    .badge.live .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent3);
+      box-shadow: 0 0 10px var(--accent3);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.85); }
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 5vw, 44px);
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+
+    h1 .ver {
+      background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent3));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .lead {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.65;
+      max-width: 54ch;
+    }
+
+    .cta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    button, .chip {
+      font: inherit;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    button:focus-visible, .chip:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .btn {
+      padding: 11px 16px;
+      color: #061018;
+      background: linear-gradient(135deg, var(--accent), #9b8cff);
+      box-shadow: var(--glow);
+      font-weight: 650;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(1px); }
+
+    .btn.ghost {
+      color: var(--text);
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.12);
+      box-shadow: none;
+    }
+
+    .btn.ghost:hover {
+      border-color: rgba(110,168,255,0.45);
+      background: rgba(110,168,255,0.08);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+
+    .stat {
+      padding: 12px 12px 10px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .stat .n {
+      font-size: 22px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+
+    .stat .l {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .hero-side {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .spore-mark {
+      position: relative;
+      height: 180px;
+      border-radius: 16px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 45%, rgba(110,168,255,0.25), transparent 40%),
+        linear-gradient(160deg, #101a30, #0b1222);
+      border: 1px solid rgba(255,255,255,0.08);
+      display: grid;
+      place-items: center;
+    }
+
+    .orb {
+      width: 88px;
+      height: 88px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 35% 30%, #fff 0%, #b7d4ff 18%, #6ea8ff 42%, #4a3db8 75%, #1a1238 100%);
+      box-shadow:
+        0 0 30px rgba(110,168,255,0.55),
+        0 0 70px rgba(139,123,255,0.28),
+        inset 0 0 20px rgba(255,255,255,0.25);
+      animation: floaty 4.5s ease-in-out infinite;
+      position: relative;
+    }
+
+    .orb::after {
+      content: "";
+      position: absolute;
+      inset: -14px;
+      border-radius: 50%;
+      border: 1px dashed rgba(183,212,255,0.35);
+      animation: spin 18s linear infinite;
+    }
+
+    .ring {
+      position: absolute;
+      border: 1px solid rgba(110,168,255,0.2);
+      border-radius: 50%;
+      animation: spin 24s linear infinite;
+    }
+    .ring.r1 { width: 130px; height: 130px; }
+    .ring.r2 { width: 160px; height: 160px; animation-direction: reverse; animation-duration: 30s; }
+
+    @keyframes floaty {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .side-note {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      margin: 0;
+    }
+
+    .progress-wrap {
+      display: grid;
+      gap: 8px;
+    }
+
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+
+    .bar > span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent3), var(--accent), var(--accent2));
+      transition: width 1.2s cubic-bezier(.2,.8,.2,1);
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      padding: 8px 12px;
+      color: var(--muted);
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.1);
+      font-size: 13px;
+    }
+
+    .chip[aria-pressed="true"] {
+      color: #081018;
+      background: linear-gradient(135deg, #8ec2ff, #b1a5ff);
+      border-color: transparent;
+      font-weight: 650;
+    }
+
+    .search {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-width: min(100%, 280px);
+      flex: 1;
+      justify-content: flex-end;
+    }
+
+    .search input, .search select {
+      width: 100%;
+      max-width: 240px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(0,0,0,0.25);
+      color: var(--text);
+      font: inherit;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .card {
+      grid-column: span 4;
+      padding: 16px;
+      min-height: 180px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .card:hover, .card:focus-within {
+      transform: translateY(-3px);
+      border-color: rgba(110,168,255,0.45);
+      box-shadow: 0 16px 40px rgba(40, 80, 160, 0.25);
+    }
+
+    .card.hidden { display: none; }
+
+    .card .top {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .tag {
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+
+    .tag.new { color: #d9fff0; background: rgba(63,224,197,0.12); border-color: rgba(63,224,197,0.28); }
+    .tag.imp { color: #dce9ff; background: rgba(110,168,255,0.12); border-color: rgba(110,168,255,0.28); }
+    .tag.fix { color: #ffe1ea; background: rgba(255,123,156,0.12); border-color: rgba(255,123,156,0.28); }
+    .tag.dev { color: #fff0d8; background: rgba(255,180,84,0.12); border-color: rgba(255,180,84,0.28); }
+
+    .card h3 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      flex: 1;
+    }
+
+    .meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      color: #7f92b3;
+      font-size: 12px;
+    }
+
+    .detail {
+      padding: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+    }
+
+    .detail-left, .detail-right {
+      padding: 18px;
+    }
+
+    .detail-left {
+      border-right: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .detail h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .detail p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .bullets {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 8px;
+    }
+
+    .bullets li {
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.05);
+      color: #c9d6ef;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      max-height: 360px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .tl-item {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 10px;
+    }
+
+    .tl-item .dotline {
+      position: relative;
+    }
+
+    .tl-item .dotline::before {
+      content: "";
+      position: absolute;
+      left: 7px;
+      top: 4px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px rgba(110,168,255,0.6);
+    }
+
+    .tl-item:not(:last-child) .dotline::after {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 16px;
+      bottom: -14px;
+      width: 1px;
+      background: rgba(255,255,255,0.1);
+    }
+
+    .tl-body {
+      padding: 8px 10px 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .tl-body strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+
+    .tl-body span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .footer {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 0 4px;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 22px;
+      transform: translateX(-50%) translateY(20px);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 5;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: rgba(12, 18, 32, 0.92);
+      border: 1px solid rgba(110,168,255,0.35);
+      color: var(--text);
+      font-size: 13px;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      box-shadow: var(--shadow);
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .kbd {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.05);
+      color: #c5d4ef;
+    }
+
+    @media (max-width: 960px) {
+      .hero { grid-template-columns: 1fr; }
+      .card { grid-column: span 6; }
+      .detail { grid-template-columns: 1fr; }
+      .detail-left { border-right: 0; border-bottom: 1px solid rgba(255,255,255,0.06); }
+    }
+
+    @media (max-width: 640px) {
+      .shell { width: min(100% - 18px, 1120px); padding-top: 16px; }
+      .hero-main, .hero-side, .detail-left, .detail-right { padding: 16px; }
+      .stats { grid-template-columns: 1fr; }
+      .card { grid-column: span 12; min-height: 0; }
+      .search { justify-content: stretch; }
+      .search input, .search select { max-width: none; }
+      h1 { font-size: 30px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="fx" aria-hidden="true"></canvas>
+
+  <main class="shell">
+    <section class="hero" aria-label="Spore 4.1 发布横幅">
+      <div class="panel hero-main">
+        <div class="badge-row">
+          <span class="badge live"><span class="dot" aria-hidden="true"></span> 现已发布</span>
+          <span class="badge">2026-08-07</span>
+          <span class="badge">Keep a Changelog</span>
+          <span class="badge">Windows AI Agent</span>
+        </div>
+        <h1>Spore <span class="ver">4.1.0</span> 来了</h1>
+        <p class="lead">
+          本机 Agent 的一次大跃迁：沙盒 HTML 产物、Frontend Agent、情景记忆、窗口靠边吸附与更稳的响应健康检查。
+          119 个文件、+21154 行——把“能看见、能停下、能回退”继续做扎实。
+        </p>
+        <div class="cta-row">
+          <button type="button" class="btn" id="btnCelebrate" aria-label="触发庆祝特效">放庆祝特效</button>
+          <button type="button" class="btn ghost" id="btnTour" aria-label="开始特性导览">特性导览</button>
+          <button type="button" class="btn ghost" id="btnCopy" aria-label="复制版本摘要">复制摘要</button>
+        </div>
+        <div class="stats" aria-label="版本统计">
+          <div class="stat">
+            <div class="n" data-count="119">0</div>
+            <div class="l">files changed</div>
+          </div>
+          <div class="stat">
+            <div class="n" data-count="21154" data-prefix="+">0</div>
+            <div class="l">insertions</div>
+          </div>
+          <div class="stat">
+            <div class="n" data-count="1895" data-prefix="-">0</div>
+            <div class="l">deletions</div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="panel hero-side" aria-label="Spore 视觉与发布进度">
+        <div class="spore-mark" aria-hidden="true">
+          <div class="ring r1"></div>
+          <div class="ring r2"></div>
+          <div class="orb"></div>
+        </div>
+        <p class="side-note">
+          Spore 运行在你本机：读文件、跑 PowerShell、改文档，左边日志用大白话讲清楚每一步。
+          4.1 让它更能“记住经验”、更能“画交互页”、Mini 窗还能靠边隐身。
+        </p>
+        <div class="progress-wrap" aria-label="发布完成度">
+          <div class="progress-label"><span>Release readiness</span><span id="readyText">0%</span></div>
+          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="readyBar">
+            <span id="readyFill"></span>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <div class="toolbar">
+      <div class="filters" role="group" aria-label="按变更类型筛选">
+        <button type="button" class="chip" data-filter="all" aria-pressed="true">全部</button>
+        <button type="button" class="chip" data-filter="new" aria-pressed="false">新增</button>
+        <button type="button" class="chip" data-filter="imp" aria-pressed="false">改进</button>
+        <button type="button" class="chip" data-filter="fix" aria-pressed="false">修复</button>
+        <button type="button" class="chip" data-filter="dev" aria-pressed="false">开发者</button>
+      </div>
+      <div class="search">
+        <label class="visually-hidden" for="q" style="position:absolute;left:-9999px">搜索特性</label>
+        <input id="q" type="search" placeholder="搜索特性 / 关键词" autocomplete="off">
+      </div>
+    </div>
+
+    <section class="grid" id="featureGrid" aria-label="4.1 特性卡片"></section>
+
+    <section class="panel detail" aria-label="特性详情与时间线">
+      <div class="detail-left">
+        <h2 id="detailTitle">选择一张卡片</h2>
+        <p id="detailDesc">点击上方任意特性，查看更细的说明。也可用方向键在卡片间移动，按 Enter 选中。</p>
+        <ul class="bullets" id="detailBullets"></ul>
+      </div>
+      <div class="detail-right">
+        <h2 style="margin:0 0 10px;font-size:18px;">发布瞬间</h2>
+        <div class="timeline" id="timeline" aria-label="发布叙事时间线"></div>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div>基于 CHANGELOG_zh.md · Spore 4.1.0 · 2026-08-07</div>
+      <div>快捷键：<span class="kbd">C</span> 庆祝 · <span class="kbd">/</span> 搜索 · <span class="kbd">1-4</span> 筛选</div>
+    </footer>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var FEATURES = [
+        {
+          id: "dynamic-html",
+          cat: "new",
+          tag: "新增",
+          title: "Dynamic HTML Artifacts",
+          blurb: "沙盒 HTML 渲染引擎：生成、持久化、动态更新交互页面，CSP 严格隔离。",
+          weight: 98,
+          bullets: [
+            "base/html_artifacts.py 持久化存储，版本跟踪与内容哈希去重",
+            "html_interaction_state / semantic_intent：把点击与选区转译为 Agent 指令",
+            "skills/dynamic-html 支持多 view 与 DOM mutation 高级模式",
+            "HtmlPreview 全面重写：双向 postMessage 桥接 + 意图解析"
+          ]
+        },
+        {
+          id: "frontend-agent",
+          cat: "new",
+          tag: "新增",
+          title: "Frontend Agent",
+          blurb: "专用 HTML 生成与更新 Agent，支持 8 种精确 DOM mutation。",
+          weight: 96,
+          bullets: [
+            "AutoAgent/frontend_agent.py 约 4000 行",
+            "append / prepend / before / after / replace_inner / replace_outer / set_attributes / remove",
+            "语义意图感知更新，上下文相关的 AI 改写",
+            "自动拦截外部脚本、iframe、网络 API；保护 JS 引用 ID"
+          ]
+        },
+        {
+          id: "learning",
+          cat: "new",
+          tag: "新增",
+          title: "Learning System",
+          blurb: "情景记忆：跨会话记住任务轨迹，新任务自动召回相关经验。",
+          weight: 94,
+          bullets: [
+            "EpisodeStore：SQLite 持久化情景记忆",
+            "EmbeddingGenerator + EpisodicRetriever 语义检索",
+            "ConsolidationEngine 框架：从 episodic 提炼 semantic 知识",
+            "与 ConversationLoop 深度集成：完成时记录，开始时召回"
+          ]
+        },
+        {
+          id: "edge-snap",
+          cat: "new",
+          tag: "新增",
+          title: "窗口靠边吸附",
+          blurb: "Mini 模式吸附屏幕四边并自动隐藏，鼠标靠近边缘再弹出。",
+          weight: 88,
+          bullets: [
+            "Rust 原生 edge_snap.rs（634 行）+ Win32 API",
+            "多显示器工作区支持",
+            "平滑动画 8 帧 × 14ms",
+            "设置中可开关"
+          ]
+        },
+        {
+          id: "response-health",
+          cat: "new",
+          tag: "新增",
+          title: "LLM 响应健康检查",
+          blurb: "统一识别 complete / truncated / refusal / paused，截断自动续调。",
+          weight: 90,
+          bullets: [
+            "base/response_health.py 统一终止状态识别",
+            "兼容 Anthropic Messages 与 OpenAI Chat Completions",
+            "容错第三方中转字段缺失",
+            "避免把 max_tokens 截断误当完整回复"
+          ]
+        },
+        {
+          id: "context-compress",
+          cat: "imp",
+          tag: "改进",
+          title: "上下文压缩兜底",
+          blurb: "API 不返回 usage 时，本地 token 估算保证压缩机制仍可用。",
+          weight: 80,
+          bullets: [
+            "_estimate_context_tokens 本地兜底",
+            "优先 tiktoken，再退回约 2.5 字符/token",
+            "Desktop 模式优先 last_context_tokens（含 prompt cache）"
+          ]
+        },
+        {
+          id: "backup",
+          cat: "imp",
+          tag: "改进",
+          title: "Backup / Checkpoint",
+          blurb: "按会话隔离备份目录，用户消息前可自动建检查点。",
+          weight: 78,
+          bullets: [
+            "会话级备份目录与元数据管理",
+            "用户消息前自动 checkpoint",
+            "改进文件历史重建逻辑"
+          ]
+        },
+        {
+          id: "frontend-refactor",
+          cat: "imp",
+          tag: "改进",
+          title: "前端组件重构",
+          blurb: "SafeMarkdownRenderer、语法高亮拆分、NoteEditor 大幅扩展。",
+          weight: 74,
+          bullets: [
+            "SafeMarkdownRenderer 独立处理 Markdown 安全",
+            "SyntaxHighlighter 拆分，语言检测与消息解析模块化",
+            "NoteEditor 800+ 行功能增量"
+          ]
+        },
+        {
+          id: "short-memory",
+          cat: "fix",
+          tag: "修复",
+          title: "短记忆窗口 Bug",
+          blurb: "关闭后再开不再丢 default 窗口记忆，动态会话 ID 消除冲突。",
+          weight: 92,
+          bullets: [
+            "根因：初始窗口硬编码 default 导致覆盖",
+            "前端改为 conv_${timestamp}_${random}",
+            "后端移除 default session 预创建",
+            "setMainBackendPort 使用实际窗口 ID 初始化"
+          ]
+        },
+        {
+          id: "empty-reply",
+          cat: "fix",
+          tag: "修复",
+          title: "空回复与截断处理",
+          blurb: "空 assistant 消息不再污染历史；空回复与拒答分流处理。",
+          weight: 85,
+          bullets: [
+            "修复空消息导致后续 400",
+            "空回复注入反馈后重试",
+            "拒答不重试，避免无效循环"
+          ]
+        },
+        {
+          id: "multi-session",
+          cat: "fix",
+          tag: "修复",
+          title: "多会话并发稳定性",
+          blurb: "ConversationLoopManager 会话隔离加强，状态不再串台。",
+          weight: 83,
+          bullets: [
+            "修复 backend 多会话状态混乱",
+            "改进会话隔离机制",
+            "流式输出边界与协议健壮性增强"
+          ]
+        },
+        {
+          id: "devex",
+          cat: "dev",
+          tag: "开发者",
+          title: "工程与文档",
+          blurb: ".env 模板化、依赖补充、架构/前端/配置文档同步。",
+          weight: 70,
+          bullets: [
+            ".env 改为 .env_example，真实 .env 进 gitignore",
+            "新增 beautifulsoup4 依赖",
+            "ARCHITECTURE / FRONTEND / CONFIGURATION 文档更新",
+            "119 files · +21154 / -1895"
+          ]
+        }
+      ];
+
+      var TIMELINE = [
+        { t: "沙盒开闸", d: "Dynamic HTML 让 Agent 在对话里直接交付可交互产物。" },
+        { t: "前端专员就位", d: "Frontend Agent 用 8 种 mutation 精确改 DOM，而不是整页重写碰运气。" },
+        { t: "开始记得住", d: "Learning System 把任务轨迹写入情景记忆，下次自动召回。" },
+        { t: "Mini 靠边隐身", d: "Edge Snap 用 Win32 原生吸附，干活时不挡视线。" },
+        { t: "回复更靠谱", d: "Response Health 认出截断与拒答，该续写就续写。" },
+        { t: "记忆不再丢", d: "短记忆窗口 ID 动态化，关窗重开还在。" },
+        { t: "4.1.0 封版", d: "2026-08-07 · 面向真实 Windows 工作流的又一次扎实迭代。" }
+      ];
+
+      var state = {
+        filter: "all",
+        query: "",
+        selected: FEATURES[0].id,
+        tourIndex: -1
+      };
+
+      var grid = document.getElementById("featureGrid");
+      var detailTitle = document.getElementById("detailTitle");
+      var detailDesc = document.getElementById("detailDesc");
+      var detailBullets = document.getElementById("detailBullets");
+      var timeline = document.getElementById("timeline");
+      var toastEl = document.getElementById("toast");
+      var q = document.getElementById("q");
+      var readyFill = document.getElementById("readyFill");
+      var readyText = document.getElementById("readyText");
+      var readyBar = document.getElementById("readyBar");
+
+      function toast(msg) {
+        toastEl.textContent = msg;
+        toastEl.classList.add("show");
+        clearTimeout(toast._t);
+        toast._t = setTimeout(function () {
+          toastEl.classList.remove("show");
+        }, 2200);
+      }
+
+      function catLabel(cat) {
+        return ({ new: "new", imp: "imp", fix: "fix", dev: "dev" })[cat] || "new";
+      }
+
+      function renderTimeline() {
+        timeline.innerHTML = TIMELINE.map(function (item) {
+          return (
+            '<div class="tl-item">' +
+              '<div class="dotline" aria-hidden="true"></div>' +
+              '<div class="tl-body"><strong>' + item.t + '</strong><span>' + item.d + '</span></div>' +
+            '</div>'
+          );
+        }).join("");
+      }
+
+      function visibleFeatures() {
+        var query = state.query.trim().toLowerCase();
+        return FEATURES.filter(function (f) {
+          if (state.filter !== "all" && f.cat !== state.filter) return false;
+          if (!query) return true;
+          var hay = (f.title + " " + f.blurb + " " + f.bullets.join(" ") + " " + f.tag).toLowerCase();
+          return hay.indexOf(query) !== -1;
+        });
+      }
+
+      function selectFeature(id, announce) {
+        var f = FEATURES.find(function (x) { return x.id === id; }) || visibleFeatures()[0] || FEATURES[0];
+        state.selected = f.id;
+        detailTitle.textContent = f.title;
+        detailDesc.textContent = f.blurb;
+        detailBullets.innerHTML = f.bullets.map(function (b) {
+          return "<li>" + b + "</li>";
+        }).join("");
+        Array.prototype.forEach.call(grid.querySelectorAll(".card"), function (card) {
+          var on = card.getAttribute("data-id") === f.id;
+          card.setAttribute("aria-current", on ? "true" : "false");
+          card.style.outline = on ? "1px solid rgba(110,168,255,0.55)" : "";
+        });
+        if (announce) toast("聚焦：" + f.title);
+      }
+
+      function renderGrid() {
+        var list = visibleFeatures();
+        if (!list.length) {
+          grid.innerHTML = '<div class="panel card" style="grid-column: span 12; cursor:default;min-height:auto">' +
+            "<h3>没有匹配的特性</h3><p>换个关键词，或点“全部”看看完整 4.1 清单。</p></div>";
+          return;
+        }
+        grid.innerHTML = list.map(function (f) {
+          return (
+            '<article class="panel card" tabindex="0" role="button" data-id="' + f.id + '" aria-label="' + f.title + '">' +
+              '<div class="top">' +
+                '<span class="tag ' + catLabel(f.cat) + '">' + f.tag + '</span>' +
+                '<span class="meta">热度 ' + f.weight + '</span>' +
+              '</div>' +
+              '<h3>' + f.title + '</h3>' +
+              '<p>' + f.blurb + '</p>' +
+              '<div class="meta"><span>点击查看细节</span><span>4.1.0</span></div>' +
+            '</article>'
+          );
+        }).join("");
+
+        Array.prototype.forEach.call(grid.querySelectorAll(".card"), function (card) {
+          card.addEventListener("click", function () {
+            selectFeature(card.getAttribute("data-id"), true);
+            burst(0.45);
+          });
+          card.addEventListener("keydown", function (e) {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              selectFeature(card.getAttribute("data-id"), true);
+              burst(0.45);
+            }
+          });
+        });
+
+        if (!list.some(function (f) { return f.id === state.selected; })) {
+          state.selected = list[0].id;
+        }
+        selectFeature(state.selected, false);
+      }
+
+      function animateCounters() {
+        var nodes = document.querySelectorAll("[data-count]");
+        var start = performance.now();
+        var dur = 1400;
+        function frame(now) {
+          var t = Math.min(1, (now - start) / dur);
+          var eased = 1 - Math.pow(1 - t, 3);
+          Array.prototype.forEach.call(nodes, function (el) {
+            var target = parseInt(el.getAttribute("data-count"), 10);
+            var prefix = el.getAttribute("data-prefix") || "";
+            var val = Math.round(target * eased);
+            el.textContent = prefix + val.toLocaleString("en-US");
+          });
+          if (t < 1) requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+      }
+
+      function animateReady() {
+        requestAnimationFrame(function () {
+          readyFill.style.width = "100%";
+          readyBar.setAttribute("aria-valuenow", "100");
+          readyText.textContent = "100%";
+        });
+      }
+
+      // Canvas confetti / particles
+      var canvas = document.getElementById("fx");
+      var ctx = canvas.getContext("2d");
+      var particles = [];
+      var sparks = [];
+      var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      var w = 0, h = 0, dpr = 1;
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = window.innerWidth;
+        h = window.innerHeight;
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = w + "px";
+        canvas.style.height = h + "px";
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      function spawnAmbient() {
+        if (reduceMotion) return;
+        for (var i = 0; i < 48; i++) {
+          particles.push({
+            x: Math.random() * w,
+            y: Math.random() * h,
+            r: Math.random() * 1.8 + 0.4,
+            vx: (Math.random() - 0.5) * 0.15,
+            vy: (Math.random() - 0.5) * 0.15,
+            a: Math.random() * 0.35 + 0.05
+          });
+        }
+      }
+
+      function burst(mult) {
+        if (reduceMotion) {
+          toast("庆祝！Spore 4.1.0");
+          return;
+        }
+        mult = mult == null ? 1 : mult;
+        var colors = ["#6ea8ff", "#8b7bff", "#3fe0c5", "#ffb454", "#ff7b9c", "#e8eefc"];
+        var cx = w * (0.35 + Math.random() * 0.3);
+        var cy = h * (0.2 + Math.random() * 0.2);
+        var n = Math.floor(90 * mult);
+        for (var i = 0; i < n; i++) {
+          var ang = Math.random() * Math.PI * 2;
+          var sp = Math.random() * 6 + 2;
+          sparks.push({
+            x: cx,
+            y: cy,
+            vx: Math.cos(ang) * sp,
+            vy: Math.sin(ang) * sp - Math.random() * 3,
+            g: 0.08 + Math.random() * 0.05,
+            life: 1,
+            decay: 0.01 + Math.random() * 0.015,
+            color: colors[i % colors.length],
+            size: Math.random() * 3 + 1.5,
+            spin: (Math.random() - 0.5) * 0.2,
+            rot: Math.random() * Math.PI
+          });
+        }
+      }
+
+      function tick() {
+        ctx.clearRect(0, 0, w, h);
+
+        for (var i = 0; i < particles.length; i++) {
+          var p = particles[i];
+          p.x += p.vx;
+          p.y += p.vy;
+          if (p.x < 0) p.x = w;
+          if (p.x > w) p.x = 0;
+          if (p.y < 0) p.y = h;
+          if (p.y > h) p.y = 0;
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(150,190,255," + p.a + ")";
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (var j = sparks.length - 1; j >= 0; j--) {
+          var s = sparks[j];
+          s.vy += s.g;
+          s.x += s.vx;
+          s.y += s.vy;
+          s.vx *= 0.99;
+          s.life -= s.decay;
+          s.rot += s.spin;
+          if (s.life <= 0) {
+            sparks.splice(j, 1);
+            continue;
+          }
+          ctx.save();
+          ctx.translate(s.x, s.y);
+          ctx.rotate(s.rot);
+          ctx.globalAlpha = Math.max(s.life, 0);
+          ctx.fillStyle = s.color;
+          ctx.fillRect(-s.size, -s.size * 0.4, s.size * 2, s.size * 0.8);
+          ctx.restore();
+        }
+
+        requestAnimationFrame(tick);
+      }
+
+      function setFilter(filter) {
+        state.filter = filter;
+        Array.prototype.forEach.call(document.querySelectorAll(".chip[data-filter]"), function (btn) {
+          btn.setAttribute("aria-pressed", btn.getAttribute("data-filter") === filter ? "true" : "false");
+        });
+        renderGrid();
+      }
+
+      function startTour() {
+        var list = visibleFeatures();
+        if (!list.length) {
+          toast("当前筛选下没有可导览项");
+          return;
+        }
+        state.tourIndex = (state.tourIndex + 1) % list.length;
+        var f = list[state.tourIndex];
+        selectFeature(f.id, false);
+        toast("导览 " + (state.tourIndex + 1) + "/" + list.length + " · " + f.title);
+        burst(0.3);
+        var card = grid.querySelector('[data-id="' + f.id + '"]');
+        if (card) card.focus();
+      }
+
+      function copySummary() {
+        var text = [
+          "Spore 4.1.0 (2026-08-07)",
+          "Dynamic HTML Artifacts · Frontend Agent · Learning System · Edge Snap · Response Health",
+          "119 files changed, +21154 / -1895",
+          "短记忆窗口修复 · 多会话稳定 · 上下文压缩兜底"
+        ].join("\n");
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(function () {
+            toast("版本摘要已复制");
+          }).catch(function () {
+            fallbackCopy(text);
+          });
+        } else {
+          fallbackCopy(text);
+        }
+      }
+
+      function fallbackCopy(text) {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand("copy");
+          toast("版本摘要已复制");
+        } catch (e) {
+          toast("复制失败，请手动选择文本");
+        }
+        document.body.removeChild(ta);
+      }
+
+      // Events
+      document.getElementById("btnCelebrate").addEventListener("click", function () {
+        burst(1);
+        toast("Spore 4.1.0 — 撒花！");
+      });
+      document.getElementById("btnTour").addEventListener("click", startTour);
+      document.getElementById("btnCopy").addEventListener("click", copySummary);
+
+      Array.prototype.forEach.call(document.querySelectorAll(".chip[data-filter]"), function (btn) {
+        btn.addEventListener("click", function () {
+          setFilter(btn.getAttribute("data-filter"));
+        });
+      });
+
+      q.addEventListener("input", function () {
+        state.query = q.value;
+        renderGrid();
+      });
+
+      document.addEventListener("keydown", function (e) {
+        var tag = (e.target && e.target.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+          if (e.key === "Escape") {
+            e.target.blur();
+          }
+          return;
+        }
+        if (e.key === "c" || e.key === "C") {
+          burst(1);
+          toast("Spore 4.1.0 — 撒花！");
+        } else if (e.key === "/") {
+          e.preventDefault();
+          q.focus();
+          q.select();
+        } else if (e.key === "1") {
+          setFilter("all");
+        } else if (e.key === "2") {
+          setFilter("new");
+        } else if (e.key === "3") {
+          setFilter("imp");
+        } else if (e.key === "4") {
+          setFilter("fix");
+        } else if (e.key === "t" || e.key === "T") {
+          startTour();
+        }
+      });
+
+      window.addEventListener("resize", function () {
+        resize();
+      });
+
+      // init
+      resize();
+      spawnAmbient();
+      if (!reduceMotion) requestAnimationFrame(tick);
+      renderTimeline();
+      renderGrid();
+      animateCounters();
+      animateReady();
+      setTimeout(function () { burst(0.7); }, 500);
+    })();
+  </script>
+</body>
+</html>

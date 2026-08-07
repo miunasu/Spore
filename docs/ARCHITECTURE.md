@@ -1,8 +1,8 @@
-# Spore AI Agent 架构设计（v4.0）
+# Spore AI Agent 架构设计（v4.1）
 
 > [English](en/ARCHITECTURE.md)
 
-本文档描述 **Spore 4.0** 的实际代码架构。入口、对话循环、文本协议、多会话桌面后端、工具系统与 v4.0 新增的安全 Agent / 工具策略 / 备份回滚均以当前仓库为准。
+本文档描述 **Spore 4.1** 的实际代码架构。入口、对话循环、文本协议、多会话桌面后端、工具系统与 v4.1 新增的安全 Agent / 工具策略 / 备份回滚均以当前仓库为准。
 
 ---
 
@@ -252,7 +252,7 @@ file type=read file_path="C:/demo.txt"
 - `long_context`：含 `multi_agent_dispatch`
 - `auto`：由 `AutoAgent.mode_selector` 判定后加载对应工具集
 
-### 工具策略（v4.0）`base/tool_policy.py`
+### 工具策略（v4.1）`base/tool_policy.py`
 
 在模式基线之上，可对**每个工具乃至子工具**单独开关：
 
@@ -283,7 +283,7 @@ file type=read file_path="C:/demo.txt"
 
 四者均通过 IPC 走 Chat 进程，可经 `AGENT_SUPERVISOR_*` / `AGENT_MODE_SELECTOR_*` / `AGENT_SECURITY_*` / `AGENT_FRONTEND_*` 配置**各自独立的模型**（回退链：档位专属 → `SUB_AGENT_*` → 主配置），见 `Config.resolve_agent_llm`。
 
-### 安全体系（v4.0）
+### 安全体系（v4.1）
 
 由**静态命令拦截**（始终可用）与**安全 Agent 研判**（`SECURITY_AGENT_MODE` 选择策略）两部分组成：
 
@@ -299,7 +299,7 @@ file type=read file_path="C:/demo.txt"
      - 完整命令历史保存在当前进程内存中；即使上下文开关关闭，full 模式仍会收集成功研判的命令，但不把历史加入后续请求。`clear_session_history()` 已提供，当前尚未接入新对话、清记忆、reset 或删除 session 的生命周期，只有进程退出才自然释放
 3. 面向用户的文字语言跟随 `SYSTEM_LANGUAGE`。
 
-### 备份与回滚（v4.0）`base/backup_manager.py`
+### 备份与回滚（v4.1）`base/backup_manager.py`
 
 双层「时间机器」，数据按**会话隔离**存于 `.spore/`：
 
@@ -379,7 +379,7 @@ file type=read file_path="C:/demo.txt"
 - 自动短记忆：`history/autosave/session_<id>.mem`（按会话 upsert，容量约 10）
 - `savemode`：压缩多步中间过程，仅保留用户消息与最终回复倾向
 
-### 国际化（v4.0）
+### 国际化（v4.1）
 
 - 后端：`SYSTEM_LANGUAGE=zh|en` 决定辅助 Agent 面向用户的输出语言（命令意图、修复建议）；`/api/settings/language` 读写
 - 前端：`src/i18n/` 自研轻量 i18n（Zustand，中英文 23+ 命名空间），标题栏「中/EN」开关，切换时同步后端
@@ -464,9 +464,9 @@ file type=read file_path="C:/demo.txt"
 
 ## 版本
 
-文档对应 **Spore 4.0**（git 提交 `v4.0`）。
+文档对应 **Spore 4.1**（git 提交 `v4.1`）。
 
-所有版本字段（`pyproject.toml`、前端 `package.json`、`tauri.conf.json`、`Cargo.toml`、后端 API `version`）均为 `4.0.0`。
+所有版本字段（`pyproject.toml`、前端 `package.json`、`tauri.conf.json`、`Cargo.toml`、后端 API `version`）均为 `4.1.0`。
 
 更多：
 

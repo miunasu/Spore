@@ -1,8 +1,8 @@
-# Build Guide (v4.0)
+# Build Guide (v4.1)
 
 > [中文](../BUILD.md)
 
-This document explains how to build the **Spore 4.0** Windows desktop installer from source (Tauri + a PyInstaller backend sidecar).
+This document explains how to build the **Spore 4.1** Windows desktop installer from source (Tauri + a PyInstaller backend sidecar).
 
 ---
 
@@ -16,7 +16,7 @@ This document explains how to build the **Spore 4.0** Windows desktop installer 
 | Rust crate | `desktop_app/frontend/src-tauri/Cargo.toml` |
 | FastAPI | `desktop_app/backend/server.py` / `standalone.py` |
 
-> All of the fields above are currently `4.0.0`; when bumping the version, keep every field consistent before building.
+> All of the fields above are currently `4.1.0`; when bumping the version, keep every field consistent before building.
 
 Installer output:
 
@@ -159,7 +159,7 @@ Replace the contents of `desktop_app/frontend/src-tauri/icons/` and rebuild.
 
 ### Changing the version number
 
-Update all version fields in the "Artifacts and Versions" table to the same version (e.g. `4.0.0`), then run a full build.
+Update all version fields in the "Artifacts and Versions" table to the same version (e.g. `4.1.0`), then run a full build.
 
 ---
 

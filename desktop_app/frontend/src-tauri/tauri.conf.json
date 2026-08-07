@@ -7,7 +7,7 @@
   },
   "package": {
     "productName": "Spore",
-    "version": "4.0.0"
+    "version": "4.1.0"
   },
   "tauri": {
     "allowlist": {
@@ -56,7 +56,7 @@
         "../../../prompt": "prompt",
         "../../../skills": "skills",
         "../../../characters": "characters",
-        "../../../.env": "",
+        ".env": "",
         "rg.exe": ""
       },
       "externalBin": [

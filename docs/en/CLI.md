@@ -1,4 +1,4 @@
-# CLI Mode User Guide (v4.0)
+# CLI Mode User Guide (v4.1)
 
 > [中文](../CLI.md)
 
@@ -55,7 +55,7 @@ Automatic short-term memory:
 - Overwritten and updated per session; by default about 10 sessions are retained at most
 - Restore with `load autosave/session_xxx.mem`
 
-### Backup and Rollback (v4.0)
+### Backup and Rollback (v4.1)
 
 ```
 rollback <file_path> [--to <version>|--steps <N>]  - Roll a file back to a specific version / go back N versions
@@ -74,7 +74,7 @@ rewind [<checkpoint_id>|--turns <N>]               - Roll back to a conversation
 
 Learning requires no CLI command. When enabled, it automatically retrieves relevant past experience at task start and records the execution when the task finishes. The CLI currently has **no** command for manually running consolidation; the consolidation capabilities in `learning/consolidation.py` are not part of the CLI command surface.
 
-### Security Whitelist (v4.0)
+### Security Whitelist (v4.1)
 
 ```
 whitelist            - Usage help

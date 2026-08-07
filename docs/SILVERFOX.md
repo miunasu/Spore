@@ -2,7 +2,7 @@
 
 > [English](en/SILVERFOX.md)
 
-> 适用于 Spore 4.0。请使用桌面或 CLI 启动后按下列提示复现；样本与输出见 `example/MalwareAnalysis/SliverFox/`。
+> 适用于 Spore 4.1。请使用桌面或 CLI 启动后按下列提示复现；样本与输出见 `example/MalwareAnalysis/SliverFox/`。
 
 ## 📋 准备工作
 

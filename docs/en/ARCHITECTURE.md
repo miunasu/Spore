@@ -1,8 +1,8 @@
-# Spore AI Agent Architecture (v4.0)
+# Spore AI Agent Architecture (v4.1)
 
 > [中文](../ARCHITECTURE.md)
 
-This document describes the actual code architecture of **Spore 4.0**. The entry point, conversation loop, text protocol, multi-session desktop backend, tool system, and the v4.0 additions — Security Agent / tool policy / backup & rollback — all reflect the current repository.
+This document describes the actual code architecture of **Spore 4.1**. The entry point, conversation loop, text protocol, multi-session desktop backend, tool system, and the v4.1 additions — Security Agent / tool policy / backup & rollback — all reflect the current repository.
 
 ---
 
@@ -252,7 +252,7 @@ Tool set baselines are defined in `base/agent_types.py`:
 - `long_context`: includes `multi_agent_dispatch`
 - `auto`: `AutoAgent.mode_selector` decides, then the corresponding tool set is loaded
 
-### Tool Policy (v4.0) `base/tool_policy.py`
+### Tool Policy (v4.1) `base/tool_policy.py`
 
 On top of the mode baseline, **every tool and even sub-tool** can be toggled individually:
 
@@ -283,7 +283,7 @@ On top of the mode baseline, **every tool and even sub-tool** can be toggled ind
 
 All four go through the Chat process via IPC, and can each be given **an independent model** via `AGENT_SUPERVISOR_*` / `AGENT_MODE_SELECTOR_*` / `AGENT_SECURITY_*` / `AGENT_FRONTEND_*` (fallback chain: profile-specific → `SUB_AGENT_*` → main configuration); see `Config.resolve_agent_llm`.
 
-### Security System (v4.0)
+### Security System (v4.1)
 
 Two parts: **static command interception** (always available) and **security-agent adjudication** (strategy selected by `SECURITY_AGENT_MODE`):
 
@@ -299,7 +299,7 @@ Two parts: **static command interception** (always available) and **security-age
      - Complete command history is held in process memory. Even with context disabled, full mode collects successfully adjudicated commands but does not include prior history in later requests. `clear_session_history()` exists but is not yet connected to the new-conversation, memory-clear, reset, or session-deletion lifecycle; only process exit naturally releases it
 3. The user-facing text language follows `SYSTEM_LANGUAGE`.
 
-### Backup and Rollback (v4.0) `base/backup_manager.py`
+### Backup and Rollback (v4.1) `base/backup_manager.py`
 
 A two-layer "time machine" whose data is **session-scoped** under `.spore/`:
 
@@ -379,7 +379,7 @@ File-route sandbox: only `output` / `skills` / `prompt` / `history` / `character
 - Automatic short-term memory: `history/autosave/session_<id>.mem` (upserted per session, capacity around 10)
 - `savemode`: compresses multi-step intermediate processes, keeping mainly user messages and final replies
 
-### Internationalization (v4.0)
+### Internationalization (v4.1)
 
 - Backend: `SYSTEM_LANGUAGE=zh|en` determines the language of user-facing helper-Agent output (command intent, remediation advice); read/write via `/api/settings/language`
 - Frontend: `src/i18n/` is a homegrown lightweight i18n (Zustand, 23+ Chinese/English namespaces), with a "中/EN" toggle in the title bar that syncs to the backend on switch
@@ -464,9 +464,9 @@ Main Agent multi_agent_dispatch
 
 ## Version
 
-This document corresponds to **Spore 4.0** (git commit `v4.0`).
+This document corresponds to **Spore 4.1** (git commit `v4.1`).
 
-All version fields (`pyproject.toml`, frontend `package.json`, `tauri.conf.json`, `Cargo.toml`, and the backend API `version`) are `4.0.0`.
+All version fields (`pyproject.toml`, frontend `package.json`, `tauri.conf.json`, `Cargo.toml`, and the backend API `version`) are `4.1.0`.
 
 More:
 

@@ -24,7 +24,7 @@ MANIFEST
 # Build output
 release/
 spore_backend.exe
-scripts/
+/scripts/
 rg.exe
 .tool-cache/
 
@@ -68,7 +68,7 @@ tool_policy.json
 
 # 运行时数据（备份、Learning 情景库等）
 .spore/
-
+note.txt
 # 测试
 tests/
 .pytest-protocol-full/

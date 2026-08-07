@@ -21,7 +21,7 @@ cd /d "%~dp0"
 set "PROJECT_ROOT=%cd%"
 set "FRONTEND_DIR=%PROJECT_ROOT%\desktop_app\frontend"
 set "TAURI_DIR=%FRONTEND_DIR%\src-tauri"
-set "NSIS_PATCHER=%PROJECT_ROOT%\scripts\patch_nsis_installer.py"
+set "NSIS_PATCHER=%PROJECT_ROOT%\desktop_app\scripts\patch_nsis_installer.py"
 set "NSIS_SCRIPT=%TAURI_DIR%\target\release\nsis\x64\installer.nsi"
 set "NSIS_BUNDLE_DIR=%TAURI_DIR%\target\release\bundle\nsis"
 set "PROJECT_PYTHON=%PROJECT_ROOT%\.venv\Scripts\python.exe"
@@ -218,10 +218,10 @@ echo ========================================
 echo [3/6] Preparing resource files...
 echo ========================================
 
-REM Tauri bundles prompt/skills/characters/.env directly from PROJECT_ROOT
+REM Tauri bundles prompt/skills/characters/.env_example (installed as .env) directly from PROJECT_ROOT
 REM via src-tauri/tauri.conf.json resource mappings.
-if not exist "%PROJECT_ROOT%\.env" (
-    echo [ERROR] .env does not exist, please create config file first
+if not exist "%PROJECT_ROOT%\.env_example" (
+    echo [ERROR] .env_example does not exist, please create config file first
     goto :error
 )
 
@@ -247,6 +247,20 @@ REM ----------------------------------------
 echo ========================================
 echo [4/6] Building Tauri installer...
 echo ========================================
+
+REM Generate src-tauri/.env from .env_example (placeholder config bundled into installer).
+REM src-tauri/.env is gitignored; it is created fresh on every build.
+copy /y "%PROJECT_ROOT%\.env_example" "%TAURI_DIR%\.env" >nul
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to copy .env_example to src-tauri/.env
+    goto :error
+)
+
+REM Clean stale .env from Tauri release output to avoid os error 183 on re-builds.
+if exist "%TAURI_DIR%\target\release\.env" (
+    rmdir /s /q "%TAURI_DIR%\target\release\.env" 2>nul
+    del /f "%TAURI_DIR%\target\release\.env" 2>nul
+)
 
 cd "%FRONTEND_DIR%"
 

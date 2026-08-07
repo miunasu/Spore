@@ -1,4 +1,4 @@
-# Frontend User Guide (v4.0)
+# Frontend User Guide (v4.1)
 
 > [中文](../FRONTEND.md)
 
@@ -83,11 +83,11 @@ Drag the slider to switch views: **Notes (note) / output / HTML / Agent monitor 
 - You can drag a file into the center editing area
 - With the center-column **HTML** switch enabled, `.html` / `.htm` files render in a sandboxed iframe; disable it to inspect syntax-highlighted source
 
-### Agent Monitor (v4.0)
+### Agent Monitor (v4.1)
 
 The "agents" page shows running sub-agents in real time (up to 5 panels): scrolling logs, JSON pretty-printing with syntax highlighting, and per-agent auto-scroll. Data comes from the WebSocket `agent_register/output/status` events.
 
-### Notes (v4.0)
+### Notes (v4.1)
 
 The "note" page edits the root-level `note.txt`; save with `Ctrl+S`, with an unsaved-changes indicator.
 
@@ -126,7 +126,7 @@ Drag a file from the right column into the center to edit:
 
 ![Drag to edit](../../img/MiddleEdit.png)
 
-### TODO Bar (v4.0)
+### TODO Bar (v4.1)
 
 Agent-declared TODOs are pushed via WebSocket and shown as a collapsible per-session progress bar (`✓/✗/○` + completion percentage).
 
@@ -140,7 +140,7 @@ Agent-declared TODOs are pushed via WebSocket and shown as a collapsible per-ses
 
 Command intent and malicious-command judgments are now attached directly below the corresponding assistant message; the send area no longer mounts the old `AgentActivityBar`. Mini mode shows the same footnotes inside its message cards.
 
-### Confirmation Bar and Security Modal (v4.0)
+### Confirmation Bar and Security Modal (v4.1)
 
 - **Confirmation bar (ConfirmBar)**: blocking confirmations for file deletion/overwrite; in `basic` security mode, high-risk command confirmations also appear here (in the default `full` mode commands never prompt — everything goes through async adjudication); multiple requests are queued
 - **Security remediation modal (SecurityRemediationModal)**: when the security agent judges a command **malicious**, it circuit-breaks the current session (automatic interrupt + sub-agent termination); the modal shows the verdict rationale and remediation suggestions, with two options:
@@ -153,7 +153,7 @@ Reduces tokens: compresses multi-step intermediate steps, favoring the retention
 
 ---
 
-## Mini Mode (v4.0)
+## Mini Mode (v4.1)
 
 Click the Mini button in the title bar to enter a floating mini window (about 380×520, automatically always-on-top; exiting restores the previous size, position, maximized state, and always-on-top state):
 
@@ -189,7 +189,7 @@ Actions:
 - **Open .env**: Open the file with the system-associated program
 - **Save configuration**: Write back to `.env` and hot-apply (`/api/settings/env/apply`: reloads config, restarts the Chat process; items that can be hot-updated take effect immediately, otherwise a restart is required)
 
-### Tool Policy (v4.0)
+### Tool Policy (v4.1)
 
 The "Tools" page visually toggles every tool and even **sub-tools** (e.g., allow only `file.read` while blocking `file.delete`; disable certain sub-agents by type):
 
@@ -197,7 +197,7 @@ The "Tools" page visually toggles every tool and even **sub-tools** (e.g., allow
 - Disabled tools are hidden from the system prompt and intercepted again at runtime
 - Supports one-click reset to the mode defaults
 
-### Backup / Rollback (v4.0)
+### Backup / Rollback (v4.1)
 
 Two tabs:
 

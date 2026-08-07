@@ -1,8 +1,8 @@
-# 构建指南（v4.0）
+# 构建指南（v4.1）
 
 > [English](en/BUILD.md)
 
-本文说明如何从源码构建 **Spore 4.0** Windows 桌面安装包（Tauri + PyInstaller 后端 sidecar）。
+本文说明如何从源码构建 **Spore 4.1** Windows 桌面安装包（Tauri + PyInstaller 后端 sidecar）。
 
 ---
 
@@ -16,7 +16,7 @@
 | Rust crate | `desktop_app/frontend/src-tauri/Cargo.toml` |
 | FastAPI | `desktop_app/backend/server.py` / `standalone.py` |
 
-> 上述字段当前均为 `4.0.0`；升版本时请保持全部字段一致后再构建。
+> 上述字段当前均为 `4.1.0`；升版本时请保持全部字段一致后再构建。
 
 安装包输出：
 
@@ -159,7 +159,7 @@ output/  history/  logs/  note.txt   # 运行时生成
 
 ### 修改版本号
 
-同步修改「产物与版本」表中所有版本字段为同一版本（例如 `4.0.0`），再执行完整构建。
+同步修改「产物与版本」表中所有版本字段为同一版本（例如 `4.1.0`），再执行完整构建。
 
 ---
 

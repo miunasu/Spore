@@ -2,7 +2,7 @@
 
 > [中文](../SILVERFOX.md)
 
-> Applies to Spore 4.0. Launch from desktop or CLI and follow the instructions below to reproduce; samples and outputs are in `example/MalwareAnalysis/SliverFox/`.
+> Applies to Spore 4.1. Launch from desktop or CLI and follow the instructions below to reproduce; samples and outputs are in `example/MalwareAnalysis/SliverFox/`.
 
 ## 📋 Preparation
 

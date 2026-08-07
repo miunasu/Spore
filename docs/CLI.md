@@ -1,4 +1,4 @@
-# CLI 模式使用指南（v4.0）
+# CLI 模式使用指南（v4.1）
 
 > [English](en/CLI.md)
 
@@ -55,7 +55,7 @@ continue               - 加载最近一份历史并继续
 - 按会话覆盖更新，默认最多保留约 10 个会话
 - 可用 `load autosave/session_xxx.mem` 恢复
 
-### 备份与回滚（v4.0）
+### 备份与回滚（v4.1）
 
 ```
 rollback <文件路径> [--to <版本号>|--steps <N>]  - 文件级回滚到指定版本 / 后退 N 个版本
@@ -74,7 +74,7 @@ rewind [<checkpoint_id>|--turns <N>]            - 回滚到对话点（文件+�
 
 Learning 无需 CLI 命令：启用后，系统会在任务开始时自动检索相关历史经验，并在任务结束时自动记录本次执行。当前 CLI **没有**手动触发 consolidation 的命令；`learning/consolidation.py` 中的 consolidation 能力不是 CLI 命令面的一部分。
 
-### 安全白名单（v4.0）
+### 安全白名单（v4.1）
 
 ```
 whitelist            - 用法帮助

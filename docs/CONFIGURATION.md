@@ -1,4 +1,4 @@
-# 配置说明（v4.0）
+# 配置说明（v4.1）
 
 > [English](en/CONFIGURATION.md)
 
@@ -100,7 +100,7 @@ Learning 使用 OpenAI-compatible embeddings HTTP 接口（`<base_url>/v1/embedd
 | `SUB_AGENT_OPENAI_API_KEY` / `SUB_AGENT_OPENAI_API_URL` / `SUB_AGENT_OPENAI_MODEL` | 子 Agent OpenAI |
 | `SUB_AGENT_ANTHROPIC_API_KEY` / `SUB_AGENT_ANTHROPIC_API_URL` / `SUB_AGENT_ANTHROPIC_MODEL` | 子 Agent Anthropic |
 
-### 辅助 Agent 独立 LLM（v4.0，可选）
+### 辅助 Agent 独立 LLM（v4.1，可选）
 
 四个辅助 Agent 档位可各自指定模型，回退链：**档位专属 → `SUB_AGENT_*` → 主配置**（按字段逐项回退，见 `Config.resolve_agent_llm`）：
 
@@ -176,7 +176,7 @@ AGENT_SECURITY_OPENAI_MODEL=gpt-4o-mini
 
 ---
 
-## 安全（v4.0）
+## 安全（v4.1）
 
 ### 安全 Agent
 

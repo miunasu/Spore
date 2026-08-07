@@ -1,4 +1,4 @@
-# Skill Development Guide (v4.0)
+# Skill Development Guide (v4.1)
 
 > [中文](../SKILLS.md)
 

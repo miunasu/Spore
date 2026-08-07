@@ -54,6 +54,11 @@ temp/
 *.tmp
 *.bak
 
+# 敏感配置（API keys 等，禁止提交）
+.env
+.env.local
+.env.*.local
+
 # 对话历史和输出
 history/
 output/

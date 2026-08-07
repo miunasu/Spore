@@ -5,7 +5,7 @@
 
 Windows 上的 AI Agent。运行在你本机，能操作真实的文件和系统，做了什么你看得见，随时能停，改了的文件能退回去。
 
-[下载](https://github.com/miunasu/Spore/releases) · [English](README.md) · <a href="changelog/spore-4-1-release-celebration.html" target="_blank">🎉 4.1 发布庆祝</a> · [配置说明](docs/CONFIGURATION.md) · [界面指南](docs/FRONTEND.md) · [CLI 模式](docs/CLI.md) · [构建指南](docs/BUILD.md)
+[下载](https://github.com/miunasu/Spore/releases) · [English](README.md) · <a href="https://htmlpreview.github.io/?https://github.com/miunasu/Spore/blob/main/changelog/spore-4-1-release-celebration.html" target="_blank">🎉 4.1 发布庆祝</a> · [配置说明](docs/CONFIGURATION.md) · [界面指南](docs/FRONTEND.md) · [CLI 模式](docs/CLI.md) · [构建指南](docs/BUILD.md)
 
 </div>
 

@@ -5,7 +5,7 @@
 
 AI agent for Windows. Runs on your machine, touches your real files and system, and lets you stop or undo anything it does.
 
-[Download](https://github.com/miunasu/Spore/releases) · [中文](README_zh.md) · <a href="changelog/spore-4-1-release-celebration.html" target="_blank">🎉 4.1 Release Celebration</a> · [Configuration](docs/en/CONFIGURATION.md) · [Frontend Guide](docs/en/FRONTEND.md) · [CLI Mode](docs/en/CLI.md) · [Build Guide](docs/en/BUILD.md)
+[Download](https://github.com/miunasu/Spore/releases) · [中文](README_zh.md) · <a href="https://htmlpreview.github.io/?https://github.com/miunasu/Spore/blob/main/changelog/spore-4-1-release-celebration.html" target="_blank">🎉 4.1 Release Celebration</a> · [Configuration](docs/en/CONFIGURATION.md) · [Frontend Guide](docs/en/FRONTEND.md) · [CLI Mode](docs/en/CLI.md) · [Build Guide](docs/en/BUILD.md)
 
 </div>
 

@@ -405,9 +405,8 @@ const MAIN_PORT = 8765;
 
 export const useChatStore = create<ChatStore>((set, get) => {
   // 初始化默认对话（使用主后端）
-  // 使用固定 ID "default" 以匹配后端的默认 session
-  const defaultConv = createConversation('Default');
-  defaultConv.id = 'default';  // 覆盖为固定 ID
+  // 使用 generateId() 生成唯一 ID，与新建窗口保持一致，避免 "default" 硬编码导致记忆冲突
+  const defaultConv = createConversation();
   defaultConv.backendPort = MAIN_PORT;  // 临时回退值，bootstrap() 后由 setMainBackendPort 修正
   defaultConv.backendStatus = 'running';
 
@@ -514,8 +513,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // 从后端加载该会话的消息历史快照
           const messages = await fetchSessionMessages(getMainApiPort(), id);
 
-          // 更新该对话的消息
-          get().setMessages(messages, id);
+          // 如果该对话正在生成中，跳过快照覆盖：
+          // round_chunk 流式内容只在前端 Zustand 内存中，尚未落库，
+          // 用历史快照整体替换会清空进行中的内容（前端 agent HTML 等）
+          const isGenerating = get().generatingConversations.has(id);
+          if (!isGenerating) {
+            get().setMessages(messages, id);
+          }
 
           // 进入会话时向后端核对是否有 running 任务，恢复 generating 状态
           void get().syncGeneratingState(id);
@@ -1525,6 +1529,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     setMainBackendPort: (port: number) => {
+      // 获取初始会话 ID（在 set 之前捕获，避免读到更新后的状态）
+      const initialConvId = get().conversations[0]?.id;
+
       // 将所有使用旧主后端端口的对话更新为真实端口
       set((state) => ({
         conversations: state.conversations.map((c) =>
@@ -1533,11 +1540,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
             : c
         ),
       }));
-      // 端口确定后再初始化默认会话
-      const chatApi = createChatApi(port);
-      chatApi.switchSession('default').catch((e) => {
-        frontendLog(t('stores.chat.initDefaultSessionFailed', { error: String(e) }));
-      });
+
+      // 端口确定后，在后端创建并切换到初始会话（使用实际生成的会话 ID，不再硬编码 "default"）
+      if (initialConvId) {
+        const chatApi = createChatApi(port);
+        chatApi.createSession(initialConvId)
+          .catch(() => { /* 会话已存在时忽略错误 */ })
+          .finally(() => {
+            chatApi.switchSession(initialConvId).catch((e) => {
+              frontendLog(t('stores.chat.initDefaultSessionFailed', { error: String(e) }));
+            });
+          });
+      }
     },
   };
 });

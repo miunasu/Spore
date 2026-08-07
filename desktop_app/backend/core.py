@@ -105,12 +105,9 @@ def initialize_desktop_backend() -> Dict[str, Any]:
         config=_config
     )
     
-    # 9. 为默认会话创建 ConversationLoop（保持兼容性）
-    _conv_loop = _conv_loop_manager.get_loop(
-        session_id="default",
-        system_prompt=system_prompt,
-        tool_names=initial_tools,
-    )
+    # 9. 不预创建 "default" 会话；前端会在 setMainBackendPort 后通过 createSession
+    # 按实际生成的会话 ID 初始化，避免硬编码 "default" 导致短记忆冲突。
+    _conv_loop = None
     
     # 全部核心实例初始化成功后再发布 Desktop 异步 hook，避免半初始化状态泄漏。
     from base.tools import set_async_dispatch_hook, set_subagent_status_hook
@@ -408,8 +405,7 @@ def delete_session(session_id: str) -> Dict[str, Any]:
     # 短记忆被队列淘汰或手动删除时才联动清除（见 memory_manager._prune_autosaves_locked）。
 
     # 日志与会话生命周期绑定：会话删除后联动清除对应的对话日志目录。
-    # default 会话不删日志（仅清空状态，日志在本次进程生命周期内继续有效）。
-    if success and session_id != "default":
+    if success:
         try:
             from base.logger import delete_conversation_log_dir
             delete_conversation_log_dir(session_id)

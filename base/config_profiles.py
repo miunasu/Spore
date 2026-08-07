@@ -35,11 +35,16 @@ SUB_AGENT_SDK_PROFILE_KEYS: Dict[str, List[str]] = {
         "SUB_AGENT_OPENAI_API_KEY",
         "SUB_AGENT_OPENAI_API_URL",
         "SUB_AGENT_OPENAI_MODEL",
+        "SUB_AGENT_USE_RESPONSES_API",
+        "SUB_AGENT_OPENAI_REASONING_EFFORT",
     ],
     "anthropic": [
         "SUB_AGENT_ANTHROPIC_API_KEY",
         "SUB_AGENT_ANTHROPIC_API_URL",
         "SUB_AGENT_ANTHROPIC_MODEL",
+        "SUB_AGENT_ANTHROPIC_EFFORT",
+        "SUB_AGENT_ANTHROPIC_THINKING_MODE",
+        "SUB_AGENT_ANTHROPIC_THINKING_BUDGET_TOKENS",
     ],
 }
 
@@ -116,7 +121,9 @@ _AGENT_BASE_SUFFIXES = [
     "ANTHROPIC_EFFORT", "ANTHROPIC_THINKING_MODE", "ANTHROPIC_THINKING_BUDGET_TOKENS",
     "MAX_OUTPUT_TOKENS",
 ]
-PROFILE_ENV_KEYS = PROFILE_ENV_KEYS + [
+# These keys are GLOBAL — they live in .env but are intentionally excluded from profiles.
+# Switching profiles must never overwrite or clear AutoAgent granular-base settings.
+GLOBAL_AGENT_ENV_KEYS: List[str] = [
     f"{p}_{s}" for p in _AGENT_BASE_PREFIXES for s in _AGENT_BASE_SUFFIXES
 ]
 
@@ -215,6 +222,9 @@ def _normalize_values(values: Dict[str, Any]) -> Dict[str, str]:
         for key in SUB_AGENT_SDK_PROFILE_KEYS[sub_agent_sdk]:
             if key in raw_values:
                 normalized[key] = raw_values[key]
+    # SUB_AGENT_MAX_OUTPUT_TOKENS is SDK-agnostic; include whenever present.
+    if "SUB_AGENT_MAX_OUTPUT_TOKENS" in raw_values:
+        normalized["SUB_AGENT_MAX_OUTPUT_TOKENS"] = raw_values["SUB_AGENT_MAX_OUTPUT_TOKENS"]
 
     for key in COMMON_PROFILE_KEYS:
         if key in raw_values:
@@ -226,11 +236,9 @@ def _normalize_values(values: Dict[str, Any]) -> Dict[str, str]:
     ):
         normalized["CLEAN_AUTH_HEADER"] = raw_values["CLEAN_AUTH_HEADER"]
 
-    # Granular per-agent base keys — copy all that survived the whitelist filter.
-    for key in PROFILE_ENV_KEYS:
-        if key.startswith(tuple(p + "_" for p in _AGENT_BASE_PREFIXES)):
-            if key in raw_values and key not in normalized:
-                normalized[key] = raw_values[key]
+    # Note: GLOBAL_AGENT_ENV_KEYS (AGENT_SUPERVISOR/MODE_SELECTOR/SECURITY/FRONTEND_*)
+    # are intentionally excluded from profiles — they are global and must survive
+    # profile switches unchanged.
 
     return normalized
 
@@ -275,16 +283,35 @@ def read_env_values(env_path: Path) -> Dict[str, str]:
     return values
 
 
-def write_env_values(env_path: Path, updates: Dict[str, str]) -> None:
+def write_env_values(
+    env_path: Path,
+    updates: Dict[str, str],
+    *,
+    clear_profile_orphans: bool = False,
+) -> None:
+    """Write profile key/value pairs into .env.
+
+    When *clear_profile_orphans* is True (used by apply_config_profile),
+    any PROFILE_ENV_KEYS line that is currently active in .env but is NOT
+    part of *updates* will be commented out, so the previous profile's
+    settings don't bleed into the new one.
+    """
     if not env_path.exists():
         raise FileNotFoundError(".env file does not exist")
 
     filtered_updates = _normalize_values(updates)
-    if not filtered_updates:
+    if not filtered_updates and not clear_profile_orphans:
         return
 
+    # Keys managed by the profile system that this profile does NOT set.
+    orphan_keys: set = (
+        set(PROFILE_ENV_KEYS) - set(filtered_updates.keys())
+        if clear_profile_orphans
+        else set()
+    )
+
     original_lines = env_path.read_text(encoding="utf-8").splitlines(keepends=True)
-    updated_keys = set()
+    updated_keys: set = set()
     new_lines: List[str] = []
 
     for line in original_lines:
@@ -297,6 +324,10 @@ def write_env_values(env_path: Path, updates: Dict[str, str]) -> None:
             if key in filtered_updates:
                 new_lines.append(f"{key}={filtered_updates[key]}{newline}")
                 updated_keys.add(key)
+                continue
+            if key in orphan_keys:
+                # Drop the line entirely; os.getenv() will fall back to the
+                # hardcoded default in Config.__init__.
                 continue
 
         new_lines.append(line)
@@ -439,7 +470,7 @@ def apply_config_profile(profile_id: str, env_path: Path) -> Dict[str, Any]:
     if not values:
         raise ValueError("Profile does not contain applicable config values")
 
-    write_env_values(env_path, values)
+    write_env_values(env_path, values, clear_profile_orphans=True)
     store["active_profile_id"] = profile_id
     _save_store(store)
 

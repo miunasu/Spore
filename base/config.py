@@ -172,21 +172,21 @@ class Config:
         # ========== 对话管理配置 ==========
         # 上下文token限制
         try:
-            self.context_max_tokens: int = int(os.getenv("CONTEXT_MAX_TOKENS", "128000"))
+            self.context_max_tokens: int = int(os.getenv("CONTEXT_MAX_TOKENS", "270000"))
         except ValueError:
-            self.context_max_tokens = 128000
-        
+            self.context_max_tokens = 270000
+
         # 上下文警告阈值（百分比）
         try:
-            self.context_warning_threshold: float = float(os.getenv("CONTEXT_WARNING_THRESHOLD", "0.8"))
+            self.context_warning_threshold: float = float(os.getenv("CONTEXT_WARNING_THRESHOLD", "0.85"))
         except ValueError:
-            self.context_warning_threshold = 0.8
-        
+            self.context_warning_threshold = 0.85
+
         # 单条消息的最大token比例（相对于context_max_tokens）
         try:
-            self.max_single_message_ratio: float = float(os.getenv("MAX_SINGLE_MESSAGE_RATIO", "0.3"))
+            self.max_single_message_ratio: float = float(os.getenv("MAX_SINGLE_MESSAGE_RATIO", "0.1"))
         except ValueError:
-            self.max_single_message_ratio = 0.3
+            self.max_single_message_ratio = 0.1
         
         # ========== Characters 系统配置 ==========
         # 默认启用的 character 名称（为空则不自动加载）
@@ -229,7 +229,7 @@ class Config:
         self.log_general_filename: str = os.getenv("LOG_GENERAL_FILENAME", "general.log")
 
         # Raw 日志：收到 LLM 回复时立即把原文完整落盘（不推送到 Desktop 左栏日志）
-        self.log_raw_enabled: bool = os.getenv("LOG_RAW_ENABLED", "true").lower() == "true"
+        self.log_raw_enabled: bool = os.getenv("LOG_RAW_ENABLED", "false").lower() == "true"
         self.log_raw_filename: str = os.getenv("LOG_RAW_FILENAME", "raw.log")
 
         # 日志监控配置
@@ -258,9 +258,9 @@ class Config:
             self.web_proxy_port = 7897
         
         try:
-            self.web_max_content_length: int = int(os.getenv("WEB_MAX_CONTENT_LENGTH", "15000"))
+            self.web_max_content_length: int = int(os.getenv("WEB_MAX_CONTENT_LENGTH", "20000"))
         except ValueError:
-            self.web_max_content_length = 15000
+            self.web_max_content_length = 20000
         
         # 文件读取工具配置
         try:
@@ -333,9 +333,9 @@ class Config:
         
         # 多Agent等待轮询间隔（秒），用于检查中断信号
         try:
-            self.multi_agent_join_interval: float = float(os.getenv("MULTI_AGENT_JOIN_INTERVAL", "2.0"))
+            self.multi_agent_join_interval: float = float(os.getenv("MULTI_AGENT_JOIN_INTERVAL", "1.0"))
         except ValueError:
-            self.multi_agent_join_interval = 2.0
+            self.multi_agent_join_interval = 1.0
 
         # 桌面端异步子Agent派发的整批最长运行时间（秒）；0 表示禁用 watchdog
         try:

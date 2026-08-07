@@ -43,6 +43,9 @@ const chatPanel = {
       agentAssessTitle: 'Frontend Agent 有个问题',
       agentAssessAccept: '好，继续',
       agentAssessDismiss: '不需要',
+      frontendAgent: 'Agent',
+      frontendAgentEnableTitle: 'Frontend Agent 已关闭 — 点击开启（页面交互不会触发 Agent）',
+      frontendAgentDisableTitle: 'Frontend Agent 已开启 — 点击关闭',
     },
     fileEditorContent: {
       previewFailed: '预览失败，请切换到编辑模式查看原始内容',
@@ -98,6 +101,9 @@ const chatPanel = {
       agentAssessTitle: 'Frontend Agent has a question',
       agentAssessAccept: 'Yes, go ahead',
       agentAssessDismiss: 'No thanks',
+      frontendAgent: 'Agent',
+      frontendAgentEnableTitle: 'Frontend Agent is off — click to enable (interactions won\'t trigger the Agent)',
+      frontendAgentDisableTitle: 'Frontend Agent is on — click to disable',
     },
     fileEditorContent: {
       previewFailed: 'Preview failed. Switch to edit mode to view the raw content.',

@@ -44,6 +44,8 @@ type HtmlPreviewProps = {
   variant?: 'message' | 'file';
   artifactId?: string;
   onContentChange?: (content: string) => void;
+  /** When false, user interactions are observed but never forwarded to the Frontend Agent. */
+  frontendAgentEnabled?: boolean;
 };
 
 type DynamicRequest = {
@@ -166,7 +168,7 @@ function stateMatchesRequest(state: HtmlInteractionState, active: ActiveRequest)
   return revision > active.identity.state_revision;
 }
 
-export function HtmlPreview({ content, title, variant = 'message', artifactId: artifactIdProp, onContentChange }: HtmlPreviewProps) {
+export function HtmlPreview({ content, title, variant = 'message', artifactId: artifactIdProp, onContentChange, frontendAgentEnabled = true }: HtmlPreviewProps) {
   const t = useT();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const liveContentRef = useRef(content);
@@ -200,6 +202,16 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
   const interactionFrozenRef = useRef(false);
   /** Mirror of agentImproving for use inside handleMessage (avoids stale closure). */
   const agentImprovingRef = useRef(false);
+  /**
+   * True after the first acceptInteractionState call for the current artifactId.
+   * Blocks iframe interaction events from triggering intent collection during the
+   * brief window between component (re)mount and when the backend state is loaded —
+   * prevents spurious intent collection when switching back to a conversation where
+   * the frontend agent was already working.
+   */
+  const stateInitializedRef = useRef(false);
+  /** Mirror of frontendAgentEnabled prop for use inside handleMessage (avoids stale closure). */
+  const frontendAgentEnabledRef = useRef(frontendAgentEnabled);
   const resetIntentTransactionRef = useRef<(reason: string, cancelArtifactId?: string | null) => boolean>(() => false);
   const lastDblClickRef = useRef<{ timestamp: number; focusRef: string; domPath: string } | null>(null);
   /** Set to true before startEpisode when the user explicitly confirmed Build/Explain/Compare. */
@@ -297,7 +309,13 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
       previousArtifactIdRef.current = artifactId;
     }
     artifactIdRef.current = artifactId;
-    if (!artifactId) return;
+    if (!artifactId) {
+      // No artifact — nothing to load, allow interaction immediately.
+      stateInitializedRef.current = true;
+      return;
+    }
+    // Block intent collection until the backend interaction state is confirmed.
+    stateInitializedRef.current = false;
     let cancelled = false;
     htmlApi.load(artifactId).then((result) => {
       const active = activeRequestRef.current;
@@ -317,7 +335,10 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
     }).catch(() => { /* Inline HTML may not have been persisted yet. */ });
     htmlApi.interactionState(artifactId).then((state) => {
       if (!cancelled) acceptInteractionStateRef.current(state);
-    }).catch(() => { /* WebSocket and later interaction polling remain available. */ });
+    }).catch(() => {
+      // State fetch failed — unblock interaction so the user isn't permanently locked out.
+      if (!cancelled) stateInitializedRef.current = true;
+    });
     return () => { cancelled = true; };
   }, [artifactId]);
 
@@ -335,6 +356,8 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
   };
   // Keep agentImprovingRef in sync so handleMessage (inside useEffect) always reads the latest value.
   agentImprovingRef.current = agentImproving;
+  // Keep frontendAgentEnabledRef in sync so handleMessage always reads the latest prop value.
+  frontendAgentEnabledRef.current = frontendAgentEnabled;
   const recoverIfExpired = async (state: HtmlInteractionState): Promise<boolean> => {
     if (!artifactId || recoveryInFlightRef.current || !state.frozen) return false;
     const operationId = state.operation_id;
@@ -532,6 +555,8 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
     const active = activeRequestRef.current;
     if (!active) {
       interactionStateRevisionRef.current = Math.max(interactionStateRevisionRef.current, revision);
+      // Unblock intent collection — backend state has been confirmed for this artifact.
+      stateInitializedRef.current = true;
       if (state.frozen) {
         if (mountedRef.current) {
           // An ownerless frozen state still freezes the page; only lease recovery releases it.
@@ -547,9 +572,29 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
           }, 1000);
         }
       } else {
-        clearPoll();
-        clearHeartbeat();
-        if (mountedRef.current) setFrozen(false);
+        // Restore agentImproving indicator if the backend reports the agent is still
+        // executing mutations (implementing phase). This recovers the visual state lost
+        // when the component unmounted during a conversation switch.
+        const isImprovingPhase = state.phase === 'implementing';
+        if (mountedRef.current) {
+          setFrozen(false);
+          setAgentImproving(isImprovingPhase);
+          agentImprovingRef.current = isImprovingPhase;
+        }
+        if (isImprovingPhase) {
+          // Keep polling until the implementing phase completes.
+          if (!statePollTimerRef.current && artifactId) {
+            statePollTimerRef.current = setInterval(() => {
+              void htmlApi.interactionState(artifactId).then((nextState) => {
+                acceptInteractionStateRef.current(nextState);
+                void recoverIfExpired(nextState);
+              }).catch(() => undefined);
+            }, 1000);
+          }
+        } else {
+          clearPoll();
+          clearHeartbeat();
+        }
       }
       return;
     }
@@ -774,7 +819,7 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
           throw new Error('Committed HTML mutation is missing document readiness identity');
         }
         markDocumentReadyRequired(
-          active, result.content, effectiveEpisode.runtime_state, committedSha, committedStateRevision,
+          active, result.content, undefined, committedSha, committedStateRevision,
           result.document_generation_id, result.restore_attempt_id, result.bridge_capability,
         );
       } else if (!active.barrierCommitted && mountedRef.current) {
@@ -810,6 +855,12 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
     // While the agent is implementing a mutation (Round 2 through commit), discard
     // any collected draft so no new episode is dispatched until the cycle completes.
     if (agentImproving) {
+      draftEventsRef.current = [];
+      setCollectingCount(0);
+      return;
+    }
+    // Frontend Agent is disabled — drop the draft without dispatching.
+    if (!frontendAgentEnabled) {
       draftEventsRef.current = [];
       setCollectingCount(0);
       return;
@@ -894,8 +945,11 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
         return;
       }
       const hasActiveRequest = activeRequestRef.current !== null;
-      if (!['click', 'interaction'].includes(message.type) || !message.event || interactionFrozen ||
-          hasActiveRequest || agentImprovingRef.current) return;
+      // stateInitializedRef guards the window between (re)mount and first backend state
+      // confirmation — without it, iframe events arrive while agentImproving/interactionFrozen
+      // are still false and spuriously open the intent-collection dialog.
+      if (!stateInitializedRef.current || !['click', 'interaction'].includes(message.type) || !message.event || interactionFrozen ||
+          hasActiveRequest || agentImprovingRef.current || !frontendAgentEnabledRef.current) return;
       const observed = message.event;
       // Record dblclick so we can suppress its ghost click events that arrive late
       // (bridge sends dblclick with delay=40ms but click with delay=400ms, so clicks
@@ -1037,7 +1091,9 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
             agentRequestId: confirmReqId,
           });
           setProcessingCount(0);
+          setAgentImproving(false);
         }
+        agentImprovingRef.current = false;
         if (confirmHeartbeatTimerRef.current) clearInterval(confirmHeartbeatTimerRef.current);
         confirmHeartbeatTimerRef.current = setInterval(() => {
           if (!artifactId) return;
@@ -1103,24 +1159,38 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
       });
       clearConfirmation();
       const active = activeRequestRef.current;
-      if (!active) return;
+      // Update revision counters regardless of whether active was already cleared by a WebSocket race.
       if (result.state_revision != null) {
-        active.identity.state_revision = Math.max(active.identity.state_revision, result.state_revision);
+        if (active) active.identity.state_revision = Math.max(active.identity.state_revision, result.state_revision);
         interactionStateRevisionRef.current = Math.max(interactionStateRevisionRef.current, result.state_revision);
       }
       if (result.generated && result.content && result.content !== liveContentRef.current) {
-        const committedSha = result.html_sha256 ?? await sha256Text(result.content);
-        const committedStateRevision = Math.max(active.identity.state_revision, interactionStateRevisionRef.current);
-        if (!result.document_generation_id || !result.restore_attempt_id || !result.bridge_capability) {
-          throw new Error('Confirmed mutation is missing document readiness identity');
+        if (result.requires_interaction_ready_ack && result.document_generation_id && result.restore_attempt_id && result.bridge_capability) {
+          // Full bridge readiness handshake path — needs an active operation for the ready ACK.
+          if (!active) return;
+          const committedSha = result.html_sha256 ?? await sha256Text(result.content);
+          const committedStateRevision = Math.max(active.identity.state_revision, interactionStateRevisionRef.current);
+          markDocumentReadyRequired(
+            active, result.content, undefined, committedSha, committedStateRevision,
+            result.document_generation_id, result.restore_attempt_id, result.bridge_capability,
+          );
+        } else {
+          // Simple path: apply the committed content even if the WebSocket completed-state event
+          // already cleared activeRequestRef before this HTTP response arrived.
+          liveContentRef.current = result.content;
+          htmlRevisionRef.current += 1;
+          setDocumentToken(createInteractionId('document'));
+          setBridgeCapability(createInteractionId('bridge-capability'));
+          setDocumentGenerationId(createInteractionId('document-generation'));
+          setRestoreAttemptId(createInteractionId('restore-attempt'));
+          setLiveContent(result.content);
+          onContentChangeRef.current?.(result.content);
+          setFrozen(false);
+          if (active) finishActiveRef.current(active);
         }
-        markDocumentReadyRequired(
-          active, result.content, active.episode.runtime_state, committedSha, committedStateRevision,
-          result.document_generation_id, result.restore_attempt_id, result.bridge_capability,
-        );
       } else {
         setFrozen(false);
-        finishActiveRef.current(active);
+        if (active) finishActiveRef.current(active);
       }
     } catch (error) {
       console.error('Agent confirmation failed:', error);
@@ -1189,6 +1259,20 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
     return clearHeartbeat;
   }, [artifactId, interactionFrozen]);
 
+  // 底栏弹窗 3 秒自动消失：后出现的弹窗会替换前面的，同时旧弹窗因 state 清零而 unmount。
+  // intentCandidate 渲染在最后（DOM 层叠最高），确保它始终覆盖 agent 弹窗。
+  const BOTTOM_POPUP_DISMISS_MS = 6_000;
+  useEffect(() => {
+    if (!intentCandidate) return;
+    const timer = setTimeout(() => dismissIntentCandidate(), BOTTOM_POPUP_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [intentCandidate]);
+  useEffect(() => {
+    if (!agentAssessQuestion) return;
+    const timer = setTimeout(() => dismissAssessQuestion(), BOTTOM_POPUP_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [agentAssessQuestion]);
+
   return (
     <div className={`${sizeClass} relative max-w-full`}>
       <iframe
@@ -1215,32 +1299,6 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
             <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-spore-highlight" />
             {t('chatPanel.htmlPreview.pageFrozen')}
           </div>
-        </div>
-      )}
-      {intentCandidate && !interactionFrozen && (
-        <div
-          data-testid="html-intent-candidate"
-          className="absolute inset-x-3 bottom-3 z-10 flex flex-wrap items-center gap-2 rounded-md border border-spore-border bg-spore-card px-3 py-2 text-xs text-spore-text shadow-lg"
-          role="toolbar"
-          aria-label={t('chatPanel.htmlPreview.intentCandidate')}
-        >
-          <span className="min-w-0 flex-1 truncate" title={intentCandidate.focus.label}>
-            {t('chatPanel.htmlPreview.intentCandidate')}: {intentCandidate.focus.label}
-          </span>
-          <button type="button" className="rounded border border-spore-border px-2 py-1 hover:bg-spore-hover" onClick={() => confirmIntentCandidate('build')}>
-            {t('chatPanel.htmlPreview.build')}
-          </button>
-          <button type="button" className="rounded border border-spore-border px-2 py-1 hover:bg-spore-hover" onClick={() => confirmIntentCandidate('explain')}>
-            {t('chatPanel.htmlPreview.explain')}
-          </button>
-          {intentCandidate.candidate_intents.includes('compare_semantic_objects') && (
-            <button type="button" className="rounded border border-spore-border px-2 py-1 hover:bg-spore-hover" onClick={() => confirmIntentCandidate('compare')}>
-              {t('chatPanel.htmlPreview.compare')}
-            </button>
-          )}
-          <button type="button" className="rounded px-2 py-1 text-spore-muted hover:bg-spore-hover" onClick={dismissIntentCandidate}>
-            {t('chatPanel.htmlPreview.dismiss')}
-          </button>
         </div>
       )}
       {(collectingCount > 0 || processingCount > 0) && !interactionFrozen && (
@@ -1291,13 +1349,6 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
             <p className="text-spore-error">{t('chatPanel.htmlPreview.agentConfirmTimeout')}</p>
           ) : null}
           <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className="rounded border border-spore-border px-3 py-1 hover:bg-spore-hover"
-              onClick={dismissAgentConfirmation}
-            >
-              {t('chatPanel.htmlPreview.agentConfirmDismiss')}
-            </button>
             {!agentConfirmation.timedOut && (
               <button
                 type="button"
@@ -1307,6 +1358,13 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
                 {t('chatPanel.htmlPreview.agentConfirmAccept')}
               </button>
             )}
+            <button
+              type="button"
+              className="rounded border border-spore-border px-3 py-1 hover:bg-spore-hover"
+              onClick={dismissAgentConfirmation}
+            >
+              {t('chatPanel.htmlPreview.agentConfirmDismiss')}
+            </button>
           </div>
         </div>
       )}
@@ -1327,19 +1385,46 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
           <div className="flex justify-end gap-2">
             <button
               type="button"
-              className="rounded border border-spore-border px-3 py-1 hover:bg-spore-hover"
-              onClick={dismissAssessQuestion}
-            >
-              {t('chatPanel.htmlPreview.agentAssessDismiss')}
-            </button>
-            <button
-              type="button"
               className="rounded border border-spore-highlight/60 bg-spore-highlight/10 px-3 py-1 font-medium hover:bg-spore-highlight/20"
               onClick={() => { void acceptAssessQuestion(); }}
             >
               {t('chatPanel.htmlPreview.agentAssessAccept')}
             </button>
+            <button
+              type="button"
+              className="rounded border border-spore-border px-3 py-1 hover:bg-spore-hover"
+              onClick={dismissAssessQuestion}
+            >
+              {t('chatPanel.htmlPreview.agentAssessDismiss')}
+            </button>
           </div>
+        </div>
+      )}
+      {/* intentCandidate 渲染在最后：DOM 层叠最高，确保后出现的用户操作意图弹窗覆盖 agent 弹窗 */}
+      {intentCandidate && !interactionFrozen && (
+        <div
+          data-testid="html-intent-candidate"
+          className="absolute inset-x-3 bottom-3 z-10 flex flex-wrap items-center gap-2 rounded-md border border-spore-border bg-spore-card px-3 py-2 text-xs text-spore-text shadow-lg"
+          role="toolbar"
+          aria-label={t('chatPanel.htmlPreview.intentCandidate')}
+        >
+          <span className="min-w-0 flex-1 truncate" title={intentCandidate.focus.label}>
+            {t('chatPanel.htmlPreview.intentCandidate')}: {intentCandidate.focus.label}
+          </span>
+          <button type="button" className="rounded border border-spore-border px-2 py-1 hover:bg-spore-hover" onClick={() => confirmIntentCandidate('build')}>
+            {t('chatPanel.htmlPreview.build')}
+          </button>
+          <button type="button" className="rounded border border-spore-border px-2 py-1 hover:bg-spore-hover" onClick={() => confirmIntentCandidate('explain')}>
+            {t('chatPanel.htmlPreview.explain')}
+          </button>
+          {intentCandidate.candidate_intents.includes('compare_semantic_objects') && (
+            <button type="button" className="rounded border border-spore-border px-2 py-1 hover:bg-spore-hover" onClick={() => confirmIntentCandidate('compare')}>
+              {t('chatPanel.htmlPreview.compare')}
+            </button>
+          )}
+          <button type="button" className="rounded px-2 py-1 text-spore-muted hover:bg-spore-hover" onClick={dismissIntentCandidate}>
+            {t('chatPanel.htmlPreview.dismiss')}
+          </button>
         </div>
       )}
     </div>

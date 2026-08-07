@@ -63,17 +63,56 @@ _ALLOWED_MUTATIONS = _CONTENT_MUTATIONS | {"set_attributes", "remove"}
 _MAX_MUTATIONS = 24
 _MAX_MUTATION_BYTES = 128 * 1024
 _MAX_MUTATION_RESPONSE_BYTES = 256 * 1024
-_MAX_CONTEXT_SNIPPET_BYTES = 20 * 1024
+_MAX_CONTEXT_SNIPPET_BYTES = 48 * 1024
 _VOID_ELEMENTS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
     "param", "source", "track", "wbr",
 }
+# position:fixed is always stripped silently — it creates viewport-locked overlays that
+# break any page layout and can never be intentional for injected content.
+_RE_POSITION_FIXED = re.compile(r"\bposition\s*:\s*fixed\b", re.IGNORECASE)
+# position:absolute is legitimate inside a positioned container but breaks the layout when
+# appended directly to document-body (acts like fixed without scroll tracking).  That case
+# is validated at apply-time and returned as an agent error rather than silently rewritten.
+_RE_POSITION_ABSOLUTE = re.compile(r"\bposition\s*:\s*absolute\b", re.IGNORECASE)
+# Structural analysis patterns — used to extract page facts that constrain valid mutations.
+# CSS class names defined in <style> blocks (e.g. ".foo {" or ".foo,").
+_RE_CSS_CLASS = re.compile(r"\.([\w-]+)\s*[{,]")
+# ALL element IDs referenced by inline JavaScript — broader than just innerHTML/textContent.
+# Covers any property access: .innerHTML, .textContent, .style.*, .classList.*, setAttribute…
+# If JS has a $('#id') or getElementById('id') call for ANY reason, that ID is "owned" by JS
+# and the agent must not remove it or drop it from a replace_inner/replace_outer mutation.
+_RE_JS_REFERENCED_ID = re.compile(
+    r'\$\s*\(\s*[\'"]#([\w-]+)[\'"]'          # jQuery: $('#id').anything
+    r"|getElementById\s*\(\s*['\"]"            # getElementById('id').anything
+    r"([\w-]+)['\"]",
+    re.IGNORECASE,
+)
+# CSS class names used in injected HTML fragments (class="foo bar").
+_RE_USED_CLASSES = re.compile(r'\bclass\s*=\s*["\']([^"\']*)["\']')
+# JS navigation-controlled content container IDs — elements whose innerHTML/textContent
+# is fully replaced by a central selection function (select/show/navigate + id param).
+# When detected, new supplementary content MUST go inside these containers or the
+# inspector panel, never as a standalone element appended to document-body.
+_RE_JS_NAV_FUNCTION = re.compile(
+    r'function\s+(?:select|show|navigate|switchView|selectView|setView|loadView|renderView)\s*'
+    r'\(\s*(?:id|name|key|view|item|node)\s*\)',
+    re.IGNORECASE,
+)
+_RE_JS_NAV_CONTAINER = re.compile(
+    r'document\s*\.\s*querySelector\s*\(\s*["\']#([\w-]+)["\']'
+    r'\s*\)\s*\.\s*(?:innerHTML|textContent|innerText)\s*=',
+    re.IGNORECASE,
+)
 _coordinators: Dict[str, "_ArtifactCoordinator"] = {}
 _coordinators_guard = threading.Lock()
 _KNOWLEDGE_AUTHORITY_SECRET = secrets.token_bytes(32)
 # Round-1 (ASSESS) protocol keyword — distinct from "interrupt" so the stream
 # callback never accidentally triggers a barrier during the assess round.
 _ASSESS_PAUSE_KEYWORD = "assess_pause"
+# Sentinel returned by _parse_assess_response when the agent determines there is no
+# meaningful user intent — the operation ends silently without showing the user anything.
+_ASSESS_NO_INTENT = object()
 
 
 class InteractionConflictError(RuntimeError):
@@ -747,6 +786,12 @@ def _register_interaction_operation(
 
     if cancel_active is not None:
         _cancel_provider_request(cancel_active)
+        # If the cancelled operation already returned from process_html_interactions
+        # (i.e. it was in awaiting_user_response state with release_operation=False),
+        # no finally-block is alive to call _finish_interaction_operation. Promote the
+        # pending operation ourselves so it does not wait forever.
+        if cancel_active.awaiting_user_response:
+            _finish_interaction_operation(cancel_active, force=True)
 
     active_for_state = cancel_active
     if active_for_state is None:
@@ -1140,6 +1185,168 @@ def _privacy_safe_node_html(node: Tag, limit: int) -> str:
     return "".join(str(child) for child in container.contents)[:limit]
 
 
+def _inject_explain_scaffold(
+    soup: BeautifulSoup,
+    click_nodes: List[Optional[Tag]],
+    intent_snapshot: Optional[Dict[str, Any]],
+    references: Dict[str, Tag],
+    reference_context: List[Dict[str, Any]],
+    reference_targets: List[Dict[str, Any]],
+    seen_nodes: Dict[int, str],
+) -> bool:
+    """Inject a host-managed <details> scaffold when the host cannot resolve any
+    mutation_target_ref from the page structure.
+
+    The scaffold is inserted directly after the primary clicked element's nearest
+    block-level container, then registered as ``mutation-target-1``.  The frontend
+    agent only needs to fill content via ``replace_inner mutation-target-1``; it
+    never has to decide *where* to place the result.
+
+    Returns True when a scaffold was injected, False otherwise.
+    """
+    # Only inject when no mutation target was already resolved from data-spore-* attrs.
+    if any(t.get("mutation_target_ref") for t in reference_targets):
+        return False
+    # If a global inspector panel was discovered there is already a stable target.
+    if any(k.startswith("global-inspector-") for k in references):
+        return False
+
+    primary_click = next((n for n in click_nodes if n is not None), None)
+    if primary_click is None:
+        return False
+
+    # Walk up to find a structurally valid anchor for insert_after.
+    #
+    # KEY RULE: <details> must never be inserted as a direct child of:
+    #   - Table elements  (td/th/tr/tbody/thead/tfoot/table): walk past <table>
+    #   - List items      (li/dt/dd):                         walk past <ul>/<ol>/<dl>
+    # In both cases we set anchor = the container tag (<table>/<ul>/<ol>/<dl>) and
+    # insert the scaffold *after* that container, in the outer block context.
+    #
+    # Safety fallback: if walk-up ends on an inline/unknown element, use <body>.
+
+    _STRUCTURAL_EXIT_TAGS = {
+        # Table interior — walk up until we reach <table>
+        "td", "th", "tr", "tbody", "thead", "tfoot", "colgroup", "col",
+        # List interior — walk up until we reach <ul>/<ol>/<dl>
+        "li", "dt", "dd",
+    }
+    _STRUCTURAL_CONTAINER_TAGS = {"table", "ul", "ol", "dl"}
+    _BLOCK_TAGS = {
+        "section", "article", "details", "div",
+        "main", "header", "footer", "nav", "aside",
+        "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "blockquote", "figure", "address",
+    }
+    _SAFE_ANCHOR_NAMES = _BLOCK_TAGS | _STRUCTURAL_CONTAINER_TAGS
+
+    anchor: Tag = primary_click
+    current_node: Optional[Tag] = primary_click
+    in_structural = False
+
+    for _ in range(14):
+        if not isinstance(current_node, Tag):
+            break
+        if current_node.name in {"html", "head", "body"}:
+            break
+        if current_node.name in _STRUCTURAL_EXIT_TAGS:
+            in_structural = True
+            parent = current_node.parent
+            if not isinstance(parent, Tag):
+                break
+            current_node = parent
+            continue
+        if current_node.name in _STRUCTURAL_CONTAINER_TAGS:
+            # Anchor = this container; scaffold goes *after* it, outside it.
+            anchor = current_node
+            in_structural = True
+            parent = current_node.parent
+            if not isinstance(parent, Tag):
+                break
+            current_node = parent
+            continue
+        if in_structural:
+            # Just exited the structural zone — stop here.
+            break
+        if current_node.name in _BLOCK_TAGS:
+            anchor = current_node
+            break
+        parent = current_node.parent
+        if not isinstance(parent, Tag) or parent.name in {"html", "head", "body"}:
+            break
+        current_node = parent
+
+    # Safety: if anchor ended up as an inline / unknown element, fall back to <body>
+    # so <details> is never inserted as a block inside an inline context.
+    if anchor.name not in _SAFE_ANCHOR_NAMES:
+        anchor = soup.body if isinstance(soup.body, Tag) else anchor
+
+    # Build a human-readable label for the <summary>.
+    snapshot = intent_snapshot or {}
+    focus = snapshot.get("focus") or {}
+    label: str = (
+        str(focus.get("label") or "").strip()
+        or str(primary_click.get("aria-label") or "").strip()
+        or str(primary_click.get("title") or "").strip()
+        or " ".join(primary_click.get_text(" ", strip=True).split())[:60]
+        or "详细说明"
+    )
+    import html as _html_mod
+    safe_label = _html_mod.escape(label)
+
+    scaffold_id = f"spore-explain-{uuid.uuid4().hex[:8]}"
+    content_id = f"{scaffold_id}-body"
+
+    scaffold_html = (
+        f'<details id="{scaffold_id}" data-spore-explain-scaffold="1" open '
+        f'style="margin:8px 0;border:1px solid rgba(128,128,128,.35);'
+        f'border-radius:6px;padding:0 12px 12px">'
+        f'<summary style="cursor:pointer;padding:8px 0;font-weight:600;'
+        f'list-style:none;display:flex;align-items:center;gap:6px">'
+        f'&#9658; {safe_label}</summary>'
+        f'<div id="{content_id}" data-spore-scaffold-content="1"></div>'
+        f'</details>'
+    )
+
+    scaffold_parsed = BeautifulSoup(scaffold_html, "lxml")
+    scaffold_tag = scaffold_parsed.find("details")
+    if not isinstance(scaffold_tag, Tag):
+        return False
+
+    # Detach from the temporary soup before inserting into the real one.
+    scaffold_tag = scaffold_tag.extract()
+    anchor.insert_after(scaffold_tag)
+
+    content_node = scaffold_tag.find(id=content_id)
+    if not isinstance(content_node, Tag):
+        return False
+
+    ref_name = "mutation-target-1"
+    references[ref_name] = content_node
+    seen_nodes[id(content_node)] = ref_name
+    reference_context.append({
+        "ref": ref_name,
+        "selector": _stable_selector(content_node),
+        **_tag_summary(content_node),
+        "html": "",
+        "host_note": (
+            f"HOST-INJECTED SCAFFOLD — this empty container sits directly below "
+            f"the clicked element inside a <details> element that is already "
+            f"positioned correctly. Use `replace_inner {ref_name}` to fill it "
+            f"with structured explanation content about: {label}. "
+            f"Do NOT use append/prepend document-body."
+        ),
+    })
+
+    # Wire mutation_target_ref into the first target that lacks one.
+    for target in reference_targets:
+        if not target.get("mutation_target_ref"):
+            target["mutation_target_ref"] = ref_name
+            break
+
+    return True
+
+
 def _build_interaction_context(
     current: str,
     clicks: List[Dict[str, Any]],
@@ -1185,12 +1392,12 @@ def _build_interaction_context(
         target_ref = None
         if node is not None:
             target_ref = f"click-{index + 1}"
-            add_reference(target_ref, node, 1000)
+            add_reference(target_ref, node, 2500)
             parent = node.parent
-            for level in range(1, 3):
+            for level in range(1, 4):
                 if not isinstance(parent, Tag) or parent.name == "html":
                     break
-                add_reference(f"{target_ref}-parent-{level}", parent, 700)
+                add_reference(f"{target_ref}-parent-{level}", parent, 1200)
                 parent = parent.parent
 
         observation = {
@@ -1253,13 +1460,13 @@ def _build_interaction_context(
         semantic_ref = presentation_ref = mutation_ref = None
         if isinstance(semantic_node, Tag):
             semantic_ref = f"semantic-focus-{index + 1}"
-            add_reference(semantic_ref, semantic_node, 1200)
+            add_reference(semantic_ref, semantic_node, 2000)
         if isinstance(presentation_node, Tag):
             presentation_ref = f"presentation-target-{index + 1}"
-            add_reference(presentation_ref, presentation_node, 1400)
+            add_reference(presentation_ref, presentation_node, 2000)
         if isinstance(mutation_node, Tag):
             mutation_ref = f"mutation-target-{index + 1}"
-            add_reference(mutation_ref, mutation_node, 1600)
+            add_reference(mutation_ref, mutation_node, 2500)
         target_record = {
             "focus_index": index + 1,
             "semantic_focus_ref": semantic_ref,
@@ -1283,17 +1490,63 @@ def _build_interaction_context(
         observations[0].update(reference_targets[0])
 
     outline = []
-    for node in soup.select("main, nav, header, footer, section, article, aside, h1, h2, h3, details, [data-spore-view]")[:40]:
+    for node in soup.select(
+        "main, nav, header, footer, section, article, aside, "
+        "h1, h2, h3, details, [data-spore-view], "
+        "[role='tabpanel'], [role='tab'], [role='dialog'], [role='tooltip'], "
+        "[aria-expanded], [aria-controls], [data-spore-semantic-ref]"
+    )[:60]:
         outline.append({"selector": _stable_selector(node), **_tag_summary(node)})
 
-    style_context = "\n".join((node.string or node.get_text()) for node in soup.find_all("style"))[:3000]
-    script_context = "\n".join((node.string or node.get_text()) for node in soup.find_all("script"))[:2000]
+    style_context = "\n".join((node.string or node.get_text()) for node in soup.find_all("style"))[:8000]
+    script_context = "\n".join((node.string or node.get_text()) for node in soup.find_all("script"))[:5000]
+    # Full content for structural analysis (not truncated — we need all class/ID definitions).
+    _full_styles = "\n".join((node.string or node.get_text()) for node in soup.find_all("style"))
+    _full_scripts = "\n".join((node.string or node.get_text()) for node in soup.find_all("script"))
+    defined_css_classes = _extract_defined_css_classes(_full_styles)
+    js_managed_ids = _extract_js_managed_ids(_full_scripts)
+    js_navigation = _extract_js_navigation_info(_full_scripts)
+
+    # Discover dedicated inspector / detail panels that may be sibling columns in the layout
+    # (e.g. an inspect-pane that the page populates via JS selection).  These are valid
+    # mutation targets even when the user clicked in a different column, so expose them as
+    # global-inspector-N refs available to every operation.
+    _INSPECTOR_CSS = (
+        "[class*='inspect-pane'],[class*='detail-pane'],[class*='inspector-pane'],"
+        "[class*='inspector'],[data-spore-inspector],"
+        "[id*='inspector'],[id*='detail-panel'],[id*='detail_panel']"
+    )
+    inspector_nodes: List[Tag] = [
+        node for node in soup.select(_INSPECTOR_CSS)[:4] if isinstance(node, Tag)
+    ]
+    for idx, insp_node in enumerate(inspector_nodes, 1):
+        add_reference(f"global-inspector-{idx}", insp_node, 2000)
+    global_inspector_refs = [f"global-inspector-{i + 1}" for i in range(len(inspector_nodes))]
+
+    # ── Host-side scaffold injection (runs after inspector discovery) ─────────
+    # global-inspector-* refs are now in `references`; the guard inside
+    # _inject_explain_scaffold correctly skips injection when an inspector panel
+    # already exists.  If the agent still cannot find any mutation target from
+    # the page's own data-spore-* attributes, the host pre-injects a <details>
+    # scaffold adjacent to the clicked element and registers it as
+    # mutation-target-1 so the agent only needs to fill content.
+    _inject_explain_scaffold(
+        soup=soup,
+        click_nodes=click_nodes,
+        intent_snapshot=intent_snapshot,
+        references=references,
+        reference_context=reference_context,
+        reference_targets=reference_targets,
+        seen_nodes=seen_nodes,
+    )
+
     context = {
         "protocol": "spore-html-mutation-v1",
         "window_policy": DYNAMIC_WINDOW_POLICY,
         "event_count": len(clicks),
         "interactions": observations,
         "reference_targets": reference_targets,
+        "global_inspector_refs": global_inspector_refs,
         "allowed_mutation_refs": list(dict.fromkeys(filter(None, [
             "document-head",
             "document-body",
@@ -1302,6 +1555,8 @@ def _build_interaction_context(
             # Semantic focus and presentation targets resolved from data-spore-* attributes.
             *[item["semantic_focus_ref"] for item in reference_targets if item.get("semantic_focus_ref")],
             *[item["presentation_target_ref"] for item in reference_targets if item.get("presentation_target_ref")],
+            # Always-available inspector/detail panels (sibling columns in multi-pane layouts).
+            *global_inspector_refs,
             # Clicked nodes and their immediate parents — the user pointed at these explicitly.
             *[f"click-{i + 1}" for i in range(len(clicks)) if click_nodes[i] is not None],
             *[
@@ -1316,6 +1571,10 @@ def _build_interaction_context(
         "document": {
             "bytes": len(current.encode("utf-8")),
             "outline": outline,
+            # Structural facts extracted from the page — agent must respect these constraints.
+            "defined_css_classes": defined_css_classes,
+            "js_managed_element_ids": js_managed_ids,
+            "js_navigation": js_navigation,
             "inline_css_excerpt": style_context,
             "inline_script_excerpt": script_context,
         },
@@ -1606,12 +1865,17 @@ def _parse_mutation_response(raw: str) -> Dict[str, Any]:
     }
 
 
-def _parse_assess_response(raw: str) -> Optional[str]:
-    """Extract the user-facing question from an INTERACTION_ASSESS LLM response.
+def _parse_assess_response(raw: str):
+    """Parse an INTERACTION_ASSESS LLM response.
 
-    Expects ``assess_pause`` as the first non-whitespace token inside the REPLY
-    block, followed by one line of natural-language text.  Returns the question
-    string (possibly empty) on success, or None when the format is invalid.
+    Returns:
+      - ``_ASSESS_NO_INTENT``: agent judged no meaningful user intent; end silently.
+      - ``str``: the user-facing question to show (possibly empty).
+      - ``None``: invalid format; caller should retry.
+
+    Valid REPLY-block first tokens:
+      ``no_intent``   — silent termination path.
+      ``assess_pause`` — question path (existing behaviour).
     """
     content = (raw or "").strip()
 
@@ -1629,7 +1893,14 @@ def _parse_assess_response(raw: str) -> Optional[str]:
         return None
 
     first_idx, first_line = non_empty[0]
-    if first_line.strip() != _ASSESS_PAUSE_KEYWORD:
+    first_stripped = first_line.strip()
+
+    # Silent-exit path: agent found no meaningful intent.
+    if first_stripped.lower().startswith("no_intent"):
+        return _ASSESS_NO_INTENT
+
+    # Question path: must start with the assess_pause keyword.
+    if first_stripped != _ASSESS_PAUSE_KEYWORD:
         return None
 
     # The very next non-empty line is the user-facing question.
@@ -1811,6 +2082,85 @@ class _StrictFragmentParser(HTMLParser):
             raise ValueError(f"Unclosed HTML element: <{self.stack[-1]}>")
 
 
+def _extract_defined_css_classes(style_content: str) -> List[str]:
+    """Return sorted unique CSS class names defined in the page's <style> blocks."""
+    return sorted(set(_RE_CSS_CLASS.findall(style_content)))
+
+
+def _extract_js_managed_ids(script_content: str) -> List[str]:
+    """Return sorted unique element IDs referenced by ANY JS operation.
+
+    Covers innerHTML=, textContent=, style.display=, classList.add(), setAttribute(), etc.
+    Any ID that appears in a $('#{id}') or getElementById('{id}') call is considered
+    "owned" by JavaScript — the agent must never remove it from a replace_inner/replace_outer
+    operation without including a replacement element with the same ID.
+    """
+    ids: set[str] = set()
+    for match in _RE_JS_REFERENCED_ID.finditer(script_content):
+        for group in match.groups():
+            if group:
+                ids.add(group)
+    return sorted(ids)
+
+
+def _extract_js_navigation_info(script_content: str) -> Dict[str, Any]:
+    """Detect whether the page uses a JS navigation/selection mechanism.
+
+    A JS navigation mechanism is a central function (select, showView, navigate, etc.)
+    that accepts an id/name parameter and populates multiple content containers.
+    When detected, new content MUST be placed inside the inspector panel — never
+    appended directly to document-body where it would always be visible regardless
+    of which navigation item is selected.
+
+    Returns a dict:
+      detected: bool
+      controlled_container_ids: list of element IDs whose innerHTML/textContent is
+                                  set inside a navigation function body
+    """
+    has_nav_func = bool(_RE_JS_NAV_FUNCTION.search(script_content))
+    # Also check for common selection patterns even without a named function
+    # (e.g. direct assignment with data-view attribute patterns, classList.toggle active)
+    has_data_view = bool(re.search(r'data-view|data-tab|data-section', script_content, re.IGNORECASE))
+    detected = has_nav_func or has_data_view
+
+    # Extract element IDs assigned inside the navigation function body.
+    # A heuristic: find querySelector('#id').innerHTML= or .textContent= assignments.
+    controlled = sorted(set(
+        g for m in _RE_JS_NAV_CONTAINER.finditer(script_content)
+        for g in m.groups() if g
+    ))
+    # Combine with jQuery-style assignments
+    _RE_JQ_ASSIGN = re.compile(
+        r'\$\s*\(\s*[\'"]#([\w-]+)[\'"]'
+        r'\s*\)\s*\.\s*(?:html|text|val)\s*\(',
+        re.IGNORECASE,
+    )
+    controlled = sorted(set(controlled) | {
+        m.group(1) for m in _RE_JQ_ASSIGN.finditer(script_content)
+    })
+    return {
+        "detected": detected,
+        "controlled_container_ids": controlled,
+    }
+
+
+def _sanitize_fragment_positions(html: str) -> str:
+    """Replace position:fixed with position:relative in injected HTML fragments.
+
+    position:fixed creates viewport-locked overlays that always break page layout.
+    This is a hard code constraint — the rule cannot be bypassed via prompting alone.
+    The replacement keeps the CSS rule syntactically valid so the element still renders,
+    just in normal document flow.
+
+    position:absolute is NOT handled here; it is legitimate inside a positioned container.
+    When appended to document-body it is caught as a validation error in _apply_mutations
+    so the agent receives an explicit error message and can retry with a better placement.
+    """
+    if not html or "position" not in html.lower():
+        return html
+    return _RE_POSITION_FIXED.sub("position:relative", html)
+
+
 def _fragment_nodes(fragment: str) -> List[Any]:
     syntax = _StrictFragmentParser()
     try:
@@ -1827,6 +2177,50 @@ def _fragment_nodes(fragment: str) -> List[Any]:
     return nodes
 
 
+def _validate_mutation_css_classes(
+    mutations: List[Dict[str, Any]],
+    defined_classes: List[str],
+) -> Optional[str]:
+    """Pre-apply check: every CSS class used in content mutations must be defined.
+
+    A class is accepted when it:
+      • already exists in defined_classes (extracted from the page's <style> blocks), OR
+      • is defined inside a <style> element injected into document-head by an earlier mutation
+        in the *same* batch (the agent is allowed to define-then-use in one round-trip).
+
+    Returns a descriptive error string if violations are found, None if clean.
+    """
+    # Collect classes that the current mutation batch defines via <style> → document-head.
+    newly_defined: set = set()
+    for m in mutations:
+        if m.get("op") in {"append", "prepend", "replace_inner"} and m.get("target_ref") == "document-head":
+            newly_defined.update(_RE_CSS_CLASS.findall(m.get("html", "")))
+
+    available = set(defined_classes) | newly_defined
+    undefined: set = set()
+    for m in mutations:
+        if m.get("op") not in _CONTENT_MUTATIONS:
+            continue
+        for match in _RE_USED_CLASSES.finditer(m.get("html", "")):
+            for cls in match.group(1).split():
+                cls = cls.strip()
+                if cls and cls not in available:
+                    undefined.add(cls)
+
+    if not undefined:
+        return None
+
+    sample = sorted(defined_classes)[:20]
+    more = f"… (+{len(defined_classes) - 20} more)" if len(defined_classes) > 20 else ""
+    return (
+        f"Undefined CSS class(es) in injected HTML: {', '.join(sorted(undefined))}. "
+        f"These classes are not defined in this page's stylesheets. "
+        f"Fix options — (A) use an existing class instead: [{', '.join(sample)}{more}]; "
+        f"(B) add an 'append document-head' mutation with a <style> block that defines the "
+        f"new class(es), then reference them in the content mutation."
+    )
+
+
 def _is_attached(node: Tag, soup: BeautifulSoup) -> bool:
     current: Any = node
     while current is not None:
@@ -1840,7 +2234,48 @@ def _apply_mutations(
     soup: BeautifulSoup,
     references: Dict[str, Tag],
     mutations: List[Dict[str, Any]],
+    *,
+    defined_css_classes: Optional[List[str]] = None,
+    js_managed_ids: Optional[List[str]] = None,
+    js_navigation: Optional[Dict[str, Any]] = None,
 ) -> str:
+    # ── Pre-apply structural validation ──────────────────────────────────────
+    # CSS class discipline: every class referenced in injected HTML must already
+    # be defined on the page or added via a document-head <style> mutation in
+    # this same batch.  Violations produce an actionable error the agent can fix.
+    if defined_css_classes:
+        css_error = _validate_mutation_css_classes(mutations, defined_css_classes)
+        if css_error:
+            raise ValueError(css_error)
+
+    # JS navigation guard: when the page uses a JS selection mechanism, appending
+    # to document-body creates permanently-visible content that never hides when
+    # the user switches to a different tree/tab item.  Reject and redirect.
+    nav_detected = bool(js_navigation and js_navigation.get("detected"))
+    if nav_detected:
+        for m_idx, m in enumerate(mutations):
+            if m.get("target_ref") == "document-body" and m.get("op") in _CONTENT_MUTATIONS:
+                controlled = js_navigation.get("controlled_container_ids", [])
+                raise ValueError(
+                    f"Mutation {m_idx + 1}: appending to document-body is not allowed because "
+                    f"this page uses a JS navigation/selection mechanism "
+                    f"(select/show/navigate function detected). "
+                    f"Content placed directly on document-body is permanently visible and "
+                    f"never hides when the user switches navigation items — it breaks the UX. "
+                    f"Use one of these approaches instead:\n"
+                    f"(A) TARGET THE INSPECTOR PANEL: use global-inspector-N ref to place "
+                    f"content inside the existing detail panel. "
+                    f"For content that should only appear for a specific item, also append a "
+                    f"<script> block to document-head that shows/hides it by hooking into "
+                    f"the page's existing navigation function.\n"
+                    f"(B) ENRICH EXISTING CONTENT: if the item already has a representation "
+                    f"in the controlled containers {controlled}, use replace_inner or append "
+                    f"on that existing element instead of creating a new standalone block.\n"
+                    f"Navigation-controlled container IDs: {controlled}"
+                )
+
+    js_ids: set = set(js_managed_ids or [])
+
     for index, mutation in enumerate(mutations):
         target = references.get(mutation["target_ref"])
         if target is None:
@@ -1851,6 +2286,59 @@ def _apply_mutations(
         op = mutation["op"]
         if target.name in {"html", "head", "body"} and op in {"before", "after", "replace_outer", "remove"}:
             raise ValueError(f"Mutation {index + 1} cannot remove or replace document structure")
+
+        # ── JS-managed element protection ─────────────────────────────────────
+        # Elements in js_ids have their innerHTML/textContent rewritten by the
+        # page's JavaScript on every interaction.  Some operations break this.
+        target_id = target.get("id") if isinstance(target, Tag) else None
+        if target_id and target_id in js_ids:
+            if op == "replace_outer":
+                raise ValueError(
+                    f"Mutation {index + 1}: replace_outer on #{target_id} destroys a JS-managed "
+                    f"element. JavaScript writes to #{target_id} by ID — removing the element "
+                    f"breaks the page permanently. "
+                    f"Use replace_inner to update its content, or target a container outside "
+                    f"#{target_id} (e.g. its parent or a global-inspector ref)."
+                )
+            if op in {"append", "prepend"}:
+                raise ValueError(
+                    f"Mutation {index + 1}: {op} inserts permanent nodes inside #{target_id}, "
+                    f"which is dynamically managed by JavaScript. "
+                    f"JavaScript rewrites #{target_id}.innerHTML on interactions but will NOT "
+                    f"remove your inserted nodes — they will corrupt the display after the first "
+                    f"user click. "
+                    f"Target a container OUTSIDE #{target_id} instead: its parent element, "
+                    f"a sibling section, or a global-inspector ref."
+                )
+
+        # ── Dropped JS-referenced ID check ────────────────────────────────────
+        # replace_inner replaces all children; replace_outer replaces the element
+        # itself.  If either operation would silently remove an element ID that JS
+        # references (even via style.display or classList — not only innerHTML),
+        # the page breaks at runtime.  Require the new fragment to preserve those IDs.
+        if js_ids and op in {"replace_inner", "replace_outer"}:
+            if op == "replace_inner":
+                # Children will be removed — collect their IDs.
+                at_risk = {t.get("id") for t in target.find_all(id=True) if isinstance(t, Tag)}
+            else:
+                # Target itself + children will be removed.
+                own = {target_id} if target_id else set()
+                at_risk = own | {t.get("id") for t in target.find_all(id=True) if isinstance(t, Tag)}
+            critical = {i for i in at_risk if i and i in js_ids}
+            if critical:
+                fragment_html = mutation.get("html", "")
+                kept = set(re.findall(r'\bid\s*=\s*["\'](\w[\w-]*)["\']', fragment_html))
+                missing = critical - kept
+                if missing:
+                    quoted = ", ".join(f"#{m}" for m in sorted(missing))
+                    raise ValueError(
+                        f"Mutation {index + 1}: {op} would silently remove JS-referenced "
+                        f"element(s) {quoted}. JavaScript accesses these IDs at runtime — "
+                        f"dropping them causes errors (e.g. TypeError: Cannot set properties "
+                        f"of null). You MUST include element(s) with the exact same "
+                        f"id attribute(s) in your replacement HTML: "
+                        + ", ".join(f'<... id="{m}" ...>' for m in sorted(missing))
+                    )
         if op == "set_attributes":
             for name, value in mutation["attributes"].items():
                 if value is None or value is False:
@@ -1858,13 +2346,30 @@ def _apply_mutations(
                 elif value is True:
                     target.attrs[name] = name
                 else:
-                    target.attrs[name] = str(value)
+                    # Sanitize inline style attributes to strip floating positions.
+                    cleaned = _sanitize_fragment_positions(str(value)) if name == "style" else str(value)
+                    target.attrs[name] = cleaned
             continue
         if op == "remove":
             target.decompose()
             continue
 
-        nodes = _fragment_nodes(mutation["html"])
+        nodes = _fragment_nodes(_sanitize_fragment_positions(mutation["html"]))
+        # position:absolute on document-body behaves like position:fixed — it creates a
+        # layout-breaking overlay with no positioned ancestor to contain it.  Return a
+        # validation error so the agent receives explicit feedback and retries with a
+        # specific ref (e.g. global-inspector-N or a click parent) instead.
+        if (
+            target.name == "body"
+            and op in _CONTENT_MUTATIONS
+            and _RE_POSITION_ABSOLUTE.search(mutation["html"])
+        ):
+            raise ValueError(
+                f"Mutation {index + 1}: position:absolute is not allowed when targeting "
+                "document-body — it creates a viewport overlay with no positioned ancestor. "
+                "Place the content inside a specific container ref (e.g. global-inspector-N, "
+                "click-1-parent-N, or a named section) so position:absolute is contained."
+            )
         if op == "append":
             for node in nodes:
                 target.append(node)
@@ -2187,52 +2692,132 @@ def process_html_interactions(
         assess_message = {
             "role": "user",
             "content": (
-                "INTERACTION_ASSESS mode. Quickly assess this interaction intent and ask the user "
-                "ONE focused question about what they want to build or expand. "
+                "INTERACTION_ASSESS mode. First decide whether the user has a genuine intent "
+                "that requires action, or whether they are simply browsing/exploring. "
                 "Do NOT generate any HTML mutations.\n\n"
                 f"Language: {_lang_instruction}\n\n"
-                "OUTPUT FORMAT — the only valid response:\n\n"
+                "STEP 1 — Read each interaction event's 'local_outcome' field:\n"
+                "  • local_outcome.satisfied=true OR local_outcome.changed=true → the page "
+                "ALREADY RESPONDED normally. The user may just be navigating. "
+                "Use 'no_intent' UNLESS the response is clearly sparse/incomplete and a richer "
+                "view would add genuine value.\n"
+                "  • local_outcome.satisfied=false AND local_outcome.changed=false → page did "
+                "NOT respond. This is a candidate for 'assess_pause' (ask the user).\n"
+                "  • spore_request is non-empty → explicit user request → always 'assess_pause'.\n"
+                "  • local_outcome absent or observed=false → unconfirmed; inspect DOM references "
+                "for click handlers before deciding.\n\n"
+                "STEP 2 — DECISION:\n"
+                "  → Use 'no_intent' when: the page responded as expected, the user is "
+                "exploring/navigating, there is no clear gap between what happened and what the "
+                "user would expect, or the interaction is a single casual click with no follow-up "
+                "signal.\n"
+                "  → Use 'assess_pause' when: the page failed to respond, the user's interaction "
+                "has a clear unmet need, the displayed content is genuinely sparse for the "
+                "context, or the user has an explicit spore_request.\n\n"
+                "OUTPUT FORMAT — exactly one of two options:\n\n"
+                "Option A — no meaningful intent, end silently:\n"
+                "@SPORE:REPLY_START\n"
+                "no_intent <brief reason, max 80 chars>\n"
+                "@SPORE:REPLY_END\n"
+                "@SPORE:STOP_REASON=no_intent\n\n"
+                "Option B — genuine intent, ask the user:\n"
                 "@SPORE:REPLY_START\n"
                 "assess_pause\n"
-                "<one sentence: brief recommendation + one focused question>\n"
+                "<one sentence: accurate state summary + one focused question>\n"
                 "@SPORE:REPLY_END\n"
                 "@SPORE:STOP_REASON=awaiting_user_decision\n\n"
                 "Rules:\n"
-                "- 'assess_pause' must be the first non-whitespace line inside the REPLY block.\n"
-                "- The second line is a single natural-language sentence describing what you think "
-                "the user wants, plus one question to confirm or refine it.\n"
-                "- Write the sentence in the language specified above.\n"
+                "- First token inside REPLY block must be 'no_intent' OR 'assess_pause'.\n"
+                "- For no_intent: add a brief reason on the same line (e.g. 'no_intent page responded normally').\n"
+                "- For assess_pause: the next line is ONE sentence reflecting what the page does + one question.\n"
+                "- Write in the language specified above.\n"
                 "- Never output 'interrupt', mutation blocks, code fences, or a full HTML document.\n\n"
                 "Interaction context:\n" + json.dumps(context, ensure_ascii=False, indent=2)
             ),
         }
-        log_frontend_agent("assess_call", {
-            "artifact_id": safe_id,
-            "operation_id": operation.operation_id,
-            "agent_request_id": operation.agent_request_id,
-        })
-        raw_assess = _call_frontend_agent(
-            [assess_message],
-            timeout,
-            stream_callback=None,
-            request_started_callback=lambda request_id: _set_provider_request(operation, request_id),
-        ).strip()
-        operation.provider_request_id = None
-        # _call_frontend_agent already calls log_frontend_agent_raw internally.
+        # ── Assess retry loop (no upper limit) ──────────────────────────────────
+        # Mirrors the mutation round: validate via ProtocolManager, feed the
+        # exact error back to the model, and retry until the format is correct
+        # or the operation is superseded.
+        _assess_protocol_manager = ProtocolManager()
+        _assess_messages: List[Dict[str, Any]] = [assess_message]
+        _assess_iteration = 0
+        raw_assess = ""
+        question = None
 
-        if not _is_current_operation(operation):
-            raise InteractionSupersededError("Interaction was superseded after assess round")
-
-        question = _parse_assess_response(raw_assess)
-        if question is None:
-            # Tolerate a malformed assess response: surface an empty question
-            # rather than crashing, so the user still gets a decision prompt.
-            question = ""
-            log_frontend_agent("assess_protocol_error", {
+        while question is None:
+            _assess_iteration += 1
+            log_frontend_agent("assess_call", {
                 "artifact_id": safe_id,
                 "operation_id": operation.operation_id,
-                "raw_length": len(raw_assess),
+                "agent_request_id": operation.agent_request_id,
+                "iteration": _assess_iteration,
             })
+            raw_assess = _call_frontend_agent(
+                _assess_messages,
+                timeout,
+                stream_callback=None,
+                request_started_callback=lambda request_id: _set_provider_request(operation, request_id),
+            ).strip()
+            operation.provider_request_id = None
+
+            if not _is_current_operation(operation):
+                raise InteractionSupersededError("Interaction was superseded after assess round")
+
+            question = _parse_assess_response(raw_assess)
+
+            # Agent determined there is no meaningful user intent — end silently.
+            if question is _ASSESS_NO_INTENT:
+                log_frontend_agent("assess_no_intent", {
+                    "artifact_id": safe_id,
+                    "operation_id": operation.operation_id,
+                    "iteration": _assess_iteration,
+                })
+                _finish_interaction_operation(operation, force=True)
+                return {
+                    **loaded,
+                    "generated": False,
+                    "decision": "no_intent",
+                    "event_count": len(interactions),
+                    "intent_epoch": operation.intent_epoch,
+                    "agent_request_id": operation.agent_request_id,
+                    "operation_id": operation.operation_id,
+                }
+
+            if question is None:
+                log_frontend_agent("assess_protocol_error", {
+                    "artifact_id": safe_id,
+                    "operation_id": operation.operation_id,
+                    "raw_length": len(raw_assess),
+                    "iteration": _assess_iteration,
+                })
+                _parsed_assess = _assess_protocol_manager.parse_response(raw_assess)
+                if _parsed_assess.protocol_error:
+                    _error_detail = _parsed_assess.protocol_error.message
+                else:
+                    _error_detail = (
+                        "Response must contain 'assess_pause' as the first non-whitespace line "
+                        "inside @SPORE:REPLY_START block, followed by one natural-language sentence."
+                    )
+                _assess_messages = _assess_messages + [
+                    {"role": "assistant", "content": raw_assess},
+                    {"role": "user", "content": (
+                        "REJECTED. Your assess response did not follow the required format.\n"
+                        f"Error: {_error_detail}\n\n"
+                        "Retry with EXACTLY this format (nothing else):\n\n"
+                        "@SPORE:REPLY_START\n"
+                        "assess_pause\n"
+                        "<one sentence in the specified language>\n"
+                        "@SPORE:REPLY_END\n"
+                        "@SPORE:STOP_REASON=awaiting_user_decision\n\n"
+                        "Rules:\n"
+                        "- 'assess_pause' must be the FIRST non-whitespace line inside the REPLY block.\n"
+                        "- The next line is ONE natural-language sentence (recommendation + question).\n"
+                        "- @SPORE:REPLY_END is MANDATORY.\n"
+                        "- @SPORE:STOP_REASON=awaiting_user_decision is MANDATORY at the very end.\n"
+                        "- Do NOT output mutation blocks, code fences, HTML, or any other content."
+                    )},
+                ]
 
         # Freeze nothing; stay alive until the user responds.
         _crd = _get_coordinator(safe_id)
@@ -2362,6 +2947,18 @@ def acknowledge_interaction_ready(
     """Complete a frozen mutation transaction after trusted bridge readiness acknowledgement."""
 
     safe_id = validate_artifact_id(artifact_id)
+    log_frontend_agent("interaction_ready_ack", {
+        "artifact_id": safe_id,
+        "operation_id": operation_id,
+        "ready": ready,
+        "error": error,
+        "state_revision": state_revision,
+        "restore_requested": bool((readiness_report or {}).get("restore_requested")),
+        "restored": bool((readiness_report or {}).get("restored")),
+        "bridge_installed": bool((readiness_report or {}).get("bridge_installed")),
+        "document_ready_state": (readiness_report or {}).get("document_ready_state"),
+        "initialization_pending": bool((readiness_report or {}).get("initialization_pending")),
+    })
     capability_hash = hashlib.sha256(str(bridge_capability or "").encode("utf-8")).hexdigest() if bridge_capability else None
     state = acknowledge_html_interaction_ready_state(
         safe_id,
@@ -2376,6 +2973,15 @@ def acknowledge_interaction_ready(
         ready=ready,
         error=error,
     )
+    log_frontend_agent("interaction_ready_ack_result", {
+        "artifact_id": safe_id,
+        "operation_id": operation_id,
+        "ready": ready,
+        "result_phase": state.get("phase"),
+        "result_frozen": state.get("frozen"),
+        "result_lease_expires_at": state.get("lease_expires_at"),
+        "result_state_revision": state.get("state_revision"),
+    })
     coordinator = _get_coordinator(safe_id)
     with coordinator.condition:
         active = coordinator.active
@@ -2603,23 +3209,63 @@ def _recover_expired_html_interaction_if_current(artifact_id: str) -> Dict[str, 
 
     state = get_html_interaction_state(artifact_id)
     expiry = state.get("lease_expires_at")
+    now = time.time()
+
+    # Log whenever the state is frozen so we can trace the recovery lifecycle.
+    if state.get("frozen"):
+        log_frontend_agent("recover_check", {
+            "artifact_id": artifact_id,
+            "phase": state.get("phase"),
+            "frozen": state.get("frozen"),
+            "operation_id": state.get("operation_id"),
+            "lease_expires_at": expiry,
+            "now": now,
+            "lease_expired": (expiry is not None and float(expiry) <= now),
+            "lease_owner": state.get("lease_owner"),
+            "state_revision": state.get("state_revision"),
+        })
+
     if (
         not state.get("frozen")
         or not state.get("operation_id")
         or not state.get("agent_request_id")
         or expiry is None
-        or float(expiry) > time.time()
+        or float(expiry) > now
     ):
         return {"recovered": False, "state": state}
+
+    log_frontend_agent("recover_attempt", {
+        "artifact_id": artifact_id,
+        "phase": state.get("phase"),
+        "operation_id": state.get("operation_id"),
+        "state_revision": state.get("state_revision"),
+        "lease_expires_at": expiry,
+        "now": now,
+    })
     try:
-        return recover_html_interaction_operation(
+        result = recover_html_interaction_operation(
             artifact_id,
             operation_id=str(state["operation_id"]),
             agent_request_id=str(state["agent_request_id"]),
             expected_state_revision=int(state.get("state_revision") or 0),
         )
-    except RuntimeError:
+        log_frontend_agent("recover_result", {
+            "artifact_id": artifact_id,
+            "recovered": result.get("recovered"),
+            "result_phase": (result.get("state") or {}).get("phase"),
+            "result_frozen": (result.get("state") or {}).get("frozen"),
+        })
+        return result
+    except RuntimeError as exc:
         # A heartbeat, ready ACK or another recovery won the revision/expiry race.
+        log_frontend_agent("recover_failed", {
+            "artifact_id": artifact_id,
+            "error": str(exc),
+            "phase": state.get("phase"),
+            "operation_id": state.get("operation_id"),
+            "lease_owner": state.get("lease_owner"),
+            "state_revision": state.get("state_revision"),
+        })
         return {"recovered": False, "state": get_html_interaction_state(artifact_id)}
 
 def get_html_interaction_runtime_state(artifact_id: str) -> Dict[str, Any]:
@@ -2796,8 +3442,10 @@ def _run_mutation_round(
         + f"Language: {_mut_lang_instruction}\n\n"
         + "Infer the user's current intent from the supplied semantic intent episode and "
         "compact chronological evidence. Decide whether the page already satisfies the "
-        "intent or needs the smallest coherent persisted mutation. You are given compact "
-        "element references and excerpts, not the complete document.\n\n"
+        "intent or needs the smallest coherent persisted mutation. "
+        "You are given targeted element references with expanded HTML excerpts, "
+        "full CSS and script context so you can match the page's existing design and interaction "
+        "patterns, and a structural outline of interactive elements.\n\n"
         "OUTPUT FORMAT — two options only:\n\n"
         "Option A — no change needed:\n"
         "  no_change <brief reason>\n"
@@ -2821,7 +3469,80 @@ def _run_mutation_round(
         "- HTML fragments are written verbatim — no escaping, no JSON encoding.\n"
         "- Never output a code fence, a JSON object, or a complete HTML document.\n"
         "- Only target refs from the supplied reference list. "
-        "Use document-head or document-body only when focused references are insufficient.\n\n"
+        "Use document-head or document-body only when focused references are insufficient.\n"
+        "- CRITICAL — VALID REFS ONLY: the 'ref' in 'op ref' MUST be one of the strings in "
+        f"allowed_mutation_refs: {json.dumps(context.get('allowed_mutation_refs', []))}. "
+        "click-1, click-2, click-1-parent-1, etc. are ONLY valid when they appear in that list. "
+        "If they are absent from the list, use document-body instead. "
+        "Using any ref not in the list will be REJECTED and waste an iteration.\n"
+        "- PLACEMENT: when inserting new content that did not previously exist on the page, "
+        "place it at or near the interaction target (semantic-focus, presentation-target, or "
+        "click ref) — NOT appended to the end of the document body. "
+        "Only use document-body as a last resort when no focused ref is available.\n"
+        "- INSPECTOR PANEL PRIORITY: if global_inspector_refs is non-empty in the context, "
+        "those refs point to the page's dedicated inspector/detail panel (often a sibling column "
+        "updated by JavaScript selection). When the user clicks something and expects details to "
+        "appear, append or replace_inner on a global-inspector ref FIRST — even if the click was "
+        "in a different layout column. This is correct: the inspector panel is exactly where the "
+        "user looks for detail about whatever they clicked.\n"
+        "- NO FLOATING OVERLAYS: never inject CSS with position:fixed or position:absolute for "
+        "new content panels. All added elements must flow in the normal document layout. "
+        "A fixed/absolute panel detached from the page structure is always wrong — it visually "
+        "pops up out of nowhere and breaks the page's layout integrity.\n"
+        "- NATIVE INTEGRATION: before creating any new element, read the inline_css_excerpt and "
+        "inline_script_excerpt in the context. Use the same CSS class names, color variables, "
+        "and layout patterns already in the page so the new element looks and behaves like it "
+        "always belonged there. If the page uses a specific panel/accordion/tab pattern, replicate "
+        "that pattern rather than inventing a new one.\n"
+        "- CSS CLASS DISCIPLINE: document.defined_css_classes lists every CSS class actually "
+        "defined in this page's stylesheets. Only use class names from that list in injected HTML. "
+        "If you need a new class, you MUST first append a <style> block defining it to "
+        "document-head, then use it in the content mutation. "
+        "Never reference an undefined CSS class — it silently breaks layout and spacing.\n"
+        "- JS-MANAGED ELEMENTS: document.js_managed_element_ids lists every element ID that "
+        "JavaScript accesses — innerHTML writes, textContent writes, style.display toggles, "
+        "classList changes, setAttribute calls, or any other property via $('#id') or "
+        "getElementById('id'). These IDs are owned by JavaScript at runtime. Four hard rules: "
+        "(a) Never wrap them in a new parent container — JS targets them by ID. "
+        "(b) Never pre-populate them with static content — JS will overwrite it. "
+        "(c) Never add static sibling elements around them — JS won't clear siblings. "
+        "(d) CRITICAL — if you use replace_inner or replace_outer on a container whose "
+        "children include any of these IDs, your replacement HTML MUST include elements "
+        "with those exact id attributes. Omitting a JS-referenced ID causes a runtime "
+        "TypeError crash (e.g. Cannot set properties of null). "
+        "The validator will REJECT your mutation and list the missing IDs. "
+        "To add new content to a JS-managed panel, prefer appending a new section "
+        "BEFORE or AFTER the panel's parent container rather than modifying the inspector itself.\n"
+        "- COLLAPSIBLE NEW CONTENT: when adding a supplementary block (detail panel, explanation, "
+        "extra info, diagram, etc.), wrap it in a collapsible affordance — prefer "
+        "<details><summary>…</summary>…</details> unless the page already uses a different "
+        "toggle/panel pattern, in which case exactly replicate that pattern. "
+        "Never insert a flat always-expanded block where a collapsible would serve.\n"
+        "- INTUITIVE POSITION: place new content at the point where the user would naturally "
+        "expect to find it — directly below the clicked element, inside its container, or inside "
+        "the panel/section they were already looking at. An expansion of a mind-map node belongs "
+        "next to that node or in the details panel that already handles that node, not at the "
+        "bottom of the page. The golden rule: if a new visitor opened the page and clicked the "
+        "same element, would they look in the place you chose? If not, move it closer.\n"
+        "- CONTEXTUAL VISIBILITY: check document.js_navigation in the context. "
+        "If js_navigation.detected=true, this page uses a JavaScript navigation/selection "
+        "mechanism (select/show/navigate function) that controls which content is visible. "
+        "New content MUST participate in that mechanism — it must never be a permanently "
+        "visible standalone element. Two paths:\n"
+        "  CASE A — content does not yet exist for this item: place it inside the "
+        "global-inspector-N container (detail/inspector panel). If the panel is JS-managed, "
+        "also append a small <script> block to document-head that hooks into the page's "
+        "existing navigation function to show/hide the new section based on the selected "
+        "item (e.g. adds an event listener or wraps the existing function).\n"
+        "  CASE B — content exists but is incomplete: use replace_inner or append on the "
+        "existing element to enrich it in-place. Never create a new standalone element when "
+        "enriching existing content — always find the element and improve it directly.\n"
+        "The validator will REJECT any append/prepend to document-body when js_navigation "
+        "is detected, with specific guidance on which containers to use instead.\n"
+        "- EXISTING RESPONSE ENRICHMENT: when local_outcome.satisfied=true or "
+        "local_outcome.changed=true in any interaction event, the page already showed a "
+        "response. Prefer replace_inner or append on the existing presentation target to "
+        "enrich it, rather than adding a separate node.\n\n"
         "Interaction context:\n" + json.dumps(context, ensure_ascii=False, indent=2)
     )
     messages: List[Dict[str, Any]] = [{"role": "user", "content": mutation_prompt}]
@@ -2980,7 +3701,13 @@ def _run_mutation_round(
                     operation_outcome="validating", **_operation_state_identity(operation),
                 )
                 try:
-                    candidate = _apply_mutations(soup, references, response["mutations"])
+                    _doc = context.get("document", {})
+                    candidate = _apply_mutations(
+                        soup, references, response["mutations"],
+                        defined_css_classes=_doc.get("defined_css_classes") or None,
+                        js_managed_ids=_doc.get("js_managed_element_ids") or None,
+                        js_navigation=_doc.get("js_navigation") or None,
+                    )
                     validation = validate_html(candidate)
                 except ValueError as exc:
                     validation = {"valid": False, "errors": [{"code": "mutation_apply", "message": str(exc)}]}

@@ -12,12 +12,15 @@ interface SettingsState {
   autoCleanMinLines: number;
   theme: ThemeMode;
   htmlRenderingEnabled: boolean;
+  frontendAgentEnabled: boolean;
   setAutoCleanShortLogs: (enabled: boolean) => void;
   setAutoCleanMinLines: (minLines: number) => void;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
   setHtmlRenderingEnabled: (enabled: boolean) => void;
   toggleHtmlRendering: () => void;
+  setFrontendAgentEnabled: (enabled: boolean) => void;
+  toggleFrontendAgent: () => void;
 }
 
 interface SettingsConfig {
@@ -25,6 +28,7 @@ interface SettingsConfig {
   autoCleanMinLines: number;
   theme: ThemeMode;
   htmlRenderingEnabled: boolean;
+  frontendAgentEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: SettingsConfig = {
@@ -32,6 +36,7 @@ const DEFAULT_SETTINGS: SettingsConfig = {
   autoCleanMinLines: 10,
   theme: 'dark',
   htmlRenderingEnabled: false,
+  frontendAgentEnabled: true,
 };
 
 const isValidTheme = (value: unknown): value is ThemeMode =>
@@ -50,6 +55,7 @@ const loadSettings = (): SettingsConfig => {
         autoCleanMinLines: config.autoCleanMinLines ?? DEFAULT_SETTINGS.autoCleanMinLines,
         theme: isValidTheme(config.theme) ? config.theme : DEFAULT_SETTINGS.theme,
         htmlRenderingEnabled: config.htmlRenderingEnabled ?? DEFAULT_SETTINGS.htmlRenderingEnabled,
+        frontendAgentEnabled: config.frontendAgentEnabled ?? DEFAULT_SETTINGS.frontendAgentEnabled,
       };
     }
   } catch (e) {
@@ -77,6 +83,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       autoCleanMinLines: get().autoCleanMinLines,
       theme: get().theme,
       htmlRenderingEnabled: get().htmlRenderingEnabled,
+      frontendAgentEnabled: get().frontendAgentEnabled,
     });
   },
 
@@ -87,6 +94,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       autoCleanMinLines: minLines,
       theme: get().theme,
       htmlRenderingEnabled: get().htmlRenderingEnabled,
+      frontendAgentEnabled: get().frontendAgentEnabled,
     });
   },
 
@@ -97,6 +105,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       autoCleanMinLines: get().autoCleanMinLines,
       theme,
       htmlRenderingEnabled: get().htmlRenderingEnabled,
+      frontendAgentEnabled: get().frontendAgentEnabled,
     });
   },
 
@@ -108,6 +117,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       autoCleanMinLines: get().autoCleanMinLines,
       theme: nextTheme,
       htmlRenderingEnabled: get().htmlRenderingEnabled,
+      frontendAgentEnabled: get().frontendAgentEnabled,
     });
   },
 
@@ -118,11 +128,27 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       autoCleanMinLines: get().autoCleanMinLines,
       theme: get().theme,
       htmlRenderingEnabled: enabled,
+      frontendAgentEnabled: get().frontendAgentEnabled,
     });
   },
 
   toggleHtmlRendering: () => {
     get().setHtmlRenderingEnabled(!get().htmlRenderingEnabled);
+  },
+
+  setFrontendAgentEnabled: (enabled) => {
+    set({ frontendAgentEnabled: enabled });
+    saveSettings({
+      autoCleanShortLogs: get().autoCleanShortLogs,
+      autoCleanMinLines: get().autoCleanMinLines,
+      theme: get().theme,
+      htmlRenderingEnabled: get().htmlRenderingEnabled,
+      frontendAgentEnabled: enabled,
+    });
+  },
+
+  toggleFrontendAgent: () => {
+    get().setFrontendAgentEnabled(!get().frontendAgentEnabled);
   },
 }));
 

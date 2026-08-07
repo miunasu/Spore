@@ -115,20 +115,6 @@ const ANTHROPIC_COMPAT_PROFILE_KEYS = [
 ] as const;
 
 // AutoAgent 颗粒化基座的全部 env key（子 Agent + 4 个 AutoAgent，openai/anthropic 两套）
-// appendValue 会跳过空值，所以两套变体全列出是安全的
-const AGENT_BASE_PROFILE_KEYS = (() => {
-  const prefixes = ['SUB_AGENT', 'AGENT_SUPERVISOR', 'AGENT_MODE_SELECTOR', 'AGENT_SECURITY', 'AGENT_FRONTEND'];
-  const suffixes = [
-    'LLM_SDK',
-    'OPENAI_API_KEY', 'OPENAI_API_URL', 'OPENAI_MODEL',
-    'ANTHROPIC_API_KEY', 'ANTHROPIC_API_URL', 'ANTHROPIC_MODEL',
-    // 高级参数
-    'USE_RESPONSES_API', 'OPENAI_REASONING_EFFORT',
-    'ANTHROPIC_EFFORT', 'ANTHROPIC_THINKING_MODE', 'ANTHROPIC_THINKING_BUDGET_TOKENS',
-  ];
-  return prefixes.flatMap((p) => suffixes.map((s) => `${p}_${s}`));
-})();
-
 // ENV 配置分组
 // basic: 最小可用配置（能连上模型即可跑）
 // advanced: 其余调优/兼容/资源/路径等，UI 中默认折叠
@@ -1633,7 +1619,8 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({ vertical = false, mini
     }
 
     COMMON_PROFILE_KEYS.forEach(appendValue);
-    AGENT_BASE_PROFILE_KEYS.forEach(appendValue);
+    // AGENT_BASE_PROFILE_KEYS are intentionally excluded: AutoAgent configs are global
+    // and must survive profile switches unchanged. They are written directly to .env.
 
     if (mainSdk === 'anthropic' || subAgentSdk === 'anthropic') {
       ANTHROPIC_COMPAT_PROFILE_KEYS.forEach(appendValue);

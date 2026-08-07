@@ -187,7 +187,7 @@ def interact_with_html_artifact(artifact_id: str, request: HtmlInteractionReques
             base_html_sha256=request.base_html_sha256,
             state_revision=request.state_revision,
             intent_snapshot=request.intent_snapshot,
-            require_interaction_ready_ack=True,
+            require_interaction_ready_ack=False,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

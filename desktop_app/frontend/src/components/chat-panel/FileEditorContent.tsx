@@ -65,6 +65,8 @@ export function getHtmlArtifactIdFromPath(filePath: string): string | undefined 
 export const FileEditorContent: React.FC = () => {
   const t = useT();
   const htmlRenderingEnabled = useSettingsStore((state) => state.htmlRenderingEnabled);
+  const frontendAgentEnabled = useSettingsStore((state) => state.frontendAgentEnabled);
+  const toggleFrontendAgent = useSettingsStore((state) => state.toggleFrontendAgent);
   const {
     openFiles,
     activeFilePath,
@@ -168,6 +170,24 @@ export const FileEditorContent: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {useHtmlPreview && (
+            <button
+              onClick={toggleFrontendAgent}
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded border transition-colors ${
+                frontendAgentEnabled
+                  ? 'border-spore-highlight/50 bg-spore-highlight/10 text-spore-highlight hover:bg-spore-highlight/20'
+                  : 'border-spore-border/30 bg-spore-bg/40 text-spore-muted hover:bg-spore-accent/50 hover:text-spore-text'
+              }`}
+              title={frontendAgentEnabled
+                ? t('chatPanel.htmlPreview.frontendAgentDisableTitle')
+                : t('chatPanel.htmlPreview.frontendAgentEnableTitle')}
+            >
+              <span className={`inline-block h-1.5 w-1.5 rounded-full flex-shrink-0 ${
+                frontendAgentEnabled ? 'bg-spore-highlight' : 'bg-spore-muted'
+              }`} />
+              {t('chatPanel.htmlPreview.frontendAgent')}
+            </button>
+          )}
           <div className="flex overflow-hidden rounded-md border border-spore-border/30 bg-spore-bg/40">
             <button
               onClick={() => handleViewModeChange('preview')}
@@ -227,6 +247,7 @@ export const FileEditorContent: React.FC = () => {
                 variant="file"
                 artifactId={getHtmlArtifactIdFromPath(activeFile.path)}
                 onContentChange={(content) => replacePersistedContent(activeFile.path, content)}
+                frontendAgentEnabled={frontendAgentEnabled}
               />
             ) : useMarkdownPreview ? (
               <SafeMarkdownRenderer

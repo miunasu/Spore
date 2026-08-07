@@ -24,6 +24,7 @@ MANIFEST
 # Build output
 release/
 spore_backend.exe
+scripts/
 rg.exe
 .tool-cache/
 

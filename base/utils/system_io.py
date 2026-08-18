@@ -744,6 +744,30 @@ def edit_text_exact(
                     },
                 )
 
+        # 换行完整性检查（仅 .py）——在写入前拦截 CONTENT 块传输时丢失 \n 的情况
+        if validate_syntax:
+            merge_check = _check_merged_lines(new_string, path.suffix.lower())
+            if merge_check is not None:
+                merge_msg, merge_suspects = merge_check
+                return _set_error(
+                    result,
+                    error_type="NEWLINE_MISMATCH",
+                    error_code="E206",
+                    error_msg=f"new_string 中检测到疑似换行符丢失，未写入。{merge_msg}",
+                    suggestions=[
+                        "重新生成此 edit，在 CONTENT 块中确保每个 except/elif/else/finally 独占一行",
+                        "检查 CONTENT 块内容，不要把两行代码写到同一行",
+                        "若确认内容正确（如关键字出现在字符串内），可设置 validate_syntax=false 跳过此检查",
+                    ],
+                    debug_info={
+                        "suspicious_line_count": len(merge_suspects),
+                        "suspicious_lines": [
+                            {"lineno": ln, "text": txt} for ln, txt in merge_suspects[:10]
+                        ],
+                        "new_string_line_count": len(new_string.splitlines()),
+                    },
+                )
+
         # 写入文件
         path.write_text(new_content, encoding=used_encoding)
         result["bytes_written"] = len(new_content.encode(used_encoding))
@@ -766,7 +790,7 @@ def edit_text_exact(
             result["verification"] = "修改已应用并已验证" if verify_content == new_content else "修改已应用但验证不一致"
         except Exception as e:
             result["verification"] = f"修改已应用但验证失败: {e}"
-        
+
         # 编辑成功后，将文件标记为已修改
         _set_file_modified(resolved_path, True)
         return result
@@ -877,6 +901,31 @@ def multi_edit_text(
                         "提供不同的替换内容",
                     ],
                 )
+
+            # 换行完整性检查（仅 .py）——在应用替换前拦截行合并问题
+            if validate_syntax:
+                merge_check = _check_merged_lines(new_string, path.suffix.lower())
+                if merge_check is not None:
+                    merge_msg, merge_suspects = merge_check
+                    return _set_error(
+                        result,
+                        error_type="NEWLINE_MISMATCH",
+                        error_code="E309",
+                        error_msg=f"第 {idx} 个编辑的 new_string 中检测到疑似换行符丢失，未写入。{merge_msg}",
+                        suggestions=[
+                            "重新生成此 edit，在 CONTENT 块中确保每个 except/elif/else/finally 独占一行",
+                            "检查 CONTENT 块内容，不要把两行代码写到同一行",
+                            "若确认内容正确，可设置 validate_syntax=false 跳过此检查",
+                        ],
+                        debug_info={
+                            "edit_index": idx,
+                            "suspicious_line_count": len(merge_suspects),
+                            "suspicious_lines": [
+                                {"lineno": ln, "text": txt} for ln, txt in merge_suspects[:10]
+                            ],
+                            "new_string_line_count": len(new_string.splitlines()),
+                        },
+                    )
 
             # 匹配策略：先精确匹配；失败且 normalize_indent 开启时启用缩进容错匹配
             match_strategy = "exact"
@@ -1165,6 +1214,30 @@ def edit_text_lines(
                 debug_info={"total_lines": total_lines, "mode": mode},
             )
 
+        # 换行完整性检查（仅 .py）——在写入前拦截 CONTENT 块传输时丢失 \n 的情况
+        if validate_syntax and mode != "delete" and content:
+            merge_check = _check_merged_lines(content, path.suffix.lower())
+            if merge_check is not None:
+                merge_msg, merge_suspects = merge_check
+                return _set_error(
+                    result,
+                    error_type="NEWLINE_MISMATCH",
+                    error_code="E408",
+                    error_msg=f"content 中检测到疑似换行符丢失（未写入）。{merge_msg}",
+                    suggestions=[
+                        "重新生成此 edit，在 CONTENT 块中确保每个 except/elif/else/finally 独占一行",
+                        "检查 CONTENT 块内容，不要把两行代码写到同一行",
+                        "若确认内容正确（如关键字出现在字符串内），可设置 validate_syntax=false 跳过此检查",
+                    ],
+                    debug_info={
+                        "suspicious_line_count": len(merge_suspects),
+                        "suspicious_lines": [
+                            {"lineno": ln, "text": txt} for ln, txt in merge_suspects[:10]
+                        ],
+                        "content_line_count": len(content.splitlines()),
+                    },
+                )
+
         # 准备新内容行（去掉一个末尾换行符，避免意外引入空行）
         new_lines: List[str] = []
         if mode != "delete":
@@ -1297,6 +1370,80 @@ def _validate_python_syntax(content: str) -> tuple[bool, Optional[str]]:
         return False, f"语法错误在第 {e.lineno} 行: {e.msg}"
     except Exception as e:
         return False, f"解析错误: {str(e)}"
+
+
+# Python 子句关键字——它们必须位于语句行首（允许前置空白）。
+# 若出现在同行非首位的非空白字符之后，几乎可以确定是 CONTENT 块
+# 传输时 \n token 丢失导致相邻行被拼在了一起。
+_PY_CLAUSE_KW = (
+    'except ',   # except Exception as e:
+    'except:',   # bare except:
+    'elif ',     # elif condition:
+    'else:',     # else: 子句（有冒号；三元 'else ' 不在检测范围）
+    'finally:',  # finally:
+)
+
+
+def _check_merged_lines(
+    text: str,
+    file_ext: str,
+) -> Optional[tuple[str, list]]:
+    """检测 new_string 中是否存在换行符丢失导致的行合并。
+
+    专为 CONTENT 块传输时模型偶发的 \\n token 丢失而设计。
+    仅对 .py 文件启用：检查是否有 except / elif / else: / finally: 等
+    必须位于行首的子句关键字出现在行中非首位的非空白字符之后。
+
+    返回:
+        None             — 未发现问题
+        (msg, suspects)  — (问题描述, [(lineno, line_text), ...])
+
+    注意：对包含这些关键字作为字符串字面量内容的行存在极低概率误报，
+    可通过 validate_syntax=false 绕过。
+    """
+    if file_ext != '.py':
+        return None
+
+    all_lines = text.splitlines()
+    suspects: list[tuple[int, str]] = []
+
+    for lineno, line in enumerate(all_lines, 1):
+        for kw in _PY_CLAUSE_KW:
+            idx = line.find(kw)
+            if idx < 0:
+                continue
+            before = line[:idx]
+            if not before.lstrip():
+                continue  # 关键字位于行首（允许缩进空白）
+            # 粗略排除注释行：# 出现在关键字之前
+            comment_pos = line.find('#')
+            if 0 <= comment_pos < idx:
+                continue
+            suspects.append((lineno, line))
+            break  # 一行只需报一次
+
+    if not suspects:
+        return None
+
+    # 生成带上下文的可读描述
+    ctx_blocks: list[str] = []
+    for lineno, line in suspects[:5]:
+        parts: list[str] = []
+        if lineno > 1:
+            parts.append(f"  {lineno - 1:>4}: {all_lines[lineno - 2]}")
+        parts.append(f">>>{lineno:>4}: {line}  ← 疑似行合并")
+        if lineno < len(all_lines):
+            parts.append(f"  {lineno + 1:>4}: {all_lines[lineno]}")
+        ctx_blocks.append("\n".join(parts))
+
+    more = f"（另有 {len(suspects) - 5} 处）" if len(suspects) > 5 else ""
+    msg = (
+        f"new_string 中检测到 {len(suspects)} 处疑似换行符丢失"
+        f"（CONTENT 块传输问题）{more}，"
+        f"以下行包含必须位于行首的 Python 子句关键字：\n\n" +
+        "\n\n".join(ctx_blocks)
+    )
+    return msg, suspects
 
 
 def _validate_c_syntax(content: str, file_path: Path) -> tuple[bool, Optional[str]]:

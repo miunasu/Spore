@@ -354,7 +354,11 @@ class ActionParser:
         end_marker_text = "@SPORE:CONTENT_END"
 
         i = start + len(start_marker)
-        while i < len(text) and text[i] in " \t\n":
+        # 只跳过 CONTENT_START 后紧跟的一个换行（\r\n 或 \n），
+        # 不能贪婪地吃掉换行后的行首空格——那是内容缩进的一部分。
+        if i < len(text) and text[i] == '\r' and i + 1 < len(text) and text[i + 1] == '\n':
+            i += 2
+        elif i < len(text) and text[i] == '\n':
             i += 1
 
         content_start = i

@@ -336,7 +336,20 @@ class ProtocolManager:
 
     # Soft warning when non-empty text appears outside protocol blocks.
     # Actions still execute; warning is returned to the LLM with tool results.
-    CONTENT_OUTSIDE_WARNING = "协议块外存在非空内容，所有内容应当在协议块内"
+    CONTENT_OUTSIDE_WARNING = (
+        "协议块外存在非空内容。所有输出必须在协议块内(本次协议块外内容已兼容，合法协议块内操作已执行，不必再次输出本轮相同操作)：\n"
+        "- 用户可见内容使用 @SPORE:REPLY_START / @SPORE:REPLY_END\n"
+        "- 工具调用使用 @SPORE:ACTION_*_START / @SPORE:ACTION_*_END\n"
+        "- 任务完成使用 @SPORE:STOP_REASON=<终止原因>\n"
+    )
+
+    # 兜底：匹配连续重复的协议边界标记（中间仅有空白行或无内容）
+    # 捕获组：(1)首个标记全行, (2)标记token, (3)首个标记的换行, (4)中间空白行, (5)重复标记行
+    _DEDUP_BOUNDARY_RE = re.compile(
+        r'(?m)^([ \t]*(@SPORE:[A-Z_]+_(?:START|END))[ \t]*)(\r?\n)'
+        r'((?:[ \t]*\r?\n)*)'
+        r'([ \t]*\2[ \t]*(?:\r?\n|$))'
+    )
 
 
     BLOCK_MARKERS = {
@@ -363,6 +376,20 @@ class ProtocolManager:
         "@SPORE:CONTENT_END",
     }
     CONTENT_MARKERS = {"@SPORE:CONTENT_START", "@SPORE:CONTENT_END"}
+
+    @staticmethod
+    def _deduplicate_boundary_markers(text: str) -> str:
+        """兜底：将连续重复的协议边界标记合并为一个。
+
+        模型偶尔输出同一边界标记两次（中间可能是换行、空格行或无内容），
+        导致解析器报 mismatched_end_marker 等协议错误。此预处理在解析前
+        将简单重复合并，使响应顺利通过校验。支持三连及以上重复（循环处理）。
+        """
+        prev = None
+        while prev != text:
+            prev = text
+            text = ProtocolManager._DEDUP_BOUNDARY_RE.sub(r'\1\3', text)
+        return text
 
     def __init__(self):
         self.action_parser = ActionParser()
@@ -472,9 +499,9 @@ class ProtocolManager:
             final_spans.append((stop_block["start"], stop_block["end"]))
         stop_spans = list(final_spans)
 
-        if len(final_spans) > 1:
-            return blocks, ProtocolError("multiple_final_markers", "同一轮回复中只能包含一个 @SPORE:STOP_REASON ="), ""
-        if final_spans and response[final_spans[0][1]:].strip():
+        # 多个 STOP_REASON 宽松兜底：不报错，同 REPLY 逻辑拼接内容。
+        # content_after_stop_reason 检查仅对最后一个 STOP_REASON 之后的文本生效。
+        if final_spans and response[final_spans[-1][1]:].strip():
             return blocks, ProtocolError(
                 "content_after_stop_reason",
                 "@SPORE:STOP_REASON ???????????????????JSON ????",
@@ -573,8 +600,9 @@ class ProtocolManager:
                 ), ""
             return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: {end_marker}"), ""
 
-        if final_spans:
-            content_spans.append(final_spans[0])
+        # 多个 STOP_REASON 时，将所有 span 都纳入已覆盖范围，避免后续出现在 outside_content
+        for span in final_spans:
+            content_spans.append(span)
 
         uncovered = self._content_outside_spans(response, content_spans)
         # Soft policy: outside text is treated as REPLY later; ACTION still executes.
@@ -618,6 +646,7 @@ class ProtocolManager:
         if not response:
             return ParsedResponse(response_type="continue", raw_response="")
 
+        response = self._deduplicate_boundary_markers(response)
         blocks, error, outside_content = self._scan_protocol(response)
         if error:
             is_truncated = bool(truncated) if truncated is not None else False
@@ -629,9 +658,10 @@ class ProtocolManager:
             )
 
         outside_text = (outside_content or "").strip()
-        protocol_warning = self.CONTENT_OUTSIDE_WARNING if outside_text else None
         # 协议解析结果与传输状态彼此独立；这里只透传调用方给出的明确结论。
         is_truncated = bool(truncated)
+        
+        protocol_warning = self.CONTENT_OUTSIDE_WARNING if outside_text else None
 
         final_blocks = [block for block in blocks if block["name"] == "STOP_REASON"]
         final_pos = final_blocks[0]["start"] if final_blocks else -1
@@ -640,13 +670,9 @@ class ProtocolManager:
         reply_blocks = [block for block in blocks if block["name"] == "REPLY"]
         todo_blocks = [block for block in blocks if block["name"] == "TODO"]
 
+        # TODO 重复：取最后一个，静默丢弃其余（通常是模型截断后重新输出）
         if len(todo_blocks) > 1:
-            return ParsedResponse(
-                response_type="protocol_error",
-                raw_response=response,
-                protocol_error=ProtocolError("multiple_todo_blocks", "同一轮回复中只能包含一个 TODO 块"),
-                truncated=is_truncated,
-            )
+            todo_blocks = [todo_blocks[-1]]
 
         if len(action_blocks) > 1:
             return ParsedResponse(
@@ -699,7 +725,13 @@ class ProtocolManager:
             )
 
         if has_final:
-            final_content = (final_blocks[0].get("content") or "").strip() or None
+            # 多个 STOP_REASON 同 REPLY 逻辑：按顺序拼接所有非空原因
+            final_parts = [
+                (b.get("content") or "").strip()
+                for b in final_blocks
+                if (b.get("content") or "").strip()
+            ]
+            final_content = "\n\n".join(final_parts) or None
             # STOP_REASON 的自然语言原因按 REPLY 逻辑作为用户可见内容。
             # 规范上终止回复不应再使用 REPLY；若模型仍同时输出 REPLY，系统兜底拼接展示。
             if final_content and reply_content:
@@ -797,7 +829,16 @@ class ProtocolManager:
         return self.result_formatter.format_protocol_error(error.code, error.message)
 
     def parse_todo_from_response(self, response: str) -> Optional[List[Dict[str, str]]]:
-        todo_content = self._extract_block_content(response, "TODO")
+        # 多个 TODO 块：取最后一个（与 parse_response 中的兜底策略一致）
+        start_marker, end_marker = self.BLOCK_MARKERS["TODO"]
+        last_start = response.rfind(start_marker)
+        if last_start < 0:
+            return None
+        content_after = response[last_start + len(start_marker):]
+        end_in_tail = self._find_standalone_marker(content_after, end_marker)
+        if end_in_tail < 0:
+            return None
+        todo_content = content_after[:end_in_tail].strip() or None
         if not todo_content:
             return None
 
@@ -835,8 +876,9 @@ class ProtocolManager:
         return tasks if tasks else None
 
     def _parse_status(self, status_str: str) -> str:
-        if status_str in {"completed", "done", "完成", "已完成", "v", "x"}:
+        if status_str in {"completed", "done", "完成", "已完成", "v", "x",
+                          "terminé", "termine", "fini", "fertig", "完了"}:
             return "completed"
-        if status_str in {"failed", "fail", "失败", "已失败"}:
+        if status_str in {"failed", "fail", "失败", "已失败", "échec", "echeс"}:
             return "failed"
         return "pending"

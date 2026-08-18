@@ -1414,12 +1414,14 @@ class ConversationLoop:
             # 检测是否应该结束
             should_end = False
             
-            # 只有当上次和本次都没有 ACTION 时才调用 supervisor
-            last = self.state.last_answer if self.state.last_answer else ""
-            if last != ACTION_STATE_MARKER and last != "":
-                # 上次没有 ACTION，本次也没有 ACTION，调用 supervisor
-                if supervisor(last, current_answer):
-                    should_end = True
+            # 如果存在协议warning，不调用supervisor，直接继续纠正
+            if not parsed.protocol_warning:
+                # 只有当上次和本次都没有 ACTION 时才调用 supervisor
+                last = self.state.last_answer if self.state.last_answer else ""
+                if last != ACTION_STATE_MARKER and last != "":
+                    # 上次没有 ACTION，本次也没有 ACTION，调用 supervisor
+                    if supervisor(last, current_answer):
+                        should_end = True
             
             if should_end:
                 # 检测到循环或结束，打印内容并结束

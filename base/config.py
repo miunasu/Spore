@@ -229,7 +229,7 @@ class Config:
         self.log_general_filename: str = os.getenv("LOG_GENERAL_FILENAME", "general.log")
 
         # Raw 日志：收到 LLM 回复时立即把原文完整落盘（不推送到 Desktop 左栏日志）
-        self.log_raw_enabled: bool = os.getenv("LOG_RAW_ENABLED", "false").lower() == "true"
+        self.log_raw_enabled: bool = os.getenv("LOG_RAW_ENABLED", "true").lower() == "true"
         self.log_raw_filename: str = os.getenv("LOG_RAW_FILENAME", "raw.log")
 
         # 日志监控配置

@@ -309,9 +309,10 @@ def log_tool_result(tool_name: str, tool_result: str, args: Dict[str, Any]) -> N
             if isinstance(result_data, dict):
                 if tool_name == "execute_command" and result_data.get("ok") is False:
                     log_tool_error(
-                        tool_name, 
-                        f"命令执行失败 (exit code {result_data.get('returncode', -1)})", 
-                        args
+                        tool_name,
+                        f"命令执行失败 (exit code {result_data.get('returncode', -1)})",
+                        args,
+                        context=_tool_result_log_context(tool_result),
                     )
                     return
         except (json.JSONDecodeError, TypeError):

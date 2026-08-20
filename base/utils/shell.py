@@ -138,12 +138,42 @@ def _attach_hints(result: Dict[str, Any], hints: List[str]) -> Dict[str, Any]:
 
 
 def _is_powershell_progress_noise(stderr: str) -> bool:
+    """仅当 stderr 是纯进度噪声（无任何实际文本内容）时返回 True。
+
+    PowerShell 5 的 CLIXML 格式：
+        #< CLIXML\r\n[可选的纯文本内容]\r\n<Objs ...>...</Objs>
+
+    纯文本内容（如 Python traceback）夹在 CLIXML 头和 XML 块之间，
+    必须提取后判断是否为空，不能整块丢弃。
+    """
     stripped = stderr.strip()
-    return (
-        stripped.startswith("#< CLIXML")
-        and '<Obj S="progress"' in stripped
-        and '<S S="Error">' not in stripped
-    )
+    if not stripped.startswith("#< CLIXML"):
+        return False
+    if '<Obj S="progress"' not in stripped:
+        return False
+    if '<S S="Error">' in stripped:
+        return False
+
+    # 提取 CLIXML 头之后、首个 XML 块之前的纯文本内容
+    after_header = stripped[len("#< CLIXML"):].lstrip("\r\n")
+    xml_start = after_header.find("<")
+    plain_text = after_header[:xml_start].strip() if xml_start >= 0 else after_header.strip()
+    # 如果有非空纯文本（traceback、错误信息等），不能视为纯噪声
+    return plain_text == ""
+
+
+def _strip_powershell_progress_noise(stderr: str) -> str:
+    """清理 CLIXML 进度噪声，但保留其中夹带的纯文本错误内容。"""
+    stripped = stderr.strip()
+    if not stripped.startswith("#< CLIXML"):
+        return stderr
+    if '<Obj S="progress"' not in stripped:
+        return stderr
+
+    after_header = stripped[len("#< CLIXML"):].lstrip("\r\n")
+    xml_start = after_header.find("<")
+    plain_text = after_header[:xml_start].strip() if xml_start >= 0 else after_header.strip()
+    return plain_text
 
 
 def execute_command(command: Union[str, List[str]], timeout: Optional[int] = None, encoding: str = None, working_dir: Optional[str] = None) -> Dict[str, Any]:
@@ -441,6 +471,9 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
     stderr_output = smart_decode(stderr_bytes, prefer_encoding)
     if _is_powershell_progress_noise(stderr_output):
         stderr_output = ""
+    elif stderr_output.strip().startswith("#< CLIXML"):
+        # 有夹带纯文本内容（如 Python traceback），提取并丢弃进度 XML 噪声
+        stderr_output = _strip_powershell_progress_noise(stderr_output)
     
     # 错误检测策略
     original_returncode = proc.returncode

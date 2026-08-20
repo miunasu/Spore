@@ -1811,12 +1811,15 @@ class ChatProcess:
                     current_sent.append({"role": "user", "content": system})
                 else:
                     current_sent.append({"role": "system", "content": system})
+            tail_msgs_chat: list = []
             for msg in reversed(messages):
                 if msg.get("role") == "user":
                     if self.config.system_as_user and system and msg.get("content") == system:
-                        continue
-                    current_sent.append(msg)
+                        break
+                    tail_msgs_chat.append(msg)
+                else:
                     break
+            current_sent.extend(reversed(tail_msgs_chat))
 
             return self._finalize_result(
                 request_id,
@@ -1957,12 +1960,15 @@ class ChatProcess:
             is_first_conversation = len([m for m in messages if m.get("role") == "user"]) == 1
             if is_first_conversation and system and not self.config.system_as_user:
                 current_sent.append({"role": "system", "content": system})
+            tail_msgs_resp: list = []
             for msg in reversed(messages):
                 if msg.get("role") == "user":
                     if self.config.system_as_user and system and msg.get("content") == system:
-                        continue
-                    current_sent.append(msg)
+                        break
+                    tail_msgs_resp.append(msg)
+                else:
                     break
+            current_sent.extend(reversed(tail_msgs_resp))
 
             # usage / status / incomplete_details 全部走容错提取：
             # Responses API 的截断信号在 status="incomplete" + incomplete_details.reason，
@@ -2214,12 +2220,15 @@ class ChatProcess:
                     # system_as_user 模式：第一条 user 消息就是 system prompt
                     current_sent.append(anthropic_messages[0])
             
-            # 添加最后一条真正的用户消息（跳过第一条 system prompt）
+            # 添加本轮所有连续的用户消息（多工具结果 + 最后一条用户输入）
             start_index = 1 if self.config.system_as_user else 0
+            tail_msgs: list = []
             for msg in reversed(anthropic_messages[start_index:]):
                 if msg.get("role") == "user":
-                    current_sent.append(msg)
+                    tail_msgs.append(msg)
+                else:
                     break
+            current_sent.extend(reversed(tail_msgs))
             
             return self._finalize_result(
                 request_id,

@@ -276,8 +276,13 @@ const fetchSessionMessages = async (
       };
 
       if (msg.role === 'assistant') {
-        const prevMsg = index > 0 ? allMessages[index - 1] : null;
-        const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
+        // 收集本轮所有连续的前置用户消息（多工具结果 + 用户输入）
+        const sent_messages: Array<{role: string; content: string}> = [];
+        let j = index - 1;
+        while (j >= 0 && allMessages[j].role !== 'assistant') {
+          sent_messages.unshift({ role: allMessages[j].role, content: allMessages[j].content });
+          j--;
+        }
 
         return {
           ...baseMessage,
@@ -1425,14 +1430,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
               if (msg.role === 'assistant') {
                 // assistant 消息：提取显示内容，保存原始内容用于"查看详情"
-                // 查找前一条消息作为"发送给LLM的消息"
-                const prevMsg = index > 0 ? allMessages[index - 1] : null;
-                const sent_messages = prevMsg ? [{ role: prevMsg.role, content: prevMsg.content }] : [];
+                // 收集本轮所有连续的前置用户消息（多工具结果 + 用户输入）
+                const sent_messages: Array<{role: string; content: string}> = [];
+                let j = index - 1;
+                while (j >= 0 && allMessages[j].role !== 'assistant') {
+                  sent_messages.unshift({ role: allMessages[j].role, content: allMessages[j].content });
+                  j--;
+                }
 
                 return {
                   ...baseMessage,
                   content: extractDisplayContent(msg.content),
-                  sent_messages, // 前一条消息（用户输入或工具结果）
+                  sent_messages, // 本轮所有用户消息（工具结果 + 用户输入）
                   raw_response: msg.content, // 原始响应（包含协议标记）
                 };
               } else {

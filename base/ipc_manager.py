@@ -499,6 +499,7 @@ class IPCManager:
             ("tools", "base.tools", "set_ipc_manager"),
             ("agent_process", "base.agent_process", "set_ipc_manager"),
             ("supervisor", "AutoAgent.supervisor", "set_ipc_manager"),
+            ("mode_selector", "AutoAgent.mode_selector", "set_ipc_manager"),
             ("security_agent", "AutoAgent.security_agent", "set_ipc_manager"),
             ("frontend_agent", "AutoAgent.frontend_agent", "set_ipc_manager"),
         ]

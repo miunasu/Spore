@@ -206,19 +206,19 @@ def delete_path(
 ) -> Dict[str, Any]:
     """
     批量删除文件或文件夹（递归）
-    
+
     Args:
         paths: 要删除的路径列表
         verify_result: 是否验证删除结果
-        
+
     注意：
-        - 命令行模式：通过input让用户输入y/n确认
-        - Web模式：弹出确认对话框
+        - 拦截开关启用时：需要用户确认（命令行模式通过input，Web模式弹窗）
+        - 拦截开关关闭时：直接删除，不需要确认
     """
     # 确保 paths 是列表
     if isinstance(paths, str):
         paths = [paths]
-    
+
     result: Dict[str, Any] = {
         "ok": False,
         "action": "delete",
@@ -242,41 +242,47 @@ def delete_path(
                 resolved_paths.append(file_path)
             else:
                 result["failed"].append({"path": str(p), "error": "路径不存在"})
-        
+
         if not resolved_paths:
             result["error"] = "所有路径都不存在"
             return result
-        
-        # 构建确认消息
-        path_list_str = "\n".join(f"  - {p}" for p in resolved_paths)
-        confirm_message = f"确定要删除以下 {len(resolved_paths)} 个路径吗？\n{path_list_str}"
-        
-        # 请求用户确认
-        # 检查是否是桌面模式
-        import os
-        is_desktop_mode = os.environ.get('SPORE_DESKTOP_MODE') == '1'
-        
-        if is_desktop_mode:
-            # 桌面模式：使用独立进程处理确认，不阻塞主进程 GIL
-            from desktop_app.backend.confirm_manager import desktop_confirm
-            confirmed = desktop_confirm(
-                action_type="delete",
-                title="批量删除确认",
-                message=f"确定要删除以下 {len(resolved_paths)} 个路径吗？",
-                details=[str(p) for p in resolved_paths]
-            )
-        else:
-            # 命令行模式：使用input
-            if current_agent_name == "Spore":
-                # extra_line = 标题行(1) + 路径数量 + (y/n)行(1)
-                terminal.extra_line += len(resolved_paths) + 2
-            user_input = input(f"{confirm_message}\n(y/n) ")
-            confirmed = user_input.lower() == "y"
-        
-        if not confirmed:
-            result["error"] = "用户取消删除操作"
-            return result
-        
+
+        # 检查是否需要用户确认
+        from ..config import get_config
+        _cfg = get_config()
+        need_confirmation = _cfg.is_intercept_enabled("file_delete")
+
+        if need_confirmation:
+            # 构建确认消息
+            path_list_str = "\n".join(f"  - {p}" for p in resolved_paths)
+            confirm_message = f"确定要删除以下 {len(resolved_paths)} 个路径吗？\n{path_list_str}"
+
+            # 请求用户确认
+            # 检查是否是桌面模式
+            import os
+            is_desktop_mode = os.environ.get('SPORE_DESKTOP_MODE') == '1'
+
+            if is_desktop_mode:
+                # 桌面模式：使用独立进程处理确认，不阻塞主进程 GIL
+                from desktop_app.backend.confirm_manager import desktop_confirm
+                confirmed = desktop_confirm(
+                    action_type="delete",
+                    title="批量删除确认",
+                    message=f"确定要删除以下 {len(resolved_paths)} 个路径吗？",
+                    details=[str(p) for p in resolved_paths]
+                )
+            else:
+                # 命令行模式：使用input
+                if current_agent_name == "Spore":
+                    # extra_line = 标题行(1) + 路径数量 + (y/n)行(1)
+                    terminal.extra_line += len(resolved_paths) + 2
+                user_input = input(f"{confirm_message}\n(y/n) ")
+                confirmed = user_input.lower() == "y"
+
+            if not confirmed:
+                result["error"] = "用户取消删除操作"
+                return result
+
         # 执行删除
         import shutil
         for file_path in resolved_paths:
@@ -288,17 +294,17 @@ def delete_path(
                 else:
                     result["failed"].append({"path": str(file_path), "error": "既不是文件也不是文件夹"})
                     continue
-                
+
                 # 验证删除结果
                 if verify_result:
                     if file_path.exists():
                         result["failed"].append({"path": str(file_path), "error": "删除后验证失败"})
                         continue
-                
+
                 result["deleted"].append(str(file_path))
             except Exception as e:
                 result["failed"].append({"path": str(file_path), "error": str(e)})
-        
+
         # 设置最终状态
         if result["deleted"]:
             result["ok"] = True
@@ -306,7 +312,7 @@ def delete_path(
                 result["error"] = f"部分删除成功: {len(result['deleted'])} 成功, {len(result['failed'])} 失败"
         else:
             result["error"] = "所有删除操作都失败了"
-        
+
         return result
     except Exception as exc:
         import traceback

@@ -73,6 +73,24 @@ def _sync_command_intercept(enabled: bool) -> None:
         pass
 
 
+def _sync_intercept_file_delete(enabled: bool) -> None:
+    """Persist and apply intercept_file_delete switch without restarting chat process."""
+    env_path = _get_env_path()
+    _upsert_env_key(env_path, "INTERCEPT_FILE_DELETE", "true" if enabled else "false")
+
+    from base.config import get_config as get_base_config
+
+    base_cfg = get_base_config()
+    base_cfg.intercept_file_delete = enabled
+
+    try:
+        from .. import core as desktop_core
+        if getattr(desktop_core, "_config", None) is not None:
+            desktop_core._config.intercept_file_delete = enabled
+    except Exception:
+        pass
+
+
 
 
 class CharacterSelectRequest(BaseModel):
@@ -84,6 +102,7 @@ class SettingsUpdateRequest(BaseModel):
     """更新设置请求"""
     default_character: Optional[str] = None
     command_intercept: Optional[bool] = None
+    intercept_file_delete: Optional[bool] = None
 
 
 class ConfigProfileSaveRequest(BaseModel):
@@ -233,6 +252,7 @@ def get_settings() -> Dict[str, Any]:
                 "max_output_tokens": config.max_output_tokens,
                 "llm_stream_enabled": getattr(config, "llm_stream_enabled", True),
                 "command_intercept": getattr(config, "command_intercept", True),
+                "intercept_file_delete": getattr(config, "intercept_file_delete", True),
             }
         }
     except Exception as e:
@@ -426,12 +446,20 @@ def update_settings(request: SettingsUpdateRequest) -> Dict[str, Any]:
         if request.command_intercept is not None:
             _sync_command_intercept(bool(request.command_intercept))
 
+        if request.intercept_file_delete is not None:
+            _sync_intercept_file_delete(bool(request.intercept_file_delete))
+
         return {
             "success": True,
             "message": "settings updated",
             "command_intercept": (
                 bool(request.command_intercept)
                 if request.command_intercept is not None
+                else None
+            ),
+            "intercept_file_delete": (
+                bool(request.intercept_file_delete)
+                if request.intercept_file_delete is not None
                 else None
             ),
         }
@@ -532,6 +560,51 @@ def set_command_intercept(request: SettingsUpdateRequest) -> Dict[str, Any]:
         return {
             "success": True,
             "command_intercept": bool(request.command_intercept),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.get("/settings/intercept_file_delete")
+def get_intercept_file_delete() -> Dict[str, Any]:
+    """Get file delete confirmation switch."""
+    try:
+        from base.config import get_config
+        config = get_config()
+        enabled = bool(getattr(config, "intercept_file_delete", True))
+        return {"success": True, "intercept_file_delete": enabled}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/settings/intercept_file_delete/toggle")
+def toggle_intercept_file_delete() -> Dict[str, Any]:
+    """Toggle file delete confirmation switch and persist to .env."""
+    try:
+        from base.config import get_config
+        config = get_config()
+        current = bool(getattr(config, "intercept_file_delete", True))
+        new_value = not current
+        _sync_intercept_file_delete(new_value)
+        return {
+            "success": True,
+            "intercept_file_delete": new_value,
+            "message": "file delete confirmation enabled" if new_value else "file delete confirmation disabled",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/settings/intercept_file_delete")
+def set_intercept_file_delete(request: SettingsUpdateRequest) -> Dict[str, Any]:
+    """Set file delete confirmation switch."""
+    try:
+        if request.intercept_file_delete is None:
+            return {"success": False, "error": "intercept_file_delete is required"}
+        _sync_intercept_file_delete(bool(request.intercept_file_delete))
+        return {
+            "success": True,
+            "intercept_file_delete": bool(request.intercept_file_delete),
         }
     except Exception as e:
         return {"success": False, "error": str(e)}

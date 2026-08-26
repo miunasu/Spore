@@ -134,15 +134,15 @@ def toggle_savemode(req: Optional[ConversationCommandRequest] = None) -> Dict[st
 def save_conversation(req: Optional[ConversationCommandRequest] = None):
     """保存对话 - 复用 memory_manager.save_messages"""
     session_manager = get_session_manager()
-    
+
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
-    
+
     try:
         from base.memory_manager import save_messages
         conversation_id = req.conversation_id if req else None
-        state, _ = _get_target_state(session_manager, conversation_id)
-        save_messages(state.messages)
+        state, resolved_conversation_id = _get_target_state(session_manager, conversation_id)
+        save_messages(state.messages, session_id=resolved_conversation_id)
         return {"success": True, "message": "对话已保存"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -152,14 +152,14 @@ def save_conversation(req: Optional[ConversationCommandRequest] = None):
 def load_conversation(req: LoadRequest):
     """加载对话 - 复用 memory_manager.load_messages"""
     session_manager = get_session_manager()
-    
+
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
-    
+
     try:
         from base.memory_manager import load_messages, auto_save_messages
         state, resolved_conversation_id = _get_target_state(session_manager, req.conversation_id)
-        state.messages = load_messages(req.filename)
+        state.messages = load_messages(req.filename, session_id=resolved_conversation_id)
         state.user_message_count = 0
         # 加载后立即写入/刷新该会话短记忆，使其进入最近 10 会话队列
         auto_save_messages(state.messages, session_id=resolved_conversation_id)
@@ -174,23 +174,23 @@ def load_conversation(req: LoadRequest):
 def continue_recent(req: Optional[ConversationCommandRequest] = None):
     """继续最近对话 - 复用 memory_manager.get_latest_history_file"""
     session_manager = get_session_manager()
-    
+
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
-    
+
     try:
         from base.memory_manager import load_messages, get_latest_history_file, auto_save_messages
         from base import config as _config
-        
+
         conversation_id = req.conversation_id if req else None
         state, resolved_conversation_id = _get_target_state(session_manager, conversation_id)
         latest_file = get_latest_history_file()
-        state.messages = load_messages(latest_file)
+        state.messages = load_messages(latest_file, session_id=resolved_conversation_id)
         state.user_message_count = 0
         _config.memory_continued = True
         # 继续最近对话后，刷新该会话短记忆
         auto_save_messages(state.messages, session_id=resolved_conversation_id)
-        
+
         return {
             "success": True,
             "filename": latest_file,
@@ -559,22 +559,37 @@ def get_context_mode(conversation_id: Optional[str] = None) -> Dict[str, Any]:
 
 @router.post("/mode")
 def set_context_mode(req: SetModeRequest) -> Dict[str, Any]:
-    """设置当前会话的上下文处理模式"""
+    """设置当前会话的上下文处理模式，并持久化到.env"""
     from AutoAgent import get_mode_description
-    
+
     if req.mode not in ["strong_context", "long_context", "auto"]:
         raise HTTPException(status_code=400, detail=f"无效的模式: {req.mode}")
-    
+
     session_manager = get_session_manager()
-    
+
     if not session_manager:
         raise HTTPException(status_code=503, detail="后端未初始化")
-    
+
     # 设置目标会话的模式，并同步工具集（含会话级 tool policy）
     state, resolved_id = _get_target_state(session_manager, req.conversation_id)
     state.context_mode = req.mode
     if req.mode != "auto":
         state.selected_auto_mode = None
+
+    # 持久化到.env文件
+    try:
+        from desktop_app.backend.routes.settings import _get_env_path, _upsert_env_key
+        env_path = _get_env_path()
+        _upsert_env_key(env_path, "CONTEXT_MODE", req.mode)
+
+        # 同步更新内存中的配置
+        from base.config import get_config
+        config = get_config()
+        config.context_mode = req.mode
+    except Exception as e:
+        # 持久化失败不影响当前会话使用
+        from base.logger import log_error
+        log_error("CONTEXT_MODE_PERSIST_ERROR", "持久化上下文模式到.env失败", e)
 
     from base.tool_policy import (
         effective_mode_name,

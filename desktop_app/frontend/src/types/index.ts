@@ -322,7 +322,7 @@ export interface WSHtmlInteractionStateEvent {
 export type WSEvent = WSLogEvent | WSAgentOutputEvent | WSAgentStatusEvent | WSAgentRegisterEvent | WSChatChunkEvent | WSTodoUpdateEvent | WSConfirmRequestEvent | WSConfirmCancelEvent | WSConfirmResultEvent | WSTaskEvent | WSHtmlInteractionStateEvent;
 
 // Tab 类型
-export type TabType = 'output' | 'html' | 'skills' | 'prompt' | 'history' | 'agents' | 'note' | 'characters';
+export type TabType = 'spore' | 'agents' | 'note';
 
 // API 响应类型
 export interface ApiResponse<T = unknown> {

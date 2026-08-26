@@ -21,7 +21,7 @@ const commandMenu = {
       saveModeTitle: '节省模式',
       turnedOn: '已开启',
       turnedOff: '已关闭',
-      interceptOn: '已开启：命令拦截策略生效（含 shell 删除/危险写入等）。',
+      interceptOn: '已开启：命令拦截策略生效（含 shell 写入等，PowerShell 删除已永久禁用）。',
       interceptOff: '已关闭：已关闭全部命令拦截策略（请谨慎）。',
       clearLogsDone: '清理完成',
       clearLogsResult: '已清理 {count} 个日志文件/文件夹',
@@ -250,15 +250,15 @@ const commandMenu = {
 
       COMMAND_INTERCEPT: {
         label: '拦截开关',
-        desc: '总开关：开启后启用 shell 安全拦截策略（删除/写入等，后续可扩展）',
+        desc: '总开关：开启后启用 shell 安全拦截策略（写入等，后续可扩展）',
         ph: '默认: true',
         opts: { onRecommended: '开启（推荐）', off: '关闭' },
       },
-      INTERCEPT_SHELL_DELETE: {
-        label: '拦截 shell 删除',
-        desc: '仅总开关开启时生效；拦截 del/rm/rmdir/Remove-Item',
+      INTERCEPT_FILE_DELETE: {
+        label: 'file 工具删除确认',
+        desc: 'file type=delete 操作是否需要用户确认；关闭后直接删除不确认（PowerShell 删除命令已永久禁用，无法配置）',
         ph: '默认: true（不写则开启）',
-        opts: { on: '开启', off: '关闭' },
+        opts: { on: '需要确认', off: '直接删除' },
       },
       INTERCEPT_SHELL_WRITE: {
         label: '拦截 shell 写入',
@@ -481,7 +481,7 @@ const commandMenu = {
       saveModeTitle: 'Save mode',
       turnedOn: 'On',
       turnedOff: 'Off',
-      interceptOn: 'On: command interception is active (incl. shell delete / risky writes).',
+      interceptOn: 'On: command interception is active (incl. shell writes, PowerShell delete permanently disabled).',
       interceptOff: 'Off: all command interception is disabled (use with caution).',
       clearLogsDone: 'Cleanup complete',
       clearLogsResult: 'Cleared {count} log files/folders',
@@ -710,15 +710,15 @@ const commandMenu = {
 
       COMMAND_INTERCEPT: {
         label: 'Command interception',
-        desc: 'Master switch: when on, enables shell safety interception (delete/write, etc.; extendable later)',
+        desc: 'Master switch: when on, enables shell safety interception (write, etc.; extendable later)',
         ph: 'Default: true',
         opts: { onRecommended: 'On (recommended)', off: 'Off' },
       },
-      INTERCEPT_SHELL_DELETE: {
-        label: 'Intercept shell delete',
-        desc: 'Effective only when the master switch is on; intercepts del/rm/rmdir/Remove-Item',
+      INTERCEPT_FILE_DELETE: {
+        label: 'File delete confirmation',
+        desc: 'Whether file type=delete requires user confirmation; if off, deletes directly without confirmation (PowerShell delete commands are permanently disabled)',
         ph: 'Default: true (on if unset)',
-        opts: { on: 'On', off: 'Off' },
+        opts: { on: 'Require confirmation', off: 'Delete directly' },
       },
       INTERCEPT_SHELL_WRITE: {
         label: 'Intercept shell write',

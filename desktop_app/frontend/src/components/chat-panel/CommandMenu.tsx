@@ -610,15 +610,15 @@ const ENV_ADVANCED_CONFIG_GROUPS: EnvConfigGroup[] = [
         placeholder: 'commandMenu.env.COMMAND_INTERCEPT.ph',
       },
       {
-        key: 'INTERCEPT_SHELL_DELETE',
-        label: 'commandMenu.env.INTERCEPT_SHELL_DELETE.label',
+        key: 'INTERCEPT_FILE_DELETE',
+        label: 'commandMenu.env.INTERCEPT_FILE_DELETE.label',
         type: 'select',
         options: [
-          { value: 'true', label: 'commandMenu.env.INTERCEPT_SHELL_DELETE.opts.on' },
-          { value: 'false', label: 'commandMenu.env.INTERCEPT_SHELL_DELETE.opts.off' },
+          { value: 'true', label: 'commandMenu.env.INTERCEPT_FILE_DELETE.opts.on' },
+          { value: 'false', label: 'commandMenu.env.INTERCEPT_FILE_DELETE.opts.off' },
         ],
-        description: 'commandMenu.env.INTERCEPT_SHELL_DELETE.desc',
-        placeholder: 'commandMenu.env.INTERCEPT_SHELL_DELETE.ph',
+        description: 'commandMenu.env.INTERCEPT_FILE_DELETE.desc',
+        placeholder: 'commandMenu.env.INTERCEPT_FILE_DELETE.ph',
       },
       {
         key: 'INTERCEPT_SHELL_WRITE',

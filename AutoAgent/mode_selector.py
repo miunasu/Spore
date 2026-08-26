@@ -42,25 +42,36 @@ def select_context_mode(user_input: str) -> str:
         messages = [
             {"role": "user", "content": f"用户输入：{user_input}"}
         ]
-        
+
         # 加载提示词
         system_prompt = load_system_prompt("prompt/model_prompt.md")
-        
+
         # 通过 IPC 发送请求（颗粒化基座：AGENT_MODE_SELECTOR_* → SUB_AGENT_* → 主配置）
         _config = get_config()
+        llm_config = _config.resolve_agent_llm("mode_selector")
+
+        log_info("MODE_SELECTOR", f"使用模型: {llm_config.get('model')} (SDK: {llm_config.get('sdk')})")
+
         request_id = _ipc_manager.send_chat_request(
             messages=messages,
-            model=_config.resolve_agent_llm("mode_selector")["model"],
+            model=llm_config["model"],
             system=system_prompt,
             agent_profile="mode_selector",
             tool_calls=False
         )
-        
+
+        log_info("MODE_SELECTOR", f"已发送请求: {request_id}")
+
         # 等待响应
         response = _ipc_manager.get_chat_response(request_id=request_id, timeout=30)
-        
-        if response is None or response.get("status") != "success":
-            log_info("MODE_SELECTOR", "LLM响应失败，使用默认模式: strong_context")
+
+        if response is None:
+            log_error("MODE_SELECTOR", "LLM响应超时或为空，使用默认模式: strong_context")
+            return "strong_context"
+
+        if response.get("status") != "success":
+            error_msg = response.get("error", "未知错误")
+            log_error("MODE_SELECTOR", f"LLM响应失败: {error_msg}，使用默认模式: strong_context")
             return "strong_context"
         
         reply_data = response.get("data", {})

@@ -57,25 +57,74 @@ def _session_id_from_autosave_name(name: str) -> Optional[str]:
     return None
 
 
-def save_messages(messages: List[Dict[str, str]]):
-    """保存对话历史到 history 目录"""
+def save_messages(messages: List[Dict[str, str]], session_id: Optional[str] = None):
+    """保存对话历史到 history 目录，同时保存对应的checkpoint"""
     _ensure_history_dir()
     filename = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.mem"
     filepath = os.path.join(HISTORY_DIR, filename)
 
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=2)
-    print(f"[对话已保存] 文件: {filepath}")
+
+    # 同时保存checkpoint（如果存在）
+    if session_id:
+        try:
+            from .backup_manager import get_backup_manager
+            backup_mgr = get_backup_manager()
+
+            # 读取该会话的checkpoint
+            checkpoints = backup_mgr._load_checkpoints(session_id)
+            if checkpoints:
+                # 保存checkpoint到与对话文件同名的.ckpt文件
+                checkpoint_filename = filename.replace('.mem', '.ckpt')
+                checkpoint_filepath = os.path.join(HISTORY_DIR, checkpoint_filename)
+                with open(checkpoint_filepath, "w", encoding="utf-8") as f:
+                    json.dump(checkpoints, f, ensure_ascii=False, indent=2)
+                print(f"[对话已保存] 文件: {filepath}, checkpoint: {checkpoint_filepath}")
+            else:
+                print(f"[对话已保存] 文件: {filepath}")
+        except Exception as e:
+            # checkpoint保存失败不影响对话保存
+            print(f"[对话已保存] 文件: {filepath} (checkpoint保存失败: {e})")
+    else:
+        print(f"[对话已保存] 文件: {filepath}")
+
     return filepath
 
 
-def load_messages(filename: str) -> List[Dict[str, str]]:
-    """从 history 目录加载对话历史"""
+def load_messages(filename: str, session_id: Optional[str] = None) -> List[Dict[str, str]]:
+    """从 history 目录加载对话历史，同时恢复对应的checkpoint（如果存在）"""
     # 始终从 history 目录读取
     filepath = os.path.join(HISTORY_DIR, filename)
 
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        messages = json.load(f)
+
+    # 尝试恢复checkpoint
+    if session_id:
+        try:
+            checkpoint_filename = filename.replace('.mem', '.ckpt')
+            checkpoint_filepath = os.path.join(HISTORY_DIR, checkpoint_filename)
+
+            if os.path.isfile(checkpoint_filepath):
+                from .backup_manager import get_backup_manager
+                backup_mgr = get_backup_manager()
+
+                with open(checkpoint_filepath, "r", encoding="utf-8") as f:
+                    checkpoints = json.load(f)
+
+                # 恢复checkpoint到该会话
+                checkpoint_file = backup_mgr._checkpoint_file(session_id)
+                checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(checkpoint_file, "w", encoding="utf-8") as f:
+                    json.dump(checkpoints, f, ensure_ascii=False, indent=2)
+
+                print(f"[已恢复 {len(checkpoints)} 个对话点快照]")
+        except Exception as e:
+            # checkpoint恢复失败不影响对话加载
+            print(f"[checkpoint恢复失败: {e}]")
+
+    return messages
 
 
 def auto_save_messages(
@@ -253,15 +302,42 @@ def _migrate_legacy_autosaves_locked() -> None:
 
 
 def _clear_session_checkpoints(session_key: str) -> None:
-    """短记忆淘汰/删除时联动清除该会话的对话点快照。
+    """短记忆淘汰/删除时联动清除该会话的对话点快照和文件备份。
 
     checkpoint 生命周期与会话短记忆绑定：会话还在最近 N 会话队列里
     （或被转正保留）就保留快照，短记忆没了快照随之清除，无需独立清理机制。
+
+    同时清理该会话的文件备份目录和元数据文件，避免磁盘占用累积。
     """
     try:
         from .backup_manager import get_backup_manager
+        backup_mgr = get_backup_manager()
 
-        get_backup_manager().clear_checkpoints(session_key)
+        # 清理checkpoint
+        backup_mgr.clear_checkpoints(session_key)
+
+        # 清理文件备份目录
+        import shutil
+        backup_dir = backup_mgr._get_session_backup_dir(session_key)
+        if backup_dir.exists():
+            try:
+                shutil.rmtree(backup_dir)
+            except Exception:
+                pass
+
+        # 清理元数据文件
+        metadata_path = backup_mgr._get_session_metadata_path(session_key)
+        if metadata_path.exists():
+            try:
+                metadata_path.unlink()
+            except Exception:
+                pass
+
+        # 清理元数据缓存
+        cache_key = session_key or "__global__"
+        if cache_key in backup_mgr._metadata_cache:
+            del backup_mgr._metadata_cache[cache_key]
+
     except Exception:
         pass
 

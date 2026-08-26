@@ -93,6 +93,45 @@ export function extractStandaloneHtml(content: string): string | null {
   return HTML_DOCUMENT_PATTERN.test(trimmed) ? trimmed : null;
 }
 
+export function splitContentWithHtml(content: string): { before: string; html: string; after: string } | null {
+  // 尝试匹配 HTML fence
+  const fenced = HTML_FENCE_PATTERN.exec(content);
+  if (fenced) {
+    const htmlStart = fenced.index;
+    const htmlEnd = htmlStart + fenced[0].length;
+    return {
+      before: content.substring(0, htmlStart).trim(),
+      html: fenced[1].trim(),
+      after: content.substring(htmlEnd).trim(),
+    };
+  }
+
+  // 尝试匹配裸 HTML（以 <!doctype 或 <html 开头的完整结构）
+  const lines = content.split('\n');
+  let htmlStartLine = -1;
+  let htmlEndLine = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (htmlStartLine === -1 && HTML_DOCUMENT_PATTERN.test(line)) {
+      htmlStartLine = i;
+    }
+    if (htmlStartLine !== -1 && line === '</html>') {
+      htmlEndLine = i;
+      break;
+    }
+  }
+
+  if (htmlStartLine !== -1 && htmlEndLine !== -1) {
+    const before = lines.slice(0, htmlStartLine).join('\n').trim();
+    const html = lines.slice(htmlStartLine, htmlEndLine + 1).join('\n').trim();
+    const after = lines.slice(htmlEndLine + 1).join('\n').trim();
+    return { before, html, after };
+  }
+
+  return null;
+}
+
 export function getHtmlArtifactId(content: string): string | null {
   const document = new DOMParser().parseFromString(content, 'text/html');
   return document.documentElement.getAttribute('data-spore-artifact-id');
@@ -1273,8 +1312,25 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
     return () => clearTimeout(timer);
   }, [agentAssessQuestion]);
 
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = () => {
+    setIsFullscreen(!isFullscreen);
+  };
+
   return (
-    <div className={`${sizeClass} relative max-w-full`}>
+    <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-spore-bg' : sizeClass} relative max-w-full`}>
+      {/* 全屏按钮 */}
+      {frontendAgentEnabled && (
+        <button
+          type="button"
+          className="absolute right-3 top-3 z-30 rounded border border-spore-border bg-spore-card px-2 py-1 text-xs text-spore-text shadow-md hover:bg-spore-hover"
+          onClick={toggleFullscreen}
+          title={isFullscreen ? t('chatPanel.htmlPreview.exitFullscreen') : t('chatPanel.htmlPreview.enterFullscreen')}
+        >
+          {isFullscreen ? '退出全屏' : '全屏'}
+        </button>
+      )}
       <iframe
         ref={frameRef}
         className={`block h-full w-full rounded-md border border-spore-border/40 bg-white ${interactionFrozen ? 'pointer-events-none select-none' : ''}`}

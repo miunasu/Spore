@@ -2,13 +2,8 @@ const sidePanel = {
   zh: {
     tabs: {
       note: '笔记',
-      output: '输出',
-      html: 'HTML',
+      spore: 'Spore',
       agents: '智能体',
-      prompt: '提示词',
-      skills: '技能',
-      characters: '角色',
-      history: '历史',
     },
     syntax: {
       largeContent: '文件内容较大，仅显示前 {count} 个字符',
@@ -22,13 +17,8 @@ const sidePanel = {
   en: {
     tabs: {
       note: 'Note',
-      output: 'Output',
-      html: 'HTML',
+      spore: 'Spore',
       agents: 'Agents',
-      prompt: 'Prompt',
-      skills: 'Skills',
-      characters: 'Characters',
-      history: 'History',
     },
     syntax: {
       largeContent: 'File is large; showing only the first {count} characters',

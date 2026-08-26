@@ -419,66 +419,68 @@ class ConversationLoop:
     def _compress_memory(self) -> Optional[str]:
         """
         使用 LLM 压缩对话记忆
-        
+
         返回:
             压缩后的总结文本，如果失败返回 None
         """
         try:
-            # 构建压缩提示
+            # 加载压缩提示词
+            from .prompt_loader import load_prompt_file
+            compression_instruction = load_prompt_file("context_compression.md")
+            if not compression_instruction:
+                compression_instruction = """请压缩以下对话历史，保留与当前话题最相关的核心信息。
+提取当前正在处理的任务，以及所有相关的背景、决策和待办事项。
+对于具体的命令、路径、配置项等精确信息，必须完整保留原文。
+直接输出压缩内容，使用中文，不要包含任何元标记或代码块格式。"""
+
             compress_prompt = [
                 {
                     "role": "user",
-                    "content": """请仔细阅读以下对话历史，并生成一个全面的总结。总结应该包括：
-1. 讨论的主要话题和关键信息
-2. 重要的决策和结论
-3. 待完成或正在进行的任务
-4. 需要记住的关键上下文信息
-5. 一定要全面，不要遗漏任何重要的信息，可以输出较长的总结。
-6. 直接输出你的总结，使用自然语言描述，不要包含任何代码、函数调用标记或JSON格式
-请用中文总结，保持简洁明了，重点突出核心内容。"""
+                    "content": compression_instruction
                 }
             ]
-            
+
             # 添加当前的对话历史（排除system消息），并预处理工具调用
             history_to_compress = self._preprocess_messages_for_compression(
                 [msg for msg in self.state.messages if msg.get("role") != "system"]
             )
-            
-            print(f"[系统] 正在压缩 {len(history_to_compress)} 条对话记录...")
-            
+
+            # 提醒用户正在压缩
+            from .utils import todo_print
+            todo_print("[系统] 上下文即将达到限制，正在智能压缩对话历史...")
+            todo_print(f"[系统] 压缩前：{len(history_to_compress)} 条对话记录")
+
             # 发送压缩请求（不使用工具调用）
             request_id = self.ipc_manager.send_chat_request(
                 messages=compress_prompt + history_to_compress,
                 model=self.config.get_model(),
-                system="你是一个专业的对话总结助手，擅长提炼对话的核心内容和关键信息，你不会遗漏任何重要的信息。",
+                system="你是一个专业的对话总结助手，擅长提炼对话的核心内容和关键信息。你会保留所有精确信息（命令、路径、配置等），压缩非关键的讨论过程。",
                 tool_calls=False,  # 不需要工具调用
                 tools=None
             )
-            
+
             # 等待响应
             response = self.ipc_manager.get_chat_response(request_id=request_id, timeout=60)
-            
+
             if response is None or response.get("status") != "success":
-                print(f"[系统] 记忆压缩请求失败或超时")
-                terminal.extra_line += 2
+                todo_print("[系统] 记忆压缩失败或超时，将继续使用原始对话历史")
                 return None
-            
+
             # 提取总结内容
             reply_data = response.get("data", {})
             summary = reply_data.get("content", "")
-            
+
             if not summary or len(summary.strip()) == 0:
-                terminal.extra_line += 2
-                print(f"[系统] 未能获取有效的总结内容")
+                todo_print("[系统] 未能获取有效的压缩内容")
                 return None
-            
-            print(f"[系统] 记忆压缩完成，总结长度：{len(summary)} 字符")
-            terminal.extra_line += 2
+
+            todo_print(f"[系统] 压缩完成，总结长度：{len(summary)} 字符")
+            todo_print("[系统] 压缩后的对话将保留当前话题的所有关键信息")
             return summary.strip()
-            
+
         except Exception as e:
-            terminal.extra_line += 2
-            print(f"[系统] 记忆压缩过程出错：{e}")
+            from .utils import todo_print
+            todo_print(f"[系统] 记忆压缩过程出错：{e}")
             log_error("MEMORY_COMPRESSION_ERROR", "Failed to compress memory", e)
             return None
     

@@ -22,7 +22,7 @@ type SystemFileClipboard = {
   operation: ClipboardMode;
 };
 
-export const FileManager: React.FC = () => {
+export const FileManager: React.FC<{ isSporeTab?: boolean }> = ({ isSporeTab = false }) => {
   const t = useT();
   const {
     currentPath,
@@ -40,6 +40,27 @@ export const FileManager: React.FC = () => {
     moveItem,
     openLocation,
   } = useFileStore();
+
+  // Spore tab过滤逻辑：只显示目录，排除.spore和根目录文件
+  const filteredItems = isSporeTab
+    ? items.filter(item => {
+        // 排除.spore目录
+        if (item.name === '.spore') return false;
+
+        // 检查是否在根目录
+        const normalizedPath = currentPath.replace(/\\/g, '/');
+        const normalizedRoot = rootPath.replace(/\\/g, '/');
+        const isInRoot = normalizedPath === normalizedRoot || normalizedPath === '' || normalizedPath === '.';
+
+        // 根目录：只显示目录
+        if (isInRoot) {
+          return item.type === 'folder';
+        }
+
+        // 子目录：显示所有内容
+        return true;
+      })
+    : items;
 
   const { startDrag, isDragging } = useDragStore();
   const { openFile: openInCenter } = useEditorStore();
@@ -203,7 +224,7 @@ export const FileManager: React.FC = () => {
 
   const buildPastePath = (targetDirectory: string, item: FileItem) => {
     const directory = targetDirectory.replace(/\\/g, '/').replace(/\/$/, '');
-    const existingNames = new Set(items.map((existingItem) => existingItem.name));
+    const existingNames = new Set(filteredItems.map((existingItem) => existingItem.name));
     const joinPath = (name: string) => directory && directory !== '.' ? `${directory}/${name}` : name;
 
     if (!existingNames.has(item.name)) {
@@ -392,7 +413,7 @@ export const FileManager: React.FC = () => {
           </div>
         ) : (
           <div className="space-y-1">
-            {items.map((item) => (
+            {filteredItems.map((item) => (
               <div
                 key={item.path}
                 onMouseDown={(e) => handleMouseDown(e, item)}

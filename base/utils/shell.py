@@ -264,28 +264,28 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                 "shell_used": isinstance(command, str),
             }
 
-    # strategy: shell_delete — block del/rm/rmdir/rd/Remove-Item
-    if _cfg.is_intercept_enabled("shell_delete"):
-        dangerous_pattern = r'\b(del|rm|rmdir|rd|remove-item)\b'
-        match = re.search(dangerous_pattern, cmd_lower)
-        if match:
-            detected_cmd = match.group(1)
-            start_pos = max(0, match.start() - 20)
-            end_pos = min(len(cmd_lower), match.end() + 20)
-            context = cmd_lower[start_pos:end_pos].strip()
-            return {
-                "ok": False,
-                "returncode": -1,
-                "stdout": "",
-                "stderr": (
-                    f"错误: 不允许在命令中使用 '{detected_cmd}' 删除文件。\n"
-                    f"检测到的命令片段: ...{context}...\n"
-                    f"请使用 file type=delete 工具来安全地删除文件或目录。\n"
-                    f"（可在桌面菜单关闭“拦截开关”以允许 shell 删除）"
-                ),
-                "duration_sec": 0,
-                "shell_used": isinstance(command, str),
-            }
+    # strategy: shell_delete — block del/rm/rmdir/rd/Remove-Item (ALWAYS ENABLED)
+    # PowerShell 删除命令永久拦截，强制使用 file 工具（file 工具有 diff 功能）
+    dangerous_pattern = r'\b(del|rm|rmdir|rd|remove-item)\b'
+    match = re.search(dangerous_pattern, cmd_lower)
+    if match:
+        detected_cmd = match.group(1)
+        start_pos = max(0, match.start() - 20)
+        end_pos = min(len(cmd_lower), match.end() + 20)
+        context = cmd_lower[start_pos:end_pos].strip()
+        return {
+            "ok": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": (
+                f"错误: 不允许在命令中使用 '{detected_cmd}' 删除文件。\n"
+                f"检测到的命令片段: ...{context}...\n"
+                f"请使用 file type=delete 工具来安全地删除文件或目录。\n"
+                f"（PowerShell 删除已永久禁用）"
+            ),
+            "duration_sec": 0,
+            "shell_used": isinstance(command, str),
+        }
 
     # 检测交互式命令：这些命令会等待用户输入，导致 agent 卡住
     # interactive_patterns = [

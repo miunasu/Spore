@@ -366,11 +366,18 @@ class Config:
         self.command_intercept: bool = _cmd_intercept_raw.lower() == "true"
 
         # Fine-grained strategies (only applied when command_intercept=true).
-        # Unset => enabled; set INTERCEPT_SHELL_DELETE/WRITE=true|false to override.
-        _del = os.getenv("INTERCEPT_SHELL_DELETE", "").strip().lower()
-        self.intercept_shell_delete: bool = True if _del == "" else _del == "true"
+        # Unset => enabled; set INTERCEPT_SHELL_WRITE=true|false to override.
+        # Note: INTERCEPT_SHELL_DELETE is ALWAYS enabled (hardcoded), no longer configurable.
         _write = os.getenv("INTERCEPT_SHELL_WRITE", "").strip().lower()
         self.intercept_shell_write: bool = True if _write == "" else _write == "true"
+
+        # File delete confirmation switch (控制 file 工具的 delete 是否需要确认)
+        # true: 需要用户确认; false: 直接删除不确认
+        _file_del_confirm = os.getenv("INTERCEPT_FILE_DELETE", "").strip().lower()
+        # 兼容旧配置：如果新配置未设置，尝试读取旧的 INTERCEPT_SHELL_DELETE
+        if not _file_del_confirm:
+            _file_del_confirm = os.getenv("INTERCEPT_SHELL_DELETE", "").strip().lower()
+        self.intercept_file_delete: bool = True if _file_del_confirm == "" else _file_del_confirm == "true"
         
         # 是否限制写工具的返回值（不在messages中添加arguments字段）
         self.limit_write_tool_return: bool = os.getenv("LIMIT_WRITE_TOOL_RETURN", "true").lower() == "true"
@@ -516,16 +523,18 @@ class Config:
         """Return whether command intercept is active.
 
         Args:
-            strategy: Optional strategy name, e.g. "shell_delete", "shell_write".
+            strategy: Optional strategy name, e.g. "shell_delete", "shell_write", "file_delete".
                       When provided, requires master switch AND that strategy flag.
+                      Note: "shell_delete" is ALWAYS True (hardcoded, cannot be disabled).
         """
         if not getattr(self, "command_intercept", True):
             return False
         if not strategy:
             return True
         strategy_map = {
-            "shell_delete": getattr(self, "intercept_shell_delete", True),
+            "shell_delete": True,  # 永久拦截，不可配置
             "shell_write": getattr(self, "intercept_shell_write", True),
+            "file_delete": getattr(self, "intercept_file_delete", True),
             # Add new strategies here later.
         }
         return bool(strategy_map.get(strategy, True))

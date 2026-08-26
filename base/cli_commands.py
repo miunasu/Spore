@@ -113,7 +113,8 @@ class CLICommandHandler:
         
         # 保存对话
         if user_input.lower() == "save":
-            save_messages(self.state.messages)
+            session_id = getattr(self.state, 'conversation_id', None)
+            save_messages(self.state.messages, session_id=session_id)
             return "", True
         
         # 加载对话
@@ -275,23 +276,23 @@ class CLICommandHandler:
     def _handle_load_command(self, user_input: str) -> None:
         """处理加载对话命令"""
         try:
-            self.state.messages = load_messages(user_input[5:])
-            self.state.user_message_count = 0
             session_id = getattr(self.state, "session_id", None) or getattr(self, "session_id", None)
+            self.state.messages = load_messages(user_input[5:], session_id=session_id)
+            self.state.user_message_count = 0
             auto_save_messages(self.state.messages, session_id=session_id)
         except Exception as e:
             print(f"[错误] 无法加载对话历史: {e}")
-            log_error("MEMORY_LOAD_ERROR", "Failed to load conversation history", e, 
+            log_error("MEMORY_LOAD_ERROR", "Failed to load conversation history", e,
                     context={"file_path": user_input[5:]})
-    
+
     def _handle_continue_command(self) -> None:
         """处理继续对话命令 - 加载最近的历史对话"""
         try:
             latest_file = get_latest_history_file()
-            self.state.messages = load_messages(latest_file)
+            session_id = getattr(self.state, "session_id", None) or getattr(self, "session_id", None)
+            self.state.messages = load_messages(latest_file, session_id=session_id)
             self.state.user_message_count = 0
             _config.memory_continued = True  # 标记已继承记忆
-            session_id = getattr(self.state, "session_id", None) or getattr(self, "session_id", None)
             auto_save_messages(self.state.messages, session_id=session_id)
             print(f"[对话已加载] 继续最近的对话: {latest_file}")
         except Exception as e:

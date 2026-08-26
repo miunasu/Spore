@@ -46,6 +46,8 @@ const chatPanel = {
       frontendAgent: 'Agent',
       frontendAgentEnableTitle: 'Frontend Agent 已关闭 — 点击开启（页面交互不会触发 Agent）',
       frontendAgentDisableTitle: 'Frontend Agent 已开启 — 点击关闭',
+      enterFullscreen: '全屏',
+      exitFullscreen: '退出全屏',
     },
     fileEditorContent: {
       previewFailed: '预览失败，请切换到编辑模式查看原始内容',
@@ -104,6 +106,8 @@ const chatPanel = {
       frontendAgent: 'Agent',
       frontendAgentEnableTitle: 'Frontend Agent is off — click to enable (interactions won\'t trigger the Agent)',
       frontendAgentDisableTitle: 'Frontend Agent is on — click to disable',
+      enterFullscreen: 'Fullscreen',
+      exitFullscreen: 'Exit Fullscreen',
     },
     fileEditorContent: {
       previewFailed: 'Preview failed. Switch to edit mode to view the raw content.',

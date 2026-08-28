@@ -75,11 +75,54 @@ def grep(params: Dict[str, Any]) -> Dict[str, Any]:
         return result
 
     output_mode = params.get("output_mode", "files_with_matches")
+
+    # 智能兼容：自动处理 "content -n -A 100" 这种格式
+    # LLM有时会把ripgrep参数混在output_mode里，自动截取第一个词
+    if isinstance(output_mode, str) and " " in output_mode:
+        parts = output_mode.split()
+        first_word = parts[0]
+        if first_word in {"content", "files_with_matches", "count"}:
+            # 记录日志供诊断，但不报错
+            try:
+                from ..logger import log_info
+                log_info(
+                    "GREP_OUTPUT_MODE_AUTO_CORRECTED",
+                    f"自动修正output_mode: '{output_mode}' → '{first_word}'",
+                    context={"original": output_mode, "corrected": first_word}
+                )
+            except Exception:
+                pass
+            output_mode = first_word
+
     if output_mode not in {"content", "files_with_matches", "count"}:
         result["stderr"] = "output_mode 仅支持 content/files_with_matches/count"
         return result
 
     command: List[str] = [_get_rg_path()]
+
+    # 默认排除二进制文件和非文本文件
+    # 这些文件搜索无意义且可能导致错误（特别是Windows上的长路径/特殊权限文件）
+    DEFAULT_EXCLUDE_PATTERNS = [
+        # 图片文件
+        "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.ico", "*.svg", "*.webp",
+        # 字体文件
+        "*.ttf", "*.otf", "*.woff", "*.woff2", "*.eot",
+        # 文档/压缩文件
+        "*.pdf", "*.doc", "*.docx", "*.xls", "*.xlsx", "*.ppt", "*.pptx",
+        "*.zip", "*.tar", "*.gz", "*.bz2", "*.7z", "*.rar",
+        # 编译产物
+        "*.pyc", "*.pyo", "*.pyd", "*.so", "*.dll", "*.dylib", "*.exe", "*.bin", "*.o", "*.a",
+        "*.class", "*.jar", "*.war", "*.ear",
+        # 媒体文件
+        "*.mp3", "*.mp4", "*.avi", "*.mov", "*.wav", "*.flac",
+        # 数据库文件
+        "*.db", "*.sqlite", "*.sqlite3",
+        # 其他二进制
+        "*.wasm", "*.node",
+    ]
+
+    for pattern_exclude in DEFAULT_EXCLUDE_PATTERNS:
+        command.extend(["--glob", f"!{pattern_exclude}"])
 
     # Output mode flags
     if output_mode == "files_with_matches":

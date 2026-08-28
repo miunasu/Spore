@@ -12,7 +12,7 @@ import type { TabType, FileItem } from '../../types';
 
 const TABS: { id: TabType; label: string; path?: string; icon: string }[] = [
   { id: 'note', label: 'note', icon: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z' },
-  { id: 'spore', label: 'Spore', path: '', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
+  { id: 'spore', label: 'Spore', path: '.', icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z' },
   { id: 'agents', label: 'Agent', icon: 'M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z' },
 ];
 
@@ -101,7 +101,7 @@ export const SidePanel: React.FC = () => {
   const restoreTabState = useCallback(async (tabId: TabType) => {
     const state = tabStates[tabId];
     const tab = TABS.find(t => t.id === tabId);
-    const root = tab?.path || tabId;
+    const root = tab?.path ?? tabId;
     
     // 设置根目录限制
     setRootPath(root);
@@ -153,7 +153,7 @@ export const SidePanel: React.FC = () => {
       isInitialMount.current = false;
       if (isFileTab(activeTab)) {
         const tab = TABS.find(t => t.id === activeTab);
-        const root = tab?.path || activeTab;
+        const root = tab?.path ?? activeTab;
         setRootPath(root);
         loadDirectory(root);
       }

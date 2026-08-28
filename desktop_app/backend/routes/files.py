@@ -14,7 +14,7 @@ import subprocess
 router = APIRouter()
 
 # 允许访问的根目录（安全限制）
-ALLOWED_ROOTS = ["output", "html", "skills", "prompt", "history", "characters"]
+ALLOWED_ROOTS = ["characters", "history", "html", "logs", "output", "prompt", "skills"]
 
 # 允许访问的根目录文件（特殊文件）
 ALLOWED_ROOT_FILES = ["note.txt", ".env"]
@@ -161,6 +161,12 @@ def list_directory(path: str = Query(..., description="目录路径")) -> Dict[s
             items = []
             for root in ALLOWED_ROOTS:
                 root_path = get_actual_path(root)
+
+                # html 是虚拟目录，即使不存在也要显示
+                if root == "html":
+                    # 确保目录存在
+                    root_path.mkdir(parents=True, exist_ok=True)
+
                 if root_path.exists() and root_path.is_dir():
                     try:
                         stat = root_path.stat()

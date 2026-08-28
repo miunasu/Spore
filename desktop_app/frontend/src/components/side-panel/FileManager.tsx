@@ -139,26 +139,31 @@ export const FileManager: React.FC<{ isSporeTab?: boolean }> = ({ isSporeTab = f
     if (!currentPath || currentPath === '.' || currentPath === '/') {
       return;
     }
-    
+
     const normalizedPath = currentPath.replace(/\\/g, '/');
     const normalizedRoot = rootPath.replace(/\\/g, '/');
-    
+
     // 如果已经在根目录，不能再往上
     if (normalizedPath === normalizedRoot) {
       return;
     }
-    
+
     const parts = normalizedPath.split('/').filter(Boolean);
-    if (parts.length > 1) {
-      parts.pop();
-      const parentPath = parts.join('/');
-      // 确保不会超出根目录
-      if (parentPath.startsWith(normalizedRoot) || parentPath === normalizedRoot) {
-        loadDirectory(parentPath);
-      } else {
-        loadDirectory(normalizedRoot);
-      }
+
+    // 移除最后一级
+    parts.pop();
+
+    // 如果pop后为空，返回根目录
+    if (parts.length === 0) {
+      loadDirectory(normalizedRoot);
+      return;
     }
+
+    // 拼接上级路径
+    const parentPath = parts.join('/');
+
+    // 直接加载上级路径（已经通过前面的检查确保不会超出根目录）
+    loadDirectory(parentPath);
   };
 
   const handleDoubleClick = (item: FileItem) => {

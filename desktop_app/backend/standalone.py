@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
 # 创建 FastAPI 应用
 app = FastAPI(
     title=f"Spore Desktop API - Instance {INSTANCE_ID}",
-    version="4.1.0",
+    version="4.2.0",
     lifespan=lifespan
 )
 

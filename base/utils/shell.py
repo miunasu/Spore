@@ -256,9 +256,19 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                 "returncode": -1,
                 "stdout": "",
                 "stderr": (
-                    f"错误: 不允许使用 '{detected_cmd}' 通过 shell 写文件。\n"
-                    f"可能产生 BOM 编码问题）\n"
-                    f"请使用 file 或 edit 工具来编辑文件。\n"
+                    f"错误: 不允许使用 '{detected_cmd}' 通过 shell 写文件（可能产生 BOM 编码问题）。\n"
+                    f"\n"
+                    f"请使用 file 工具进行文件操作:\n"
+                    f"  @SPORE:ACTION_SINGLE file type=<操作类型> path=\"文件路径\" ...\n"
+                    f"\n"
+                    f"支持的操作类型:\n"
+                    f"  • write    - 写入新文件或覆盖现有文件 (需 content 参数)\n"
+                    f"  • append   - 追加内容到文件末尾 (需 content 参数)\n"
+                    f"  • read     - 读取文件内容\n"
+                    f"  • delete   - 删除文件或目录 (需 paths 参数)\n"
+                    f"\n"
+                    f"修改现有文件请使用 edit 工具:\n"
+                    f"  @SPORE:ACTION_SINGLE edit file_path=\"...\" old_string=\"...\" new_string=\"...\"\n"
                 ),
                 "duration_sec": 0,
                 "shell_used": isinstance(command, str),

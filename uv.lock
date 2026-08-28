@@ -1297,7 +1297,7 @@ wheels = [
 
 [[package]]
 name = "spore-ai-agent"
-version = "4.1.0"
+version = "4.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },

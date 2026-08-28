@@ -143,10 +143,21 @@ if "!BACKEND_DEPS_NEED_UPDATE!"=="1" (
     echo [INFO] Checking project dependencies against uv.lock...
 )
 
+REM 先尝试 --locked，如果失败则自动更新 uv.lock
 call uv sync --locked --group dev
-if %ERRORLEVEL% neq 0 (
-    echo [ERROR] Automatic dependency update failed: uv sync --locked --group dev
-    goto :error
+if !ERRORLEVEL! neq 0 (
+    echo [WARN] uv.lock is out of sync, updating automatically...
+    call uv lock
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] Failed to update uv.lock
+        goto :error
+    )
+    echo [INFO] uv.lock updated, retrying sync...
+    call uv sync --group dev
+    if !ERRORLEVEL! neq 0 (
+        echo [ERROR] Dependency sync failed after lock update
+        goto :error
+    )
 )
 
 if not exist "%PROJECT_PYTHON%" (

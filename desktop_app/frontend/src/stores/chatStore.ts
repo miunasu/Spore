@@ -516,13 +516,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
           await chatApi.switchSession(id);
 
           // 从后端加载该会话的消息历史快照
-          const messages = await fetchSessionMessages(getMainApiPort(), id);
-
-          // 如果该对话正在生成中，跳过快照覆盖：
-          // round_chunk 流式内容只在前端 Zustand 内存中，尚未落库，
-          // 用历史快照整体替换会清空进行中的内容（前端 agent HTML 等）
-          const isGenerating = get().generatingConversations.has(id);
-          if (!isGenerating) {
+          // 只在会话消息为空时才加载（首次切换），避免覆盖已渲染的内容
+          const currentMessages = conv.messages || [];
+          if (currentMessages.length === 0) {
+            const messages = await fetchSessionMessages(getMainApiPort(), id);
             get().setMessages(messages, id);
           }
 

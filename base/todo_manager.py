@@ -128,18 +128,19 @@ class TodoManager:
         todos = self._get_current_todos()
         if not todos:
             return "当前没有任务规划"
-        
+
         lines = []
         for todo in todos:
             status = todo["status"]
-            status_icon = {
-                "pending": "[ ]",
-                "completed": "[√]",
-                "failed": "[x]"
-            }.get(status, "[?]")
-            
-            lines.append(f"{todo['id']}.{todo['content']}  {status_icon}")
-        
+            # 统一使用英文状态词，与文档要求一致
+            status_word = {
+                "pending": "[pending]",
+                "completed": "[completed]",
+                "failed": "[failed]"
+            }.get(status, "[pending]")
+
+            lines.append(f"{todo['id']}. {status_word} {todo['content']}")
+
         return "\n".join(lines)
 
 # 全局TODO管理器实例（需要在初始化时设置 session_manager）

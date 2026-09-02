@@ -289,17 +289,159 @@ def check_tool_result_error(tool_result: str) -> Tuple[bool, Optional[str]]:
         return False, None
 
 
+def _extract_tool_action(tool_name: str, args: Dict[str, Any]) -> str:
+    """
+    从工具参数中提取具体操作，生成更有意义的日志描述
+    统一格式：工具名 子操作 关键参数
+
+    Args:
+        tool_name: 工具名称
+        args: 工具参数字典
+
+    Returns:
+        格式化的工具操作描述，例如 "file read config.json" 或 "edit single target.txt"
+    """
+    try:
+        # args 可能是字符串格式的 JSON，需要先解析
+        if isinstance(args, str):
+            args_dict = json.loads(args)
+        elif isinstance(args, dict):
+            args_dict = args
+        else:
+            return tool_name
+
+        import os
+
+        # file 工具：file <type> <file_path>
+        # type: read/write/delete
+        if tool_name == "file":
+            operation = args_dict.get("type", "unknown")
+            file_path = args_dict.get("file_path") or args_dict.get("path", "")
+            if file_path:
+                filename = os.path.basename(file_path)
+                return f"file → {operation} → {filename}"
+            # delete 操作可能用 paths 参数
+            paths = args_dict.get("paths", [])
+            if operation == "delete" and paths:
+                count = len(paths) if isinstance(paths, list) else 1
+                return f"file → delete → {count}files"
+            return f"file → {operation}"
+
+        # edit 工具：edit <type> [mode] <file_path>
+        # type: single/multi/line
+        # mode (line时): replace/insert_before/insert_after/delete
+        elif tool_name == "edit":
+            edit_type = args_dict.get("type", "single")
+            file_path = args_dict.get("file_path", "")
+            filename = os.path.basename(file_path) if file_path else ""
+
+            if edit_type == "line":
+                mode = args_dict.get("mode", "replace")
+                return f"edit → line → {mode} → {filename}"
+            elif edit_type == "multi":
+                edits_count = len(args_dict.get("edits", []))
+                return f"edit → multi → {edits_count}edits → {filename}"
+            else:  # single
+                return f"edit → single → {filename}"
+
+        # execute_command 工具：execute_command <command>
+        elif tool_name == "execute_command":
+            command = args_dict.get("command", "")
+            if command:
+                # 处理多行命令标记
+                if "@SPORE:CONTENT" in command:
+                    return "execute_command multiline"
+                # 提取命令的第一个单词
+                first_word = command.split()[0] if command.split() else "command"
+                # 截断过长的命令
+                if len(first_word) > 30:
+                    first_word = first_word[:30] + "..."
+                return f"execute_command → {first_word}"
+            return "execute_command"
+
+        # Grep 工具：Grep <pattern>
+        elif tool_name == "Grep":
+            pattern = args_dict.get("pattern", "")
+            if pattern:
+                short_pattern = pattern[:25] + "..." if len(pattern) > 25 else pattern
+                return f"Grep → {short_pattern}"
+            return "Grep"
+
+        # skill_query 工具：skill_query <skill_name>
+        elif tool_name == "skill_query":
+            skill_name = args_dict.get("skill_name", "")
+            return f"skill_query → {skill_name}" if skill_name else "skill_query"
+
+        # web_browser 工具：web_browser <action> <target>
+        # action: visit/search
+        elif tool_name == "web_browser":
+            action = args_dict.get("action", "")
+            target = args_dict.get("target", "")
+            if action and target:
+                short_target = target[:40] + "..." if len(target) > 40 else target
+                return f"web_browser → {action} → {short_target}"
+            elif action:
+                return f"web_browser → {action}"
+            return "web_browser"
+
+        # multi_agent_dispatch 工具：multi_agent_dispatch <tasks_count>
+        elif tool_name == "multi_agent_dispatch":
+            tasks = args_dict.get("tasks", [])
+            tasks_count = len(tasks) if isinstance(tasks, list) else 0
+            if tasks_count > 0:
+                return f"multi_agent_dispatch → {tasks_count}tasks"
+            return "multi_agent_dispatch"
+
+        # check_subagent_status 工具：无参数
+        elif tool_name == "check_subagent_status":
+            return "check_subagent_status"
+
+        # 通用处理：优先提取 type/action/operation/method，然后提取关键参数
+        sub_action = None
+        for key in ["type", "action", "operation", "method"]:
+            if key in args_dict:
+                sub_action = args_dict[key]
+                break
+
+        # 提取关键参数（优先级顺序）
+        key_param = None
+        for param_key in ["name", "skill_name", "query", "target", "path", "file_path", "url", "description"]:
+            if param_key in args_dict:
+                value = args_dict[param_key]
+                if value:
+                    # 对于路径类参数，只显示文件名
+                    if param_key in ["path", "file_path"]:
+                        value = os.path.basename(value)
+                    # 截断过长的值
+                    key_param = str(value)[:30] + "..." if len(str(value)) > 30 else str(value)
+                    break
+
+        # 组合输出
+        if sub_action and key_param:
+            return f"{tool_name} → {sub_action} → {key_param}"
+        elif sub_action:
+            return f"{tool_name} → {sub_action}"
+        elif key_param:
+            return f"{tool_name} → {key_param}"
+
+        # 如果没有找到任何子操作或参数，直接返回工具名
+        return tool_name
+
+    except (json.JSONDecodeError, TypeError, AttributeError, KeyError):
+        return tool_name
+
+
 def log_tool_result(tool_name: str, tool_result: str, args: Dict[str, Any]) -> None:
     """
     记录工具执行结果日志，自动检测错误并记录
-    
+
     Args:
         tool_name: 工具名称
         tool_result: 工具返回的结果字符串
         args: 工具参数
     """
     is_error, error_msg = check_tool_result_error(tool_result)
-    
+
     if is_error:
         log_tool_error(tool_name, error_msg, args, context=_tool_result_log_context(tool_result))
     else:
@@ -317,6 +459,7 @@ def log_tool_result(tool_name: str, tool_result: str, args: Dict[str, Any]) -> N
                     return
         except (json.JSONDecodeError, TypeError):
             pass
-        
-        # 工具执行成功
-        log_info(f"Tool executed successfully: {tool_name}", context={"tool_name": tool_name}, args=args)
+
+        # 工具执行成功 - 提取并显示具体操作
+        action_desc = _extract_tool_action(tool_name, args)
+        log_info(action_desc, context={"tool_name": tool_name}, args=args)

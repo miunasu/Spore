@@ -137,6 +137,45 @@ def _attach_hints(result: Dict[str, Any], hints: List[str]) -> Dict[str, Any]:
     return result
 
 
+def _terminate_process_tree(proc: subprocess.Popen, timeout: float = 2.0) -> None:
+    """
+    终止PowerShell进程及其所有子进程（进程树）
+
+    使用 taskkill /F /T 强制终止整个进程树，确保所有子进程都被清理。
+
+    Args:
+        proc: subprocess.Popen 进程对象
+        timeout: 等待进程终止的超时时间（秒）
+    """
+    if proc.poll() is not None:
+        # 进程已经终止
+        return
+
+    # Windows: 使用 taskkill /F /T 终止整个进程树
+    # /F = 强制终止
+    # /T = 终止进程树（包括所有子进程）
+    # /PID = 指定进程ID
+    try:
+        subprocess.run(
+            ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+            capture_output=True,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+        )
+        # 等待进程真正终止
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+    except Exception:
+        # 如果 taskkill 失败，回退到直接 kill
+        try:
+            proc.kill()
+            proc.wait(timeout=timeout)
+        except Exception:
+            pass
+
+
 def _is_powershell_progress_noise(stderr: str) -> bool:
     """仅当 stderr 是纯进度噪声（无任何实际文本内容）时返回 True。
 
@@ -431,13 +470,9 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
         while True:
             # 检查是否超过整体超时时间
             if deadline and time.time() >= deadline:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                
+                # 终止进程树（包括所有子进程）
+                _terminate_process_tree(proc, timeout=2)
+
                 dur = time.time() - start
                 stdout_output = smart_decode(b"".join(stdout_chunks), prefer_encoding)
                 return {
@@ -465,11 +500,8 @@ def execute_command(command: Union[str, List[str]], timeout: Optional[int] = Non
                     stderr_chunks.append(exc.stderr)
                 continue
     except KeyboardInterrupt:
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        # 终止进程树（包括所有子进程）
+        _terminate_process_tree(proc, timeout=2)
         return None
 
     dur = time.time() - start

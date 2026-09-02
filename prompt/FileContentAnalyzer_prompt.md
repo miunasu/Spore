@@ -37,26 +37,26 @@ file type=read file_path="C:\project\main.py" offset=13 limit=6
 
 第3轮:
 
-@SPORE:STOP_REASON=<自然语言终止原因>
+@SPORE:STOP
 
 或（多行）：
 
-@SPORE:STOP_REASON=@SPORE:CONTENT_START
+@SPORE:STOP
 <自然语言终止原因>
 @SPORE:CONTENT_END
 
 ## 简单任务示例
 
-@SPORE:STOP_REASON=<自然语言终止原因>
+@SPORE:STOP
 
 或（多行）：
 
-@SPORE:STOP_REASON=@SPORE:CONTENT_START
+@SPORE:STOP
 <自然语言终止原因>
 @SPORE:CONTENT_END
 
 ## 关键点
 
-- 调用工具时不要输出 `@SPORE:STOP_REASON=`
+- 调用工具时 ACTION 块结束后立即停止
 - 工具调用只使用 `ACTION_SINGLE`、`ACTION_SEQUENCE` 或 `ACTION_PARALLEL`
-- 任务完成时必须输出 `@SPORE:STOP_REASON=<自然语言终止原因>`（不要 REPLY 块；多行用 CONTENT）
+- 任务完成时在 REPLY 块中输出分析结果，然后输出 `@SPORE:STOP`

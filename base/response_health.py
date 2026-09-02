@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 # 归一化的终止状态
 #
 # 注意：这里的"终止原因"是传输层概念（生成为什么停下来），与 Spore 文本协议的
-# @SPORE:STOP_REASON（模型声明任务已完成）是两回事，不可互相映射。
+# @SPORE:STOP（模型声明任务已完成）是两回事，不可互相映射。
 # 命名上一律用 api_stop_reason / finish_state，避免与协议层的 stop_reason 混淆。
 # ---------------------------------------------------------------------------
 FINISH_COMPLETE = "complete"      # 模型自然说完这一轮

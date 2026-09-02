@@ -45,9 +45,8 @@ def is_standalone_marker(text: str, marker: str) -> bool:
     return find_standalone_marker(text, marker) >= 0
 
 
-STOP_REASON_HEAD_RE = re.compile(
-    r"(?m)^[ \t]*@SPORE:STOP_REASON[ \t]*=[ \t]*(.*?)[ \t]*(?:\r?\n|$)"
-)
+# 终止符：纯粹的标记，无参数
+STOP_MARKER = "@SPORE:STOP"
 CONTENT_START_MARKER = "@SPORE:CONTENT_START"
 CONTENT_END_MARKER = "@SPORE:CONTENT_END"
 
@@ -60,111 +59,57 @@ def _strip_content_wrapper_padding(content: str) -> str:
     return content.rstrip("\r\n \t")
 
 
-def parse_stop_reason_value(value: str, rest: str) -> tuple[Optional[str], int, Optional[str]]:
-    """Parse STOP_REASON value.
-
-    Supports:
-    - plain text: `@SPORE:STOP_REASON=<自然语言终止原因>`
-    - flexible spaces: `@SPORE:STOP_REASON = <自然语言终止原因>`
-    - CONTENT block: `@SPORE:STOP_REASON=@SPORE:CONTENT_START ... @SPORE:CONTENT_END`
-
-    Returns:
-        (reason, consumed_extra_chars_from_rest, error_message)
-    """
-    raw = value or ""
-    stripped = raw.strip()
-
-    if stripped.startswith(CONTENT_START_MARKER):
-        cs_in_value = raw.find(CONTENT_START_MARKER)
-        after_cs_in_value = cs_in_value + len(CONTENT_START_MARKER)
-        tail_on_line = raw[after_cs_in_value:]
-
-        # Same-line CONTENT_END
-        end_on_line = tail_on_line.find(CONTENT_END_MARKER)
-        if end_on_line >= 0:
-            body = _strip_content_wrapper_padding(tail_on_line[:end_on_line])
-            return body, 0, None
-
-        # Multi-line body continues after the head line
-        body_prefix = tail_on_line
-        combined = body_prefix + rest
-        end_pos = combined.find(CONTENT_END_MARKER)
-        if end_pos < 0:
-            return None, 0, "STOP_REASON 的 CONTENT 块缺少 @SPORE:CONTENT_END"
-        body = _strip_content_wrapper_padding(combined[:end_pos])
-        end_abs_in_combined = end_pos + len(CONTENT_END_MARKER)
-        if end_abs_in_combined <= len(body_prefix):
-            return body, 0, None
-        consumed_from_rest = end_abs_in_combined - len(body_prefix)
-        while consumed_from_rest < len(rest) and rest[consumed_from_rest] in " \t":
-            consumed_from_rest += 1
-        if consumed_from_rest < len(rest) and rest[consumed_from_rest] == "\r":
-            consumed_from_rest += 1
-        if consumed_from_rest < len(rest) and rest[consumed_from_rest] == "\n":
-            consumed_from_rest += 1
-        return body, consumed_from_rest, None
-
-    return stripped, 0, None
-
-
-def extract_stop_reason_blocks(text: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
-    """Extract all STOP_REASON blocks from response text.
+def extract_stop_blocks(text: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
+    """Extract all STOP markers from response text.
 
     Returns (blocks, error_message).
     """
     text = text or ""
     blocks: List[Dict[str, Any]] = []
-    for match in STOP_REASON_HEAD_RE.finditer(text):
-        head_start = match.start()
-        head_end = match.end()
-        value = match.group(1) or ""
-        rest = text[head_end:]
-        reason, consumed, err = parse_stop_reason_value(value, rest)
-        if err:
-            return blocks, err
-        end = head_end + consumed
-        if consumed == 0 and (value or "").strip().startswith(CONTENT_START_MARKER):
-            content_start_in_value = value.find(CONTENT_START_MARKER)
-            content_end_in_value = value.find(
-                CONTENT_END_MARKER,
-                content_start_in_value + len(CONTENT_START_MARKER),
-            )
-            if content_end_in_value >= 0:
-                # The head regex spans the whole line. Keep the protocol span
-                # bounded by CONTENT_END so same-line trailing content remains
-                # visible to terminal-boundary validation.
-                end = match.start(1) + content_end_in_value + len(CONTENT_END_MARKER)
+
+    # @SPORE:STOP (纯终止符，无参数)
+    stop_pos = find_standalone_marker(text, STOP_MARKER)
+    if stop_pos >= 0:
+        end_pos = stop_pos + len(STOP_MARKER)
+        # 跳过行尾空白到换行符
+        while end_pos < len(text) and text[end_pos] in " \t":
+            end_pos += 1
+        if end_pos < len(text) and text[end_pos] in "\r\n":
+            if text[end_pos] == "\r" and end_pos + 1 < len(text) and text[end_pos + 1] == "\n":
+                end_pos += 2
+            else:
+                end_pos += 1
         blocks.append({
-            "name": "STOP_REASON",
-            "start": head_start,
-            "end": end,
-            "content_start": head_start,
-            "content_end": end,
-            "content": reason or "",
-            "raw": text[head_start:end],
+            "name": "STOP",
+            "start": stop_pos,
+            "end": end_pos,
+            "content_start": stop_pos,
+            "content_end": end_pos,
+            "content": "",
+            "raw": text[stop_pos:end_pos],
         })
     return blocks, None
 
 
-def find_stop_reason_marker(text: str) -> Optional[tuple[int, int, str]]:
-    """Find first `@SPORE:STOP_REASON=` terminator.
+def find_stop_marker(text: str) -> Optional[tuple[int, int, str]]:
+    """Find first @SPORE:STOP terminator.
 
-    Returns (start, end, reason) or None.
+    Returns (start, end, content) or None. Content is always empty for STOP.
     """
-    blocks, err = extract_stop_reason_blocks(text or "")
+    blocks, err = extract_stop_blocks(text or "")
     if err or not blocks:
         return None
     b = blocks[0]
-    return b["start"], b["end"], b.get("content") or ""
+    return b["start"], b["end"], ""
 
 
-def has_stop_reason_marker(text: str) -> bool:
-    return find_stop_reason_marker(text) is not None
+def has_stop_marker(text: str) -> bool:
+    return find_stop_marker(text) is not None
 
 
-def is_stop_reason_line(line: str) -> bool:
-    """True if line starts a STOP_REASON assignment (spaces around = optional)."""
-    return bool(re.match(r"^[ \t]*@SPORE:STOP_REASON[ \t]*=", line or ""))
+def is_stop_line(line: str) -> bool:
+    """True if line is @SPORE:STOP."""
+    return (line or "").strip() == STOP_MARKER
 
 
 @dataclass
@@ -237,25 +182,24 @@ param=@SPORE:CONTENT_START
 ```
 
 
-任务结束标记（终止符，用户可见）：
+**最终回复（任务完成）**
 
-最终回复不要使用 REPLY 块。用 `@SPORE:STOP_REASON=` 输出自然语言终止原因；系统会把该原因按 REPLY 的逻辑展示给用户。
+所有回复内容（包括最终总结）都必须放在 REPLY 块中。任务完成后，输出 `@SPORE:STOP` 终止符。
 
-单行：
-
-```text
-@SPORE:STOP_REASON=<自然语言终止原因>
-```
-
-等号两侧空格可选：`@SPORE:STOP_REASON = ...` 与 `@SPORE:STOP_REASON=...` 均合法。
-
-多行（强制使用 CONTENT 包裹）：
+格式：
 
 ```text
-@SPORE:STOP_REASON=@SPORE:CONTENT_START
-<自然语言终止原因>
-@SPORE:CONTENT_END
+@SPORE:REPLY_START
+最终总结性回复
+@SPORE:REPLY_END
+
+@SPORE:STOP
 ```
+
+说明：
+- `@SPORE:STOP` 是纯粹的终止符，不带任何参数
+- 最终回复内容必须放在 REPLY 块中
+
 
 工具调用只能选择其中一种 ACTION 块。
 
@@ -294,15 +238,12 @@ ACTION_ONLY：
 - 可选简短 REPLY 块
 - 可选 TODO 块
 - 必须包含且只包含一个 {action_block_names} 块
-- 禁止包含 @SPORE:STOP_REASON =
 - ACTION 块结束后立即停止输出
 
 FINAL_ONLY：
-- 必须包含 @SPORE:STOP_REASON=<自然语言终止原因>
-- 终止原因会作为用户可见内容展示（等同 REPLY）
-- 不要使用 REPLY 块
+- 必须包含 REPLY 块（放置最终总结内容）
+- 必须包含 @SPORE:STOP 终止符
 - 禁止任意 ACTION 块
-- 多行原因必须写成 @SPORE:STOP_REASON=@SPORE:CONTENT_START ... @SPORE:CONTENT_END
 
 ### 严格校验规则
 
@@ -310,7 +251,6 @@ FINAL_ONLY：
 - 所有 START/END 标记必须成对
 - 禁止未知 @SPORE: 标识符
 - 同一轮禁止出现多个 ACTION 块
-- ACTION 回复中禁止出现 @SPORE:STOP_REASON =
 - 调用工具后不要自行输出 RESULT，系统会自动返回工具结果
 - 多行参数继续使用 `@SPORE:CONTENT_START ... @SPORE:CONTENT_END`
 
@@ -340,7 +280,7 @@ class ProtocolManager:
         "协议块外存在非空内容。所有输出必须在协议块内(本次协议块外内容已兼容，合法协议块内操作已执行，不必再次输出本轮相同操作)：\n"
         "- 用户可见内容使用 @SPORE:REPLY_START / @SPORE:REPLY_END\n"
         "- 工具调用使用 @SPORE:ACTION_*_START / @SPORE:ACTION_*_END\n"
-        "- 任务完成使用 @SPORE:STOP_REASON=<终止原因>\n"
+        "- 任务完成在 REPLY 块中输出总结，然后输出 @SPORE:STOP\n"
     )
 
     # 兜底：匹配连续重复的协议边界标记（中间仅有空白行或无内容）
@@ -371,7 +311,7 @@ class ProtocolManager:
         "@SPORE:ACTION_SEQUENCE_END",
         "@SPORE:ACTION_PARALLEL_START",
         "@SPORE:ACTION_PARALLEL_END",
-        "@SPORE:STOP_REASON",  # assignment form: @SPORE:STOP_REASON = <reason>
+        "@SPORE:STOP",  # 终止符
         "@SPORE:CONTENT_START",
         "@SPORE:CONTENT_END",
     }
@@ -490,24 +430,24 @@ class ProtocolManager:
         content_spans: List[tuple[int, int]] = []
         final_spans: List[tuple[int, int]] = []
 
-        # Pre-parse STOP_REASON (supports plain text and CONTENT multi-line form)
-        stop_blocks, stop_err = extract_stop_reason_blocks(response)
+        # Pre-parse STOP markers
+        stop_blocks, stop_err = extract_stop_blocks(response)
         if stop_err:
-            return blocks, ProtocolError("invalid_stop_reason", stop_err), ""
+            return blocks, ProtocolError("invalid_stop", stop_err), ""
         for stop_block in stop_blocks:
             blocks.append(stop_block)
             final_spans.append((stop_block["start"], stop_block["end"]))
         stop_spans = list(final_spans)
 
-        # 多个 STOP_REASON 宽松兜底：不报错，同 REPLY 逻辑拼接内容。
-        # content_after_stop_reason 检查仅对最后一个 STOP_REASON 之后的文本生效。
+        # 多个 STOP 宽松兜底：不报错，同 REPLY 逻辑拼接内容。
+        # content_after_stop 检查仅对最后一个 STOP 之后的文本生效。
         if final_spans and response[final_spans[-1][1]:].strip():
             return blocks, ProtocolError(
-                "content_after_stop_reason",
-                "@SPORE:STOP_REASON ???????????????????JSON ????",
+                "content_after_stop",
+                "@SPORE:STOP 之后不应有其他内容",
             ), ""
 
-        # Standard block markers only; STOP_REASON spans are handled above.
+        # Standard block markers only; STOP spans are handled above.
         marker_regex = re.compile(r"(?m)^[ \t]*(@SPORE:[A-Z_]+(?:_START|_END)?@?)[ \t]*(?:\r?\n|$)")
         markers = list(marker_regex.finditer(response))
         in_content = False
@@ -542,12 +482,6 @@ class ProtocolManager:
                 else:
                     return blocks, ProtocolError("mismatched_end_marker", "@SPORE:CONTENT_END 缺少对应的 @SPORE:CONTENT_START"), ""
                 continue
-
-            if marker == "@SPORE:STOP_REASON":
-                return blocks, ProtocolError(
-                    "invalid_stop_reason",
-                    "终止符格式应为 @SPORE:STOP_REASON=<自然语言原因> 或 @SPORE:STOP_REASON=@SPORE:CONTENT_START ... @SPORE:CONTENT_END",
-                ), ""
 
             if marker.endswith("_START"):
                 block_name = marker[len("@SPORE:"):-len("_START")]
@@ -600,7 +534,7 @@ class ProtocolManager:
                 ), ""
             return blocks, ProtocolError("missing_end_marker", f"缺少结束标识符: {end_marker}"), ""
 
-        # 多个 STOP_REASON 时，将所有 span 都纳入已覆盖范围，避免后续出现在 outside_content
+        # 多个 STOP 时，将所有 span 都纳入已覆盖范围，避免后续出现在 outside_content
         for span in final_spans:
             content_spans.append(span)
 
@@ -663,7 +597,7 @@ class ProtocolManager:
         
         protocol_warning = self.CONTENT_OUTSIDE_WARNING if outside_text else None
 
-        final_blocks = [block for block in blocks if block["name"] == "STOP_REASON"]
+        final_blocks = [block for block in blocks if block["name"] == "STOP"]
         final_pos = final_blocks[0]["start"] if final_blocks else -1
         has_final = bool(final_blocks)
         action_blocks = [block for block in blocks if block["name"] in self.ACTION_BLOCK_NAMES]
@@ -686,7 +620,7 @@ class ProtocolManager:
             return ParsedResponse(
                 response_type="protocol_error",
                 raw_response=response,
-                protocol_error=ProtocolError("action_with_final", "ACTION 回复中禁止出现 @SPORE:STOP_REASON ="),
+                protocol_error=ProtocolError("action_with_final", "ACTION 回复中禁止出现 @SPORE:STOP"),
                 truncated=is_truncated,
             )
 
@@ -725,19 +659,8 @@ class ProtocolManager:
             )
 
         if has_final:
-            # 多个 STOP_REASON 同 REPLY 逻辑：按顺序拼接所有非空原因
-            final_parts = [
-                (b.get("content") or "").strip()
-                for b in final_blocks
-                if (b.get("content") or "").strip()
-            ]
-            final_content = "\n\n".join(final_parts) or None
-            # STOP_REASON 的自然语言原因按 REPLY 逻辑作为用户可见内容。
-            # 规范上终止回复不应再使用 REPLY；若模型仍同时输出 REPLY，系统兜底拼接展示。
-            if final_content and reply_content:
-                display_content = f"{reply_content}\n\n{final_content}"
-            else:
-                display_content = final_content or reply_content
+            # STOP 无内容，只看 REPLY
+            display_content = reply_content
             return ParsedResponse(
                 response_type="final",
                 prefix_text=display_content,

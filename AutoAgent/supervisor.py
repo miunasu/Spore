@@ -98,7 +98,7 @@ def end_check(last_answer: str, current_answer: str, reply: str) -> str:
     Args:
         last_answer: 上次回复内容
         current_answer: 本次回复内容
-        reply: 原始回复（用于检测 STOP_REASON）
+        reply: 原始回复（用于检测 STOP）
     
     Returns:
         "End" 表示结束，"continue" 表示继续，"" 表示正常
@@ -107,9 +107,9 @@ def end_check(last_answer: str, current_answer: str, reply: str) -> str:
     if current_answer != "":
         print(f"{current_agent_name}> {current_answer}")
     
-    # 检测 STOP_REASON 终止符（文本协议）
-    from base.text_protocol import has_stop_reason_marker
-    if has_stop_reason_marker(reply):
+    # 检测 STOP 终止符（文本协议）
+    from base.text_protocol import has_stop_marker
+    if has_stop_marker(reply):
         return "End"
     
     # 使用 supervisor 检测循环

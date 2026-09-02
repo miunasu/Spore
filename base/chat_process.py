@@ -1073,7 +1073,7 @@ class ChatProcess:
                 "cache_creation_input_tokens": cache_write,
                 "context_tokens": context_tokens,
             },
-            # 传输层终止原因，与协议层 @SPORE:STOP_REASON 完全无关，不参与 break/continue 判定
+            # 传输层终止原因，与协议层 @SPORE:STOP 完全无关，不参与 break/continue 判定
             "api_stop_reason": health.get("api_stop_reason"),
             "finish_state": health.get("finish_state"),
             "truncated": bool(health.get("truncated")),

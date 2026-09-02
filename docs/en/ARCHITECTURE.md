@@ -193,7 +193,7 @@ Desktop session isolation does not depend on the currently selected UI tab:
 - Parses `@SPORE:ACTION_*` and executes tools (single / sequence / parallel)
 - Runtime tool-policy interception: even if the model calls a disabled tool or sub-tool, a rejection message is returned as the RESULT
 - `execute_command` goes through SecurityGuard first; file writes/deletes hook into BackupManager checkpoints
-- Writes back `@SPORE:RESULT` / handles `@SPORE:STOP_REASON=`
+- Writes back `@SPORE:RESULT` / handles `STOP`
 - The Supervisor helps decide whether consecutive rounds without an ACTION are stuck in a loop
 - Supports interrupt cleanup (epoch validation) and TODO block updates
 
@@ -220,7 +220,7 @@ file type=read file_path="C:/demo.txt"
 ... tool results ...
 @SPORE:RESULT_END
 
-@SPORE:STOP_REASON=Task completed
+STOPTask completed
 ```
 
 Components:
@@ -229,7 +229,7 @@ Components:
 - `ActionParser`: parses the tool name and parameter DSL (including multi-line values via `@SPORE:CONTENT_START/END`)
 - `ResultFormatter` / `ToolDocGenerator`: results and tool documentation
 
-> The termination marker is **`STOP_REASON`** (a natural-language termination reason); intermediate replies go inside `@SPORE:REPLY_START/END`. The main Agent's reply language follows the language of the user's message.
+> The termination marker is **`STOP`** (a natural-language termination reason); intermediate replies go inside `@SPORE:REPLY_START/END`. The main Agent's reply language follows the language of the user's message.
 
 ### Tool System `base/tools.py` + `base/utils/`
 
@@ -321,7 +321,7 @@ A two-layer "time machine" whose data is **session-scoped** under `.spore/`:
 - `EpisodeStore` uses SQLite (schema in `learning/schema.sql`), with episodes and embeddings in separate tables; the database is shared across sessions
 - `ConversationLoop` / Desktop `SessionConversationLoop` attempt to initialize `EpisodicRetriever`
 - Before an LLM request, an embedding is generated for the last user-role message; the latest 100 `general_task` episodes are scored by recency, cosine similarity, and salience, and up to 3 are injected
-- When a task successfully ends with `STOP_REASON`, its query, tool calls, and outcome are recorded as a success episode when possible
+- When a task successfully ends with `STOP`, its query, tool calls, and outcome are recorded as a success episode when possible
 - Embeddings use an OpenAI-compatible `/v1/embeddings` endpoint. Empty dedicated `EMBEDDING_*` settings fall back to `OPENAI_API_KEY` / `OPENAI_API_URL`; the default model is `text-embedding-3-small`
 - Missing embedding configuration, timeout, or API failure is caught by the caller so the main conversation continues. This is not a local embedding or FTS fallback, and an embedding failure while recording skips the entire episode
 - **DB path follows runtime root**: default `<runtime_root>/.spore/memory/episodic.db`
@@ -398,7 +398,7 @@ User input (GUI/CLI)
   → ProtocolManager.parse_response
   → If ACTION_*: tool-policy validation → (execute_command goes through SecurityGuard first)
       → execute tools → BackupManager snapshot → format_result → request LLM again
-  → If STOP_REASON: end this turn and display
+  → If STOP: end this turn and display
 ```
 
 ### Desktop Self-Driven Task

@@ -43,7 +43,7 @@ from base.html_interaction_state import (
 )
 from base.logger import log_error, log_frontend_agent, log_frontend_agent_raw
 from base.prompt_loader import load_system_prompt
-from base.text_protocol import ProtocolManager, extract_stop_reason_blocks
+from base.text_protocol import ProtocolManager, extract_stop_blocks
 
 
 _ipc_manager = None
@@ -1676,14 +1676,14 @@ def _strip_spore_stop_reason(raw: str) -> str:
     """
 
     content = raw or ""
-    blocks, error = extract_stop_reason_blocks(content)
+    blocks, error = extract_stop_blocks(content)
     if error:
         raise ValueError(error)
     if len(blocks) != 1:
-        raise ValueError("Frontend Agent response must contain exactly one terminal SPORE STOP_REASON block")
+        raise ValueError("Frontend Agent response must contain exactly one terminal SPORE STOP block")
     block = blocks[0]
     if content[block["end"]:].strip():
-        raise ValueError("SPORE STOP_REASON must be the final non-whitespace protocol unit")
+        raise ValueError("SPORE STOP must be the final non-whitespace protocol unit")
     return content[:block["start"]].strip()
 
 
@@ -1721,7 +1721,7 @@ def _parse_mutation_response(raw: str) -> Dict[str, Any]:
         @SPORE:REPLY_START
         no_change <reason>
         @SPORE:REPLY_END
-        @SPORE:STOP_REASON=...
+        @SPORE:STOP
 
     mutate::
 
@@ -1734,14 +1734,14 @@ def _parse_mutation_response(raw: str) -> Dict[str, Any]:
         ===
         [further blocks…]
         @SPORE:REPLY_END
-        @SPORE:STOP_REASON=...
+        @SPORE:STOP
 
     abort_after_barrier::
 
         @SPORE:REPLY_START
         abort_after_barrier <reason>
         @SPORE:REPLY_END
-        @SPORE:STOP_REASON=...
+        @SPORE:STOP
     """
     if len((raw or "").encode("utf-8")) > _MAX_MUTATION_RESPONSE_BYTES:
         raise ValueError(f"Mutation response exceeds {_MAX_MUTATION_RESPONSE_BYTES} bytes")
@@ -2719,13 +2719,13 @@ def process_html_interactions(
                 "@SPORE:REPLY_START\n"
                 "no_intent <brief reason, max 80 chars>\n"
                 "@SPORE:REPLY_END\n"
-                "@SPORE:STOP_REASON=no_intent\n\n"
+                "@SPORE:STOP\n\n"
                 "Option B — genuine intent, ask the user:\n"
                 "@SPORE:REPLY_START\n"
                 "assess_pause\n"
                 "<one sentence: accurate state summary + one focused question>\n"
                 "@SPORE:REPLY_END\n"
-                "@SPORE:STOP_REASON=awaiting_user_decision\n\n"
+                "@SPORE:STOP\n\n"
                 "Rules:\n"
                 "- First token inside REPLY block must be 'no_intent' OR 'assess_pause'.\n"
                 "- For no_intent: add a brief reason on the same line (e.g. 'no_intent page responded normally').\n"
@@ -2809,12 +2809,12 @@ def process_html_interactions(
                         "assess_pause\n"
                         "<one sentence in the specified language>\n"
                         "@SPORE:REPLY_END\n"
-                        "@SPORE:STOP_REASON=awaiting_user_decision\n\n"
+                        "@SPORE:STOP\n\n"
                         "Rules:\n"
                         "- 'assess_pause' must be the FIRST non-whitespace line inside the REPLY block.\n"
                         "- The next line is ONE natural-language sentence (recommendation + question).\n"
                         "- @SPORE:REPLY_END is MANDATORY.\n"
-                        "- @SPORE:STOP_REASON=awaiting_user_decision is MANDATORY at the very end.\n"
+                        "- @SPORE:STOP is MANDATORY at the very end.\n"
                         "- Do NOT output mutation blocks, code fences, HTML, or any other content."
                     )},
                 ]
@@ -3352,8 +3352,8 @@ def _build_mutation_retry_message(
             "    <html fragment or key=\"value\" pairs>",
             "    ===",
             "    @SPORE:REPLY_END",
-            "    @SPORE:STOP_REASON=<reason>",
-            "  @SPORE:REPLY_START must come first; @SPORE:STOP_REASON must come last.",
+            "    @SPORE:STOP",
+            "  @SPORE:REPLY_START must come first; @SPORE:STOP must come last.",
             "",
         ]
 
@@ -3381,7 +3381,7 @@ def _build_mutation_retry_message(
         "  Option A: @SPORE:REPLY_START",
         "            no_change <reason>",
         "            @SPORE:REPLY_END",
-        "            @SPORE:STOP_REASON=<reason>",
+        "            @SPORE:STOP",
         "",
         "  Option B: @SPORE:REPLY_START",
         "            interrupt",
@@ -3391,7 +3391,7 @@ def _build_mutation_retry_message(
         "            ===",
         "            [more blocks…]",
         "            @SPORE:REPLY_END",
-        "            @SPORE:STOP_REASON=<reason>",
+        "            @SPORE:STOP",
     ]
 
     return "\n".join(lines)
@@ -3449,7 +3449,7 @@ def _run_mutation_round(
         "OUTPUT FORMAT — two options only:\n\n"
         "Option A — no change needed:\n"
         "  no_change <brief reason>\n"
-        "  @SPORE:STOP_REASON=<reason>\n\n"
+        "  @SPORE:STOP\n\n"
         "Option B — mutation required:\n"
         "  interrupt\n"
         "  <single-line intervention reason shown to the user>\n\n"
@@ -3457,7 +3457,7 @@ def _run_mutation_round(
         "  <raw HTML fragment — no JSON encoding>\n"
         "  ===\n"
         "  [additional blocks in the same format…]\n\n"
-        "  @SPORE:STOP_REASON=<reason>\n\n"
+        "  @SPORE:STOP\n\n"
         "Rules:\n"
         "- 'interrupt' must be the first non-whitespace output, on its own line, for a mutation.\n"
         "- The line immediately after 'interrupt' is the user-facing intervention reason.\n"
@@ -3604,7 +3604,7 @@ def _run_mutation_round(
                 "errors": [{"code": "frontend_operation_incomplete",
                     "message": (
                         "Frontend Agent has not ended this operation through the Spore protocol. "
-                        "Continue the operation and emit @SPORE:STOP_REASON only when the final "
+                        "Continue the operation and emit @SPORE:STOP only when the final "
                         "mutation decision is ready."
                     )}],
             }

@@ -22,11 +22,11 @@ const frontendLog = (message: string) => {
   useLogStore.getState().addFrontendLog(message);
 };
 
-const isStopReasonLine = (trimmed: string): boolean =>
-  /^@SPORE:STOP_REASON\s*=/.test(trimmed || '');
+const isStopLine = (trimmed: string): boolean =>
+  trimmed === '@SPORE:STOP';
 
 const isHiddenProtocolLine = (trimmed: string): boolean =>
-  isStopReasonLine(trimmed) ||
+  isStopLine(trimmed) ||
   [
     '@SPORE:REPLY_START',
     '@SPORE:REPLY_END',
@@ -36,40 +36,8 @@ const isHiddenProtocolLine = (trimmed: string): boolean =>
   ].includes(trimmed);
 
 
-const extractStopReasonContent = (content: string): string | null => {
-  if (!content) return null;
-  const lines = content.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^[ \t]*@SPORE:STOP_REASON[ \t]*=[ \t]*(.*?)[ \t]*$/);
-    if (!match) continue;
-    const value = (match[1] || '').trim();
-    if (value.startsWith('@SPORE:CONTENT_START')) {
-      let body = value.slice('@SPORE:CONTENT_START'.length);
-      // same-line end
-      const sameEnd = body.indexOf('@SPORE:CONTENT_END');
-      if (sameEnd >= 0) {
-        return body.slice(0, sameEnd).replace(/^\r?\n/, '').replace(/\s+$/, '');
-      }
-      const parts: string[] = [];
-      if (body) parts.push(body.replace(/^\r?\n/, ''));
-      for (let j = i + 1; j < lines.length; j++) {
-        const endIdx = lines[j].indexOf('@SPORE:CONTENT_END');
-        if (endIdx >= 0) {
-          const before = lines[j].slice(0, endIdx);
-          if (before) parts.push(before);
-          return parts.join('\n').replace(/^\r?\n/, '').replace(/\s+$/, '');
-        }
-        parts.push(lines[j]);
-      }
-      return parts.join('\n').trim() || null;
-    }
-    return value || null;
-  }
-  return null;
-};
-
 // 提取消息的显示内容（处理新协议 @SPORE: 标记）
-// 结束轮优先级：有 REPLY 只显示 REPLY；仅有 STOP_REASON 时显示 STOP_REASON
+// 有 REPLY 块时显示 REPLY 内容；无 REPLY 时过滤协议标记
 const extractDisplayContent = (content: string): string => {
   if (!content) return '';
 
@@ -93,7 +61,7 @@ const extractDisplayContent = (content: string): string => {
       continue;
     }
 
-    if (trimmed === replyEnd || isStopReasonLine(trimmed)) {
+    if (trimmed === replyEnd || isStopLine(trimmed)) {
       replySegments.push(currentSegment.join('\n').trim());
       currentSegment = null;
       continue;
@@ -110,18 +78,12 @@ const extractDisplayContent = (content: string): string => {
     replySegments.push(currentSegment.join('\n').trim());
   }
 
-  // 有 REPLY 块时优先只展示 REPLY（同时存在 STOP_REASON 时不显示原因文本）
+  // 有 REPLY 块时优先只展示 REPLY
   if (hasReplyBlock) {
     return replySegments.filter(Boolean).join('\n\n');
   }
 
-  // 无 REPLY 时，展示 STOP_REASON 内容
-  const stopReason = extractStopReasonContent(content);
-  if (stopReason) {
-    return stopReason;
-  }
-
-  // 没有 REPLY/STOP_REASON，过滤掉所有协议标记
+  // 没有 REPLY，过滤掉所有协议标记
   const filteredLines: string[] = [];
   let inProtocolBlock = false;
 
@@ -139,7 +101,7 @@ const extractDisplayContent = (content: string): string => {
     }
 
     if (isHiddenProtocolLine(trimmed)) {
-      if (isStopReasonLine(trimmed)) {
+      if (isStopLine(trimmed)) {
         break;
       }
       continue;

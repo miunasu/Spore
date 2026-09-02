@@ -282,7 +282,7 @@ def _aggregate_notice(
         f"总体进度: 已完成 {done}/{total}；仍在运行: {running_text}",
         "",
         "处理要求: 若决定继续等待其余子Agent，直接输出 "
-        "@SPORE:STOP_REASON=等待子Agent完成，不要重复派发、不要空转轮询；"
+        "@SPORE:STOP，不要重复派发、不要空转轮询；"
         "若已可基于现有结果推进，正常执行。",
     ])
 

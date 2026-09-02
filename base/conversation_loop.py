@@ -2,7 +2,7 @@
 对话循环处理器
 
 处理主要的对话循环逻辑，包括消息管理、子agent恢复、LLM交互等。
-使用文本协议（ACTION_SINGLE / ACTION_SEQUENCE / ACTION_PARALLEL / RESULT / STOP_REASON）与 LLM 交互。
+使用文本协议（ACTION_SINGLE / ACTION_SEQUENCE / ACTION_PARALLEL / RESULT / STOP）与 LLM 交互。
 """
 import json
 import time
@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 
 from .state_manager import ConversationState
 from .tools import CURRENT_ACTION_BLOCK_MODE, TOOL_HANDLERS, TOOL_DEFINITIONS
-from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock, is_standalone_marker, has_stop_reason_marker, is_stop_reason_line
+from .text_protocol import ProtocolManager, ParsedAction, ParsedActionBlock, is_standalone_marker, has_stop_marker, is_stop_line
 from .utils import (
     json_query, 
     validate_json_response, 
@@ -1238,7 +1238,7 @@ class ConversationLoop:
         """
         验证响应并检查状态（文本协议版本）
 
-        使用 ProtocolManager 解析响应，检测 ACTION、STOP_REASON 或继续状态
+        使用 ProtocolManager 解析响应，检测 ACTION、STOP 或继续状态
         同时解析 TODO 块并更新任务状态
 
         参数:
@@ -1343,7 +1343,7 @@ class ConversationLoop:
             return "continue"
         
         elif parsed.response_type == "final":
-            # 检测到 STOP_REASON，任务完成
+            # 检测到 STOP，任务完成
             self._no_action_count = 0  # 重置无 ACTION 计数器
             # 优先显示 REPLY 内容，否则显示 prefix_text（过滤掉 TODO 块）
             display_text = parsed.reply_content
@@ -1399,7 +1399,7 @@ class ConversationLoop:
             return "break"
         
         else:
-            # continue 类型：既没有 ACTION 也没有 STOP_REASON
+            # continue 类型：既没有 ACTION 也没有 STOP
             # 优先使用 REPLY 内容
             current_answer = parsed.reply_content or parsed.prefix_text or reply.strip()
             # 过滤掉只包含 < 或 <<< 等不完整标记的情况
@@ -1518,8 +1518,8 @@ class ConversationLoop:
         elif last_msg.get("role") == "assistant":
             content = last_msg.get("content", "")
             
-            # 检查是否包含 STOP_REASON，说明是完整回复
-            if has_stop_reason_marker(content):
+            # 检查是否包含 STOP，说明是完整回复
+            if has_stop_marker(content):
                 pass  # 保留完整的最终响应
             
             # 检查是否包含未完成的 ACTION 块

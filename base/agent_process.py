@@ -619,7 +619,7 @@ class SubAgentThread(threading.Thread):
                     continue
                 
                 elif parsed.response_type == "final":
-                    # 检测到 STOP_REASON，任务完成
+                    # 检测到 STOP，任务完成
                     if parsed.reply_content:
                         self.log_output(f"回复: {parsed.reply_content}")
                     
@@ -684,7 +684,7 @@ class SubAgentThread(threading.Thread):
                     })
                     
                     # 添加user消息提示继续执行
-                    continue_prompt = "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请输出 @SPORE:STOP_REASON=<自然语言终止原因>（不要再输出 REPLY 块）。"
+                    continue_prompt = "请继续执行任务。如果需要使用工具，请输出 ACTION_SINGLE、ACTION_SEQUENCE 或 ACTION_PARALLEL 块；如果任务已完成，请在 REPLY 块中输出总结，然后输出 @SPORE:STOP。"
                     if parsed.protocol_warning:
                         continue_prompt = f"[协议警告] {parsed.protocol_warning}\n\n{continue_prompt}"
                     self.messages.append({
@@ -693,7 +693,7 @@ class SubAgentThread(threading.Thread):
                     })
                     
                     self._log_to_agent_file(
-                        f"LLM未输出ACTION或STOP_REASON，提示继续执行",
+                        f"LLM未输出ACTION或STOP，提示继续执行",
                         "WARNING"
                     )
                     continue

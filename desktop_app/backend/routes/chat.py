@@ -35,11 +35,12 @@ _executor = ThreadPoolExecutor(max_workers=16)
 
 
 def is_stop_reason_line(stripped: str) -> bool:
-    return bool(re.match(r"^@SPORE:STOP_REASON\s*=", stripped or ""))
+    """检查是否是 STOP 标记行"""
+    return stripped == "@SPORE:STOP"
 
 
 def is_hidden_protocol_line(stripped: str) -> bool:
-    if is_stop_reason_line(stripped):
+    if is_stop_line(stripped):
         return True
     return stripped in {
         "@SPORE:REPLY_START",
@@ -59,13 +60,13 @@ def extract_user_visible_content(reply: str) -> str:
     - @SPORE:TODO_START ... @SPORE:TODO_END
     - @SPORE:ACTION_SINGLE/SEQUENCE/PARALLEL_START ... END
     - ### RULE_REMINDER
-    - @SPORE:STOP_REASON=<自然语言原因>
+    - STOP=<自然语言原因>
     - @SPORE:CONTENT_END
 
     所有可见来源都会展示并拼接：
     1. 协议块外的非空内容
     2. 所有 REPLY 块内容
-    3. STOP_REASON 的自然语言内容
+    3. REPLY 块内容
 
     完整回复复用 ProtocolManager 的统一解析结果；不完整流式快照再走下方的
     容错提取，避免尚未闭合的 REPLY 块在生成过程中不可见。
@@ -110,10 +111,10 @@ def extract_user_visible_content(reply: str) -> str:
     if has_reply_block:
         return "\n\n".join(seg for seg in reply_segments if seg)
 
-    # 无 REPLY 时，STOP_REASON 的自然语言原因作为用户可见内容
+    # 无 REPLY 时，所有内容已在 REPLY 块中显示
     try:
-        from base.text_protocol import extract_stop_reason_blocks
-        stop_blocks, stop_err = extract_stop_reason_blocks(reply)
+        from base.text_protocol import extract_stop_blocks
+        stop_blocks, stop_err = extract_stop_blocks(reply)
         if not stop_err and stop_blocks:
             reason = (stop_blocks[0].get("content") or "").strip()
             if reason:
@@ -133,7 +134,7 @@ def extract_user_visible_content(reply: str) -> str:
             continue
 
         if is_hidden_protocol_line(stripped):
-            if is_stop_reason_line(stripped):
+            if is_stop_line(stripped):
                 break
             continue
 
@@ -158,7 +159,7 @@ _STREAM_PROTOCOL_MARKERS = (
     "@SPORE:ACTION_SEQUENCE_END",
     "@SPORE:ACTION_PARALLEL_START",
     "@SPORE:ACTION_PARALLEL_END",
-    "@SPORE:STOP_REASON",
+    "@SPORE:STOP",
     "### RULE_REMINDER",
 )
 

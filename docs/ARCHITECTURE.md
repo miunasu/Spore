@@ -193,7 +193,7 @@ Spore/
 - 解析 `@SPORE:ACTION_*` 并执行工具（single / sequence / parallel）
 - 工具策略运行时拦截：被禁用的工具或子工具即使被模型调用也会以拒绝信息作为 RESULT 返回
 - `execute_command` 先经 SecurityGuard；文件写删挂接 BackupManager 检查点
-- 回写 `@SPORE:RESULT` / 处理 `@SPORE:STOP_REASON=`
+- 回写 `@SPORE:RESULT` / 处理 `STOP`
 - Supervisor 辅助判定连续无 ACTION 轮次是否陷入循环
 - 支持中断清理（epoch 校验）与 TODO 块更新
 
@@ -220,7 +220,7 @@ file type=read file_path="C:/demo.txt"
 ... 工具结果 ...
 @SPORE:RESULT_END
 
-@SPORE:STOP_REASON=任务已完成
+STOP任务已完成
 ```
 
 组件：
@@ -229,7 +229,7 @@ file type=read file_path="C:/demo.txt"
 - `ActionParser`：解析工具名与参数 DSL（含 `@SPORE:CONTENT_START/END` 多行值）
 - `ResultFormatter` / `ToolDocGenerator`：结果与工具文档
 
-> 终止标记为 **`STOP_REASON`**（自然语言终止原因）；过程性回复放在 `@SPORE:REPLY_START/END`。主 Agent 的回复语言跟随用户消息语言。
+> 终止标记为 **`STOP`**（自然语言终止原因）；过程性回复放在 `@SPORE:REPLY_START/END`。主 Agent 的回复语言跟随用户消息语言。
 
 ### 工具系统 `base/tools.py` + `base/utils/`
 
@@ -321,7 +321,7 @@ file type=read file_path="C:/demo.txt"
 - `EpisodeStore` 使用 SQLite（schema 位于 `learning/schema.sql`），episode 与 embedding 存在独立表中；数据库跨会话共享
 - 在 `ConversationLoop` / Desktop `SessionConversationLoop` 尝试初始化 `EpisodicRetriever`
 - 发送 LLM 请求前，对最后一条 user-role 消息生成 embedding，从最近 100 条 `general_task` episode 按时间、余弦相似度与显著性综合评分，最多注入 3 条相关历史
-- 任务以 `STOP_REASON` 成功结束时，尝试记录查询、工具调用与结果为 success episode
+- 任务以 `STOP` 成功结束时，尝试记录查询、工具调用与结果为 success episode
 - embedding 通过 OpenAI-compatible `/v1/embeddings` 接口；专用 `EMBEDDING_*` 配置为空时回退 `OPENAI_API_KEY` / `OPENAI_API_URL`，默认模型 `text-embedding-3-small`
 - embedding 缺少配置、超时或调用失败时，检索/记录异常由上层捕获，主对话继续；这不是本地 embedding 或 FTS 回退，记录阶段的 embedding 失败会跳过整条 episode
 - **数据库路径跟随运行目录**：默认 `<runtime_root>/.spore/memory/episodic.db`
@@ -398,7 +398,7 @@ file type=read file_path="C:/demo.txt"
   → ProtocolManager.parse_response
   → 若 ACTION_*：工具策略校验 → (execute_command 先过 SecurityGuard)
       → 执行工具 → BackupManager 留底 → format_result → 再请求 LLM
-  → 若 STOP_REASON：结束本轮并展示
+  → 若 STOP：结束本轮并展示
 ```
 
 ### 桌面自驱任务

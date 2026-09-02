@@ -125,8 +125,8 @@ class ResultFormatter:
             "message": message,
             "required_frameworks": {
                 "REPLY_ONLY": "REPLY_START/END, optional TODO_START/END, no ACTION block.",
-                "ACTION_ONLY": "Optional REPLY/TODO, exactly one ACTION_SINGLE/SEQUENCE/PARALLEL block, no STOP_REASON.",
-                "FINAL_ONLY": "@SPORE:STOP_REASON=<natural language reason> (optional CONTENT multi-line), no REPLY/ACTION.",
+                "ACTION_ONLY": "Optional REPLY/TODO, exactly one ACTION_SINGLE/SEQUENCE/PARALLEL block, no STOP.",
+                "FINAL_ONLY": "REPLY block with final summary, then @SPORE:STOP.",
             },
             "valid_action_blocks": [
                 "ACTION_SINGLE",

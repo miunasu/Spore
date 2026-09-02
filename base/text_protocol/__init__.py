@@ -11,14 +11,15 @@
 """
 
 from .protocol_manager import (
-    ProtocolManager, 
+    ProtocolManager,
     ParsedResponse,
+    ProtocolError,
     find_standalone_marker,
     is_standalone_marker,
-    find_stop_reason_marker,
-    has_stop_reason_marker,
-    is_stop_reason_line,
-    extract_stop_reason_blocks,
+    find_stop_marker,
+    has_stop_marker,
+    is_stop_line,
+    extract_stop_blocks,
 )
 from .action_parser import ActionParser, ParsedAction, ParsedActionBlock
 from .result_formatter import ResultFormatter
@@ -27,6 +28,7 @@ from .tool_doc_generator import ToolDocGenerator
 __all__ = [
     'ProtocolManager',
     'ParsedResponse',
+    'ProtocolError',
     'ActionParser',
     'ParsedAction',
     'ParsedActionBlock',
@@ -34,8 +36,8 @@ __all__ = [
     'ToolDocGenerator',
     'find_standalone_marker',
     'is_standalone_marker',
-    'find_stop_reason_marker',
-    'has_stop_reason_marker',
-    'is_stop_reason_line',
-    'extract_stop_reason_blocks',
+    'find_stop_marker',
+    'has_stop_marker',
+    'is_stop_line',
+    'extract_stop_blocks',
 ]

@@ -443,16 +443,24 @@ def log_tool_result(tool_name: str, tool_result: str, args: Dict[str, Any]) -> N
     is_error, error_msg = check_tool_result_error(tool_result)
 
     if is_error:
-        log_tool_error(tool_name, error_msg, args, context=_tool_result_log_context(tool_result))
+        # 工具执行失败 - 提取操作并显示错误
+        action_desc = _extract_tool_action(tool_name, args)
+        # 截断过长的错误信息
+        short_error = error_msg[:50] + "..." if len(error_msg) > 50 else error_msg
+        error_log = f"{action_desc} → ERROR: {short_error}"
+        log_tool_error(tool_name, error_log, args, context=_tool_result_log_context(tool_result))
     else:
         # 额外检查 execute_command 的 returncode
         try:
             result_data = json.loads(tool_result) if isinstance(tool_result, str) else tool_result
             if isinstance(result_data, dict):
                 if tool_name == "execute_command" and result_data.get("ok") is False:
+                    action_desc = _extract_tool_action(tool_name, args)
+                    error_code = result_data.get('returncode', -1)
+                    error_log = f"{action_desc} → ERROR: exit code {error_code}"
                     log_tool_error(
                         tool_name,
-                        f"命令执行失败 (exit code {result_data.get('returncode', -1)})",
+                        error_log,
                         args,
                         context=_tool_result_log_context(tool_result),
                     )

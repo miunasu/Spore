@@ -29,6 +29,15 @@ const parseLogContent = (content: string): ParsedContent => {
 
   const trimmed = content.trim();
 
+  // 检查是否包含 → ERROR: 标记（工具执行失败）
+  if (trimmed.includes('→ ERROR:')) {
+    return {
+      type: 'simple',
+      level: 'ERROR',
+      message: trimmed,
+    };
+  }
+
   // 检查是否是纯 JSON
   if (
     (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
@@ -139,6 +148,29 @@ const DataCard: React.FC<{ data: Record<string, any>; compact?: boolean }> = mem
 
 DataCard.displayName = 'DataCard';
 
+// 格式化工具日志消息，给主工具名添加颜色
+const formatToolMessage = (message: string, isError: boolean): JSX.Element => {
+  // 检查是否是工具格式：tool_name → ...
+  const arrowIndex = message.indexOf('→');
+  if (arrowIndex === -1) {
+    // 没有箭头，直接返回
+    return <span>{message}</span>;
+  }
+
+  const toolName = message.substring(0, arrowIndex).trim();
+  const restMessage = message.substring(arrowIndex);
+
+  // 根据是否错误选择颜色
+  const toolColor = isError ? 'text-spore-error font-semibold' : 'text-spore-highlight font-medium';
+
+  return (
+    <span>
+      <span className={toolColor}>{toolName}</span>
+      <span>{restMessage}</span>
+    </span>
+  );
+};
+
 // 单条日志项组件 - 现代美学设计
 const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) => {
   const parsed = useMemo(() => parseLogContent(log.content), [log.content]);
@@ -148,6 +180,7 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) =>
   const needsExpansion = parsed.type !== 'simple' && parsed.data;
   const hasLevel = parsed.level !== undefined;
   const levelStyle = hasLevel ? levelStyles[parsed.level!] : null;
+  const isError = parsed.level === 'ERROR';
 
   // 简单日志：单行显示
   if (parsed.type === 'simple') {
@@ -179,9 +212,9 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) =>
               </span>
             )}
 
-            {/* 内容 */}
-            <span className="text-xs text-spore-text leading-relaxed flex-1 truncate">
-              {parsed.message}
+            {/* 内容 - 主工具名带颜色 */}
+            <span className="text-xs leading-relaxed flex-1 truncate">
+              {formatToolMessage(parsed.message, isError)}
             </span>
           </div>
         </div>

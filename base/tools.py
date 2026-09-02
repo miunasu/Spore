@@ -393,45 +393,40 @@ def safe_tool_execution(
     tool_name: str,
     handler_func: Any,
     args: Dict[str, Any],
-    return_json: bool = True
-) -> str:
+) -> Any:
     """
     安全执行工具处理函数，统一错误处理和日志记录
-    
-    所有错误统一返回 JSON Status 格式: {"Status": "Error", "error": "..."}
-    
+
+    所有错误统一返回 Dict 格式: {"Status": "Error", "error": "..."}
+
     参数:
         tool_name: 工具名称
         handler_func: 实际的工具处理函数（可以是函数或lambda）
         args: 工具参数
-        return_json: 是否将结果JSON序列化
-    
+
     返回:
-        工具执行结果（字符串），错误时返回 {"Status": "Error", "error": "..."}
+        工具执行结果（原始对象），错误时返回 {"Status": "Error", "error": "..."}
+        ResultFormatter 会统一序列化成 JSON
     """
     try:
         result = handler_func(args)
-        
-        # 自动JSON序列化
-        if return_json and not isinstance(result, str):
-            return json.dumps(result, ensure_ascii=False)
         return result
-        
+
     except TypeError as e:
         log_tool_error(tool_name, f"参数错误: {e}", args, e)
         return _format_tool_error(tool_name, "参数错误", str(e))
-        
+
     except Exception as e:
         log_tool_error(tool_name, str(e), args, e)
         return _format_tool_error(tool_name, "执行异常", str(e))
 
 
-def _format_tool_error(tool_name: str, error_type: str, error_msg: str) -> str:
-    """格式化工具错误返回值 - 统一使用 JSON Status 格式"""
-    return json.dumps({
+def _format_tool_error(tool_name: str, error_type: str, error_msg: str) -> Dict[str, str]:
+    """格式化工具错误返回值 - 返回字典对象，由 ResultFormatter 序列化"""
+    return {
         "Status": "Error",
         "error": f"{tool_name} {error_type}: {error_msg}"
-    }, ensure_ascii=False)
+    }
 
 
 # =============================================================================
@@ -459,7 +454,7 @@ def handle_skill_query(args: Dict[str, Any]) -> str:
                 "error": f"未找到技能: {name}"
             }
     
-    return safe_tool_execution("skill_query", _impl, args, return_json=True)
+    return safe_tool_execution("skill_query", _impl, args)
 
 
 
@@ -486,7 +481,7 @@ def handle_execute_command(args: Dict[str, Any]) -> str:
         
         return execute_command(cmd, timeout=timeout, working_dir=working_dir)  # 返回 Dict
     
-    return safe_tool_execution("execute_command", _impl, args, return_json=True)
+    return safe_tool_execution("execute_command", _impl, args)
 
 
 def handle_file(args: Dict[str, Any]) -> str:
@@ -526,7 +521,7 @@ def handle_file(args: Dict[str, Any]) -> str:
         else:
             raise ValueError(f"???????: {op_type}")
     
-    return safe_tool_execution("file", _impl, args, return_json=True)
+    return safe_tool_execution("file", _impl, args)
 
 
 def handle_edit(args: Dict[str, Any]) -> str:
@@ -583,7 +578,7 @@ def handle_edit(args: Dict[str, Any]) -> str:
         else:
             raise ValueError(f"???????: {edit_type}")
     
-    return safe_tool_execution("edit", _impl, args, return_json=True)
+    return safe_tool_execution("edit", _impl, args)
 
 
 
@@ -610,7 +605,7 @@ def handle_check_subagent_status(args: Dict[str, Any]) -> str:
             }
         return _subagent_status_hook(session_id)
 
-    return safe_tool_execution("check_subagent_status", _impl, args, return_json=True)
+    return safe_tool_execution("check_subagent_status", _impl, args)
 
 
 def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
@@ -767,7 +762,7 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
                 from .agent_process import unregister_conversation_agent_manager
                 unregister_conversation_agent_manager(manager.conversation_id, manager)
 
-    return safe_tool_execution("multi_agent_dispatch", _impl, args, return_json=True)
+    return safe_tool_execution("multi_agent_dispatch", _impl, args)
 
 
 TOOL_HANDLERS: Dict[str, Any] = {

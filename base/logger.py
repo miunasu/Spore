@@ -352,7 +352,8 @@ class SporeLogger:
             }
         if context:
             log_entry["context"] = context
-        log_message = json.dumps(log_entry, ensure_ascii=False, indent=2)
+        # 格式化为：第一行显示错误消息，后面是详细信息
+        log_message = "{0}\n{1}".format(error_message, json.dumps(log_entry, ensure_ascii=False, indent=2))
         loggers["tool_execution"].debug(log_message)
         self._send_to_monitor("tool_execution", log_message)
 

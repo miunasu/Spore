@@ -24,8 +24,7 @@ tool_name param1=value1 param2=value2
 
 ## 工具调用规则
 1. **每次回复只能包含一个 ACTION 块**
-2. 输出 ACTION 后立即停止，等待系统返回工具执行结果
-3. 不要自己输出 RESULT 或继续回复
+2. 输出 ACTION 后等待系统返回工具执行结果
 
 ## 回复格式
 给用户的回复内容必须放在 @SPORE:REPLY_START / @SPORE:REPLY_END 块中

@@ -168,7 +168,7 @@ PROTOCOL_TEMPLATE = """
 
 **CONTENT块（原始内容语法）**
 
-当参数值包含多行文本、代码、特殊字符时，使用CONTENT块传递。块内的所有内容原样保留，不会被解析器识别为协议指令或进行转义处理。类似于Python的raw string（`r""`），解决参数的转义问题。
+当参数值包含多行文本、代码、特殊字符、转义地狱时，使用CONTENT块传递。块内的所有内容原样保留，不会被解析器识别为协议指令或进行转义处理。类似于Python的raw string（`r""`），解决参数的转义问题。
 
 格式：
 
@@ -182,7 +182,7 @@ param=@SPORE:CONTENT_START
 
 **最终回复（任务完成）**
 
-所有回复内容（包括最终总结）都必须放在 REPLY 块中。任务完成后，输出 `@SPORE:STOP` 终止符。
+回复内容（包括最终总结）放在 REPLY 块中。任务完成后，输出 `@SPORE:STOP` 终止符。
 
 格式：
 
@@ -195,8 +195,7 @@ param=@SPORE:CONTENT_START
 ```
 
 说明：
-- `@SPORE:STOP` 是纯粹的终止符，不带任何参数
-- 最终回复内容必须放在 REPLY 块中
+- `@SPORE:STOP` 是纯粹的终止符
 
 
 工具调用只能选择其中一种 ACTION 块。
@@ -225,31 +224,56 @@ hello
 
 ### 隐形回复框架
 
-不要输出 REPLY_ONLY、ACTION_ONLY、FINAL_ONLY 这些框架名，它们只是系统内部概念。
+不要输出任何协议框架名。框架只约束输出结构。
 
-REPLY_ONLY：
-- 允许 REPLY 块
-- 可选 TODO 块
-- 禁止任意 ACTION 块
+整个交互只有两种轮次：
 
-ACTION_ONLY：
-- 可选简短 REPLY 块
-- 可选 TODO 块
-- 必须包含且只包含一个 {action_block_names} 块
-- ACTION 块结束后立即停止输出
+#### 继续轮
 
-FINAL_ONLY：
-- 必须包含 REPLY 块（放置最终总结内容）
-- 必须包含 @SPORE:STOP 终止符
-- 禁止任意 ACTION 块
+当任务尚未结束时使用。
 
-### 严格校验规则
+允许以下两种形式：
+
+- `REPLY`
+- `REPLY` + 一个 `{action_block_names}`
+
+规则：
+
+- `REPLY` 可进行说明当前进展或下一步 或 普通回复/总结
+- `{action_block_names}` 为可选；仅在当前需要执行工具或动作时输出
+- 同一轮最多只能包含一个 `{action_block_names}` 块
+- 不得输出 `@SPORE:STOP`
+
+#### 结束轮
+
+当任务已经完成，不再需要任何后续 ACTION 时使用。
+
+必须：
+
+- 输出 `REPLY` 块，包含最终结果或总结
+- 在最后输出 `@SPORE:STOP`
+
+规则：
+
+- 不得包含任何 `{action_block_names}` 块
+
+#### TODO
+
+`TODO` 块在任意轮次都可选使用，不影响轮次判断。
+
+### 决策规则
+
+- 任务已完成 → 输出 `REPLY`，并在最后输出 `@SPORE:STOP`
+- 任务未完成且需要执行 ACTION → 输出 `REPLY` + 一个 `{action_block_names}`
+- 任务未完成且不需要执行 ACTION → 仅输出 `REPLY`
+
+### 校验规则
 
 - 协议块外禁止出现非空内容
-- 所有 START/END 标记必须成对
-- 禁止未知 @SPORE: 标识符
-- 同一轮禁止出现多个 ACTION 块
-- 调用工具后不要自行输出 RESULT，系统会自动返回工具结果
+- 所有 `START/END` 标记必须成对
+- 禁止未知 `@SPORE:` 标识符
+- 同一轮最多只能出现一个 ACTION 块
+- 调用工具后系统会自动返回工具结果
 - 多行参数继续使用 `@SPORE:CONTENT_START ... @SPORE:CONTENT_END`
 
 ### 可用工具

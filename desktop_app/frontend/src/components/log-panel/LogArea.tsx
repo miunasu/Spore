@@ -29,15 +29,6 @@ const parseLogContent = (content: string): ParsedContent => {
 
   const trimmed = content.trim();
 
-  // 检查是否包含 → ERROR: 标记（工具执行失败）
-  if (trimmed.includes('→ ERROR:')) {
-    return {
-      type: 'simple',
-      level: 'ERROR',
-      message: trimmed,
-    };
-  }
-
   // 检查是否是纯 JSON
   if (
     (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
@@ -63,13 +54,12 @@ const parseLogContent = (content: string): ParsedContent => {
       const prefix = jsonMatch[1].trim();
       const parsed = JSON.parse(jsonMatch[2]);
 
-      // 提取日志级别
-      const levelMatch = prefix.match(/\b(INFO|DEBUG|WARNING|ERROR|WARN)\b/);
-      const level = levelMatch ? (levelMatch[1] === 'WARN' ? 'WARNING' : levelMatch[1] as any) : undefined;
+      // 检查是否是工具错误日志（包含 error_message 字段）
+      const isToolError = parsed.error_message !== undefined;
 
       return {
         type: 'structured',
-        level,
+        level: isToolError ? 'ERROR' : undefined,
         message: prefix,
         data: parsed,
       };
@@ -87,34 +77,6 @@ const parseLogContent = (content: string): ParsedContent => {
     level,
     message: trimmed,
   };
-};
-
-// 日志级别样式配置
-const levelStyles = {
-  INFO: {
-    bg: 'bg-blue-500/10',
-    text: 'text-blue-400',
-    border: 'border-blue-500/30',
-    icon: '●',
-  },
-  DEBUG: {
-    bg: 'bg-gray-500/10',
-    text: 'text-gray-400',
-    border: 'border-gray-500/30',
-    icon: '◆',
-  },
-  WARNING: {
-    bg: 'bg-yellow-500/10',
-    text: 'text-yellow-400',
-    border: 'border-yellow-500/30',
-    icon: '▲',
-  },
-  ERROR: {
-    bg: 'bg-red-500/10',
-    text: 'text-red-400',
-    border: 'border-red-500/30',
-    icon: '✕',
-  },
 };
 
 // 数据展示组件 - 以卡片形式展示键值对
@@ -161,7 +123,8 @@ const formatToolMessage = (message: string, isError: boolean): JSX.Element => {
   const restMessage = message.substring(arrowIndex);
 
   // 根据是否错误选择颜色
-  const toolColor = isError ? 'text-spore-error font-semibold' : 'text-spore-highlight font-medium';
+  // 错误：红色加粗，成功：绿色
+  const toolColor = isError ? 'text-spore-error font-semibold' : 'text-spore-success font-medium';
 
   return (
     <span>
@@ -176,10 +139,9 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) =>
   const parsed = useMemo(() => parseLogContent(log.content), [log.content]);
   const [expanded, setExpanded] = React.useState(false);
 
-  // 确定是否需要展开/折叠按钮
-  const needsExpansion = parsed.type !== 'simple' && parsed.data;
-  const hasLevel = parsed.level !== undefined;
-  const levelStyle = hasLevel ? levelStyles[parsed.level!] : null;
+  // 确定是否需要展开/折叠按钮 - 所有带箭头的日志都可以展开查看详情
+  const hasArrow = parsed.message.includes('→');
+  const needsExpansion = parsed.type !== 'simple' || hasArrow;
   const isError = parsed.level === 'ERROR';
 
   // 简单日志：单行显示
@@ -187,36 +149,44 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) =>
     return (
       <div className="group relative">
         <div
-          className={`rounded-lg border transition-all px-3 py-1.5 ${
-            levelStyle
-              ? `${levelStyle.bg} ${levelStyle.border} hover:${levelStyle.border.replace('/30', '/50')}`
-              : 'bg-spore-card/50 border-spore-border/20 hover:border-spore-border/40'
-          }`}
+          className="rounded-lg border transition-all overflow-hidden bg-spore-card/50 border-spore-border/20 hover:border-spore-border/40"
         >
-          <div className="flex items-center gap-3">
-            {/* 时间戳 */}
-            <span className="text-[10px] text-spore-muted font-mono flex-shrink-0">
-              {new Date(log.timestamp * 1000).toLocaleTimeString('en-US', {
-                hour12: false,
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-              })}
-            </span>
-
-            {/* 日志级别标签 */}
-            {hasLevel && levelStyle && (
-              <span className={`flex items-center gap-1 text-[10px] font-medium flex-shrink-0 ${levelStyle.text}`}>
-                <span className="text-xs">{levelStyle.icon}</span>
-                {parsed.level}
+          {/* 头部：时间戳 + 消息 + 操作按钮 */}
+          <div className="flex items-center justify-between px-3 py-1.5 bg-spore-bg/20">
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              {/* 时间戳 */}
+              <span className="text-[10px] text-spore-muted font-mono flex-shrink-0">
+                {new Date(log.timestamp * 1000).toLocaleTimeString('en-US', {
+                  hour12: false,
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                })}
               </span>
-            )}
 
-            {/* 内容 - 主工具名带颜色 */}
-            <span className="text-xs leading-relaxed flex-1 truncate">
-              {formatToolMessage(parsed.message, isError)}
-            </span>
+              {/* 内容 - 主工具名带颜色 */}
+              <span className="text-xs leading-relaxed flex-1 truncate">
+                {formatToolMessage(parsed.message, isError)}
+              </span>
+            </div>
+
+            {/* 展开/折叠按钮 - 工具日志都可以展开查看详情 */}
+            {needsExpansion && (
+              <button
+                onClick={() => setExpanded(!expanded)}
+                className="text-[10px] px-2 py-0.5 rounded bg-spore-accent/50 hover:bg-spore-accent text-spore-muted hover:text-spore-text transition-colors flex-shrink-0 ml-2"
+              >
+                {expanded ? '折叠' : '详情'}
+              </button>
+            )}
           </div>
+
+          {/* 展开的数据内容 */}
+          {expanded && parsed.data && (
+            <div className="px-3 py-2 border-t border-spore-border/20">
+              <DataCard data={parsed.data} />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -226,13 +196,9 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) =>
   return (
     <div className="group relative">
       <div
-        className={`rounded-lg border transition-all overflow-hidden ${
-          levelStyle
-            ? `${levelStyle.bg} ${levelStyle.border} hover:${levelStyle.border.replace('/30', '/50')}`
-            : 'bg-spore-card/50 border-spore-border/20 hover:border-spore-border/40'
-        }`}
+        className="rounded-lg border transition-all overflow-hidden bg-spore-card/50 border-spore-border/20 hover:border-spore-border/40"
       >
-        {/* 头部：时间戳 + 级别 + 消息 + 操作按钮 */}
+        {/* 头部：时间戳 + 消息 + 操作按钮 */}
         <div className="flex items-center justify-between px-3 py-1.5 bg-spore-bg/20">
           <div className="flex items-center gap-3 flex-1 min-w-0">
             {/* 时间戳 */}
@@ -245,17 +211,9 @@ const LogItem: React.FC<{ log: LogEntry; logType: LogType }> = memo(({ log }) =>
               })}
             </span>
 
-            {/* 日志级别标签 */}
-            {hasLevel && levelStyle && (
-              <span className={`flex items-center gap-1 text-[10px] font-medium flex-shrink-0 ${levelStyle.text}`}>
-                <span className="text-xs">{levelStyle.icon}</span>
-                {parsed.level}
-              </span>
-            )}
-
-            {/* 消息内容 */}
-            <span className="text-xs text-spore-text leading-relaxed flex-1 truncate">
-              {parsed.message}
+            {/* 消息内容 - 主工具名带颜色 */}
+            <span className="text-xs leading-relaxed flex-1 truncate">
+              {formatToolMessage(parsed.message, isError)}
             </span>
           </div>
 

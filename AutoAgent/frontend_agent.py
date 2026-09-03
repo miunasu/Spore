@@ -3609,7 +3609,7 @@ def _run_mutation_round(
                     )}],
             }
         else:
-            final_reason = (parsed.final_content or "completed").strip()[:500]
+            final_reason = (parsed.reply_content or "completed").strip()[:500]
             try:
                 response = _parse_mutation_response(raw)
             except ValueError as exc:

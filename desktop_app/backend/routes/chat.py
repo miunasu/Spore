@@ -20,7 +20,7 @@ from ..core import (
 from base.logger import log_info, log_error
 from base.agent_types import get_tools_for_mode
 from base.tools import TOOL_DEFINITIONS
-from base.text_protocol import ProtocolManager
+from base.text_protocol import ProtocolManager, is_stop_line
 from base.prompt_loader import load_system_prompt
 from base.utils import clear_last_todo_content
 from base.todo_manager import todo_write
@@ -32,11 +32,6 @@ router = APIRouter()
 # 线程池用于执行阻塞的对话操作
 # 增加线程数以支持多 Agent 并发
 _executor = ThreadPoolExecutor(max_workers=16)
-
-
-def is_stop_reason_line(stripped: str) -> bool:
-    """检查是否是 STOP 标记行"""
-    return stripped == "@SPORE:STOP"
 
 
 def is_hidden_protocol_line(stripped: str) -> bool:
@@ -60,13 +55,12 @@ def extract_user_visible_content(reply: str) -> str:
     - @SPORE:TODO_START ... @SPORE:TODO_END
     - @SPORE:ACTION_SINGLE/SEQUENCE/PARALLEL_START ... END
     - ### RULE_REMINDER
-    - STOP=<自然语言原因>
+    - @SPORE:STOP
     - @SPORE:CONTENT_END
 
     所有可见来源都会展示并拼接：
     1. 协议块外的非空内容
     2. 所有 REPLY 块内容
-    3. REPLY 块内容
 
     完整回复复用 ProtocolManager 的统一解析结果；不完整流式快照再走下方的
     容错提取，避免尚未闭合的 REPLY 块在生成过程中不可见。
@@ -97,7 +91,7 @@ def extract_user_visible_content(reply: str) -> str:
                 has_reply_block = True
                 current_segment = []
             continue
-        if stripped == "@SPORE:REPLY_END" or is_stop_reason_line(stripped):
+        if stripped == "@SPORE:REPLY_END" or is_stop_line(stripped):
             reply_segments.append("\n".join(current_segment).strip())
             current_segment = None
             continue
@@ -111,17 +105,7 @@ def extract_user_visible_content(reply: str) -> str:
     if has_reply_block:
         return "\n\n".join(seg for seg in reply_segments if seg)
 
-    # 无 REPLY 时，所有内容已在 REPLY 块中显示
-    try:
-        from base.text_protocol import extract_stop_blocks
-        stop_blocks, stop_err = extract_stop_blocks(reply)
-        if not stop_err and stop_blocks:
-            reason = (stop_blocks[0].get("content") or "").strip()
-            if reason:
-                return reason
-    except Exception:
-        pass
-
+    # 无 REPLY 块时，从协议块外内容中提取可见文本
     for line in lines:
         stripped = line.strip()
 

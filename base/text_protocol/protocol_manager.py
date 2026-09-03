@@ -85,7 +85,6 @@ def extract_stop_blocks(text: str) -> tuple[List[Dict[str, Any]], Optional[str]]
             "end": end_pos,
             "content_start": stop_pos,
             "content_end": end_pos,
-            "content": "",
             "raw": text[stop_pos:end_pos],
         })
     return blocks, None
@@ -127,7 +126,6 @@ class ParsedResponse:
     reply_content: Optional[str] = None
     action: Optional[ParsedAction] = None
     action_block: Optional[ParsedActionBlock] = None
-    final_content: Optional[str] = None
     raw_response: str = ""
     protocol_error: Optional[ProtocolError] = None
     # Soft protocol notice (e.g. content outside blocks). Not a hard failure.
@@ -439,8 +437,8 @@ class ProtocolManager:
             final_spans.append((stop_block["start"], stop_block["end"]))
         stop_spans = list(final_spans)
 
-        # 多个 STOP 宽松兜底：不报错，同 REPLY 逻辑拼接内容。
-        # content_after_stop 检查仅对最后一个 STOP 之后的文本生效。
+        # 新协议 STOP 是纯终止符（无参数），只需检测第一个即可。
+        # content_after_stop 检查：STOP 之后不应有其他内容。
         if final_spans and response[final_spans[-1][1]:].strip():
             return blocks, ProtocolError(
                 "content_after_stop",
@@ -665,7 +663,6 @@ class ProtocolManager:
                 response_type="final",
                 prefix_text=display_content,
                 reply_content=display_content,
-                final_content=final_content,
                 raw_response=response,
                 protocol_warning=protocol_warning,
                 truncated=is_truncated,

@@ -1378,8 +1378,8 @@ class ConversationLoop:
                         user_query=self._task_start_query,
                         # ParsedResponse 上没有 stop_reason_text 字段，写它会在
                         # display_text 为空时抛 AttributeError（被下面的 except 吞掉，
-                        # 表现为这条经验静默丢失）。终止原因的正确字段是 final_content。
-                        output_data={"final_reply": display_text or parsed.final_content or ""},
+                        # 表现为这条经验静默丢失）。
+                        output_data={"final_reply": display_text or parsed.reply_content or ""},
                         outcome="success",
                         tool_calls=tool_calls,
                         salience=0.7  # 默认显著性

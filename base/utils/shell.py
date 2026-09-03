@@ -139,9 +139,10 @@ def _attach_hints(result: Dict[str, Any], hints: List[str]) -> Dict[str, Any]:
 
 def _terminate_process_tree(proc: subprocess.Popen, timeout: float = 2.0) -> None:
     """
-    终止PowerShell进程及其所有子进程（进程树）
+    终止进程及其所有子进程（进程树）
 
-    使用 taskkill /F /T 强制终止整个进程树，确保所有子进程都被清理。
+    Windows: 使用 taskkill /F /T 终止整个进程树
+    其他平台: 使用 proc.kill()
 
     Args:
         proc: subprocess.Popen 进程对象
@@ -152,28 +153,32 @@ def _terminate_process_tree(proc: subprocess.Popen, timeout: float = 2.0) -> Non
         return
 
     # Windows: 使用 taskkill /F /T 终止整个进程树
-    # /F = 强制终止
-    # /T = 终止进程树（包括所有子进程）
-    # /PID = 指定进程ID
-    try:
-        subprocess.run(
-            ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-            capture_output=True,
-            timeout=5,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-        )
-        # 等待进程真正终止
+    if os.name == "nt":
+        # /F = 强制终止
+        # /T = 终止进程树（包括所有子进程）
+        # /PID = 指定进程ID
         try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            pass
-    except Exception:
-        # 如果 taskkill 失败，回退到直接 kill
-        try:
-            proc.kill()
-            proc.wait(timeout=timeout)
+            subprocess.run(
+                ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+                capture_output=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+            # 等待进程真正终止
+            try:
+                proc.wait(timeout=timeout)
+                return  # Windows taskkill 成功，直接返回
+            except subprocess.TimeoutExpired:
+                pass
         except Exception:
-            pass
+            pass  # taskkill 失败，继续到通用逻辑
+
+    # 通用逻辑：Linux/macOS 或 Windows taskkill 失败时
+    try:
+        proc.kill()
+        proc.wait(timeout=timeout)
+    except Exception:
+        pass
 
 
 def _is_powershell_progress_noise(stderr: str) -> bool:

@@ -1313,24 +1313,61 @@ export function HtmlPreview({ content, title, variant = 'message', artifactId: a
   }, [agentAssessQuestion]);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+  const toggleFullscreen = async () => {
+    if (!containerRef.current) return;
+
+    try {
+      if (!isFullscreen) {
+        // 进入全屏
+        if (containerRef.current.requestFullscreen) {
+          await containerRef.current.requestFullscreen();
+        } else if ((containerRef.current as any).webkitRequestFullscreen) {
+          await (containerRef.current as any).webkitRequestFullscreen();
+        }
+      } else {
+        // 退出全屏
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if ((document as any).webkitExitFullscreen) {
+          await (document as any).webkitExitFullscreen();
+        }
+      }
+    } catch (error) {
+      console.error('Fullscreen toggle failed:', error);
+    }
   };
 
+  // 监听全屏状态变化
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isCurrentlyFullscreen = Boolean(
+        document.fullscreenElement || (document as any).webkitFullscreenElement
+      );
+      setIsFullscreen(isCurrentlyFullscreen);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
   return (
-    <div className={`${isFullscreen ? 'fixed inset-0 z-50 bg-spore-bg' : sizeClass} relative max-w-full`}>
+    <div ref={containerRef} className={`${isFullscreen ? 'h-screen w-screen' : sizeClass} relative max-w-full bg-spore-bg`}>
       {/* 全屏按钮 */}
-      {frontendAgentEnabled && (
-        <button
-          type="button"
-          className="absolute right-3 top-3 z-30 rounded border border-spore-border bg-spore-card px-2 py-1 text-xs text-spore-text shadow-md hover:bg-spore-hover"
-          onClick={toggleFullscreen}
-          title={isFullscreen ? t('chatPanel.htmlPreview.exitFullscreen') : t('chatPanel.htmlPreview.enterFullscreen')}
-        >
-          {isFullscreen ? '退出全屏' : '全屏'}
-        </button>
-      )}
+      <button
+        type="button"
+        className="absolute right-3 top-3 z-30 rounded border border-spore-border bg-spore-card px-2 py-1 text-xs text-spore-text shadow-md hover:bg-spore-hover"
+        onClick={() => { void toggleFullscreen(); }}
+        title={isFullscreen ? t('chatPanel.htmlPreview.exitFullscreen') : t('chatPanel.htmlPreview.enterFullscreen')}
+      >
+        {isFullscreen ? '退出全屏' : '全屏'}
+      </button>
       <iframe
         ref={frameRef}
         className={`block h-full w-full rounded-md border border-spore-border/40 bg-white ${interactionFrozen ? 'pointer-events-none select-none' : ''}`}

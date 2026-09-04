@@ -168,7 +168,11 @@ PROTOCOL_TEMPLATE = """
 
 **CONTENT块（原始内容语法）**
 
-当参数值包含多行文本、代码、特殊字符、转义地狱时，使用CONTENT块传递。块内的所有内容原样保留，不会被解析器识别为协议指令或进行转义处理。类似于Python的raw string（`r""`），解决参数的转义问题。
+CONTENT 是参数的原文通道。块内内容原样交给工具，不做转义，不做任何特殊处理。
+
+块内的所有内容原样保留，不会被解析器识别为协议指令或进行转义处理。类似于Python的raw string（`r""`），解决参数的转义问题。
+
+`param=value` 的值止于当前行末尾。值里包含换行时，只能用 CONTENT。
 
 格式：
 
@@ -232,15 +236,14 @@ hello
 
 当任务尚未结束时使用。
 
-允许以下两种形式：
+允许以下形式：
 
-- `REPLY`
-- `REPLY` + 一个 `{action_block_names}`
+- `REPLY`(可选) + 一个 `{action_block_names}`
+
 
 规则：
 
 - `REPLY` 可进行说明当前进展或下一步 或 普通回复/总结
-- `{action_block_names}` 为可选；仅在当前需要执行工具或动作时输出
 - 同一轮最多只能包含一个 `{action_block_names}` 块
 - 不得输出 `@SPORE:STOP`
 
@@ -492,6 +495,12 @@ class ProtocolManager:
                 if marker == "@SPORE:CONTENT_END":
                     in_content = False
                 continue
+
+            # 处理REPLY块：块内只识别@SPORE:REPLY_END，其他协议标记视为普通文本
+            if stack and stack[-1]["name"] == "REPLY":
+                if marker != "@SPORE:REPLY_END":
+                    # 在REPLY块内遇到其他协议标记，忽略（视为文本内容）
+                    continue
 
             if marker not in self.VALID_MARKERS:
                 return blocks, ProtocolError("unknown_protocol_block", f"未知 Spore 标识符: {marker}"), ""

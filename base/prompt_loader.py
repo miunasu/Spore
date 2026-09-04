@@ -193,13 +193,18 @@ def collect_subagents_docs() -> str:
     return "\n\n".join(docs)
 
 
-def load_system_prompt(prompt_file: str = None) -> Optional[str]:
+def load_system_prompt(prompt_file: str = None, working_dir: Optional[str] = None) -> Optional[str]:
     """
     组合技能说明并渲染 prompt.md：
     1) 扫描 skills/ 下所有 .md 文件
     2) 提取每个文档的 `## 功能` 段落
     3) 以 md 文件名作为新标题，拼接为统一段落
     4) 读取根目录 prompt.md，将 {skills} 替换为拼接内容
+
+    Args:
+        prompt_file: prompt 文件名（可选）
+        working_dir: 工作目录（用于显示目录内容，None表示使用项目根目录）
+
     返回渲染后的字符串；若失败，返回 None。
     """
     # 资源目录（prompt、skills 等）
@@ -244,8 +249,16 @@ def load_system_prompt(prompt_file: str = None) -> Optional[str]:
 
     dir_output = ""
     try:
-        # execute_command 会自动使用智能编码检测（Windows优先GBK，Linux优先UTF-8）
-        dir_result = execute_command("dir")
+        # 确定目标目录
+        target_dir = working_dir if working_dir else project_root
+
+        # 使用PowerShell原生命令+Select-Object避免中文表头导致的GBK/UTF-8混码
+        # Get-ChildItem的默认输出包含"目录:"等中文表头，在GBK->UTF-8误解时变成乱码
+        # Select-Object输出纯属性，避免中文表头
+        dir_result = execute_command(
+            "Get-ChildItem | Select-Object Mode, LastWriteTime, Length, Name | Format-Table -AutoSize",
+            working_dir=target_dir
+        )
         if isinstance(dir_result, dict):
             if dir_result.get("ok") and dir_result.get("stdout"):
                 dir_output = dir_result.get("stdout", "")
@@ -266,6 +279,11 @@ def load_system_prompt(prompt_file: str = None) -> Optional[str]:
         dir_output = f"dir 命令执行异常: {exc}"
 
     dir_output = dir_output.strip()
+    # 在输出前添加当前工作目录路径信息
+    if working_dir:
+        dir_output = f"Working Directory: {working_dir}\n\n{dir_output}"
+    else:
+        dir_output = f"Working Directory: {project_root}\n\n{dir_output}"
     rendered = rendered.replace("{dir}", dir_output)
     
     # 替换TODO占位符

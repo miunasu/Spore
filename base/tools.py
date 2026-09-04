@@ -139,7 +139,7 @@ TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "type": "function",
         "function": {
             "name": "execute_command",
-            "description": "在系统中执行PowerShell命令并返回其输出。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。\n\n【多行PowerShell】使用@SPORE:CONTENT格式传参，直接写多行PS代码。示例：\ncommand=@SPORE:CONTENT_START\nNew-Item -Path C:/temp -ItemType Directory\nGet-ChildItem C:/temp\n@SPORE:CONTENT_END\n\n【多行Python】使用@SPORE:CONTENT格式传参，内容为PowerShell here-string管道给python。示例：\ncommand=@SPORE:CONTENT_START\n@'\nimport os\nprint(os.getcwd())\n'@ | python -\n@SPORE:CONTENT_END",
+            "description": "在系统中执行PowerShell命令并返回其输出。不要用本工具创建文件、写入、追加或修改文件内容，这类操作会被拦截。命令通过-EncodedCommand传递给PowerShell（自动Base64编码），支持所有PowerShell语法。\n\n【多行PowerShell】使用@SPORE:CONTENT格式传参，直接写多行PS代码。示例：\ncommand=@SPORE:CONTENT_START\nNew-Item -Path C:/temp -ItemType Directory\nGet-ChildItem C:/temp\n@SPORE:CONTENT_END\n\n【多行Python】使用@SPORE:CONTENT格式传参，内容为PowerShell here-string管道给python。示例：\ncommand=@SPORE:CONTENT_START\n@'\nimport os\nprint(os.getcwd())\n'@ | python -\n@SPORE:CONTENT_END",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -639,6 +639,17 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
             raise RuntimeError("IPC管理器未初始化")
 
         manager = AgentProcessManager(ipc_manager=ipc_manager, monitor_queue=None)
+
+        # 获取父agent的working_dir，用于子agent继承
+        parent_working_dir = None
+        try:
+            from .session_context import get_current_conversation_state
+            parent_state = get_current_conversation_state()
+            if parent_state:
+                parent_working_dir = getattr(parent_state, 'working_dir', None)
+        except Exception:
+            pass  # 如果无法获取，使用None
+
         tasks = []
         seen_task_ids = set()
         for task_data in tasks_data:
@@ -646,6 +657,9 @@ def handle_multi_agent_dispatch(args: Dict[str, Any]) -> str:
             if working_dir:
                 from .utils.path_validator import normalize_path_for_pathlib
                 working_dir = normalize_path_for_pathlib(working_dir)
+            elif parent_working_dir:
+                # 如果LLM没有指定working_dir，自动继承父agent的working_dir
+                working_dir = parent_working_dir
             task_id = str(task_data.get("task_id", "")).strip()
             if not task_id:
                 raise ValueError("每个子Agent任务都必须提供非空 task_id")

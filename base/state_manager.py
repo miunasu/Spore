@@ -14,25 +14,28 @@ class ConversationState:
     def __init__(self):
         # 对话历史
         self.messages: List[Dict[str, str]] = []
-        
+
         # 临时消息（savemode使用）
         self.temp_msg: Optional[List[Dict[str, str]]] = None
-        
+
         # save mode标志
         self.save_mode: bool = False
-        
+
         # 答案状态
         self.last_answer: str = ""
         self.current_answer: str = ""
-        
+
         # 用户消息计数器
         self.user_message_count: int = 0
-        
+
         # LLM 回复计数器（用于规则提醒）
         self.llm_reply_count: int = 0
 
         # 中断世代。每次用户中断递增，用于丢弃旧请求返回。
         self.interrupt_epoch: int = 0
+
+        # 动态工作目录（会话级别，None表示使用项目根目录）
+        self.working_dir: Optional[str] = None
         
         # Token 统计（Desktop 模式专用）
         self.last_input_tokens: int = 0  # 上次请求的完整输入 context

@@ -8,7 +8,10 @@ currently selected UI session.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator, Optional
+from typing import Iterator, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .state_manager import ConversationState
 
 
 _conversation_id: ContextVar[Optional[str]] = ContextVar(
@@ -21,6 +24,10 @@ _task_source: ContextVar[Optional[str]] = ContextVar(
 )
 _task_epoch: ContextVar[Optional[int]] = ContextVar(
     "spore_task_epoch",
+    default=None,
+)
+_conversation_state: ContextVar[Optional["ConversationState"]] = ContextVar(
+    "spore_conversation_state",
     default=None,
 )
 
@@ -48,6 +55,16 @@ def get_current_task_source() -> Optional[str]:
 def get_current_task_epoch() -> Optional[int]:
     """Return the interrupt epoch captured when the current task was accepted."""
     return _task_epoch.get()
+
+
+def get_current_conversation_state() -> Optional["ConversationState"]:
+    """Return the conversation state bound to the current execution context."""
+    return _conversation_state.get()
+
+
+def set_current_conversation_state(state: Optional["ConversationState"]):
+    """Set the current conversation state and return the token needed to reset it."""
+    return _conversation_state.set(state)
 
 
 @contextmanager

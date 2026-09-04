@@ -697,8 +697,8 @@ class ConversationLoop:
         # 每次请求前重新加载 system_prompt，确保动态内容（TODO、角色、目录等）是最新的
         from .prompt_loader import load_system_prompt
         from .tools import TOOL_DEFINITIONS
-        
-        base_prompt = load_system_prompt()
+
+        base_prompt = load_system_prompt(working_dir=self.state.working_dir)
         current_tool_names = self._get_current_tool_names()
 
         # 检查是否需要注入规则提醒（防止长对话遗忘）
@@ -877,27 +877,33 @@ class ConversationLoop:
                     pass
             timed_out = False
 
-            if tool_name in no_timeout_tools:
-                tool_result = handler(args)
-            else:
-                tool_timeout = self.config.tool_execution_timeout
-                current_agent_id = get_current_agent_id() or "main_agent"
+            # 设置当前conversation_state到context，供工具使用（如multi_agent_dispatch继承working_dir）
+            from .session_context import set_current_conversation_state, _conversation_state
+            state_token = set_current_conversation_state(self.state)
+            try:
+                if tool_name in no_timeout_tools:
+                    tool_result = handler(args)
+                else:
+                    tool_timeout = self.config.tool_execution_timeout
+                    current_agent_id = get_current_agent_id() or "main_agent"
 
-                parent_context = contextvars.copy_context()
+                    parent_context = contextvars.copy_context()
 
-                def execute_with_agent_id():
-                    set_current_agent_id(current_agent_id)
-                    return parent_context.run(handler, args)
+                    def execute_with_agent_id():
+                        set_current_agent_id(current_agent_id)
+                        return parent_context.run(handler, args)
 
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(execute_with_agent_id)
-                    try:
-                        tool_result = future.result(timeout=tool_timeout)
-                    except FuturesTimeoutError:
-                        future.cancel()
-                        timed_out = True
-                        tool_result = None
-                        log_tool_error(tool_name, "Tool execution timeout", args)
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(execute_with_agent_id)
+                        try:
+                            tool_result = future.result(timeout=tool_timeout)
+                        except FuturesTimeoutError:
+                            future.cancel()
+                            timed_out = True
+                            tool_result = None
+                            log_tool_error(tool_name, "Tool execution timeout", args)
+            finally:
+                _conversation_state.reset(state_token)
 
             if tool_result is None:
                 if timed_out:
@@ -905,6 +911,10 @@ class ConversationLoop:
                 return {"status": "interrupted", "tool_name": tool_name, "arguments": args, "error": f"Tool interrupted: {tool_name}"}
 
             self._log_tool_result(tool_name, tool_result, args)
+
+            # 工具执行成功后，自动更新工作目录
+            self._auto_update_working_dir(tool_name, args)
+
             return {"status": "success", "tool_name": tool_name, "arguments": args, "result": tool_result}
         except Exception as e:
             log_tool_error(tool_name, f"Tool execution failed: {str(e)}", args, e)
@@ -1121,7 +1131,36 @@ class ConversationLoop:
     def _log_tool_result(self, tool_name: str, tool_result: str, args: Dict[str, Any]) -> None:
         """记录工具执行结果日志"""
         log_tool_result(tool_name, tool_result, args)
-    
+
+    def _auto_update_working_dir(self, tool_name: str, args: Dict[str, Any]) -> None:
+        """
+        根据工具调用自动更新工作目录
+
+        Args:
+            tool_name: 工具名称
+            args: 工具参数
+        """
+        import os
+
+        # 1. execute_command 的 working_dir 参数
+        if tool_name == "execute_command":
+            wd = args.get("working_dir")
+            if wd and os.path.isdir(wd):
+                self.state.working_dir = os.path.abspath(wd)
+                return
+
+        # 2. file 工具的 path/file_path 参数（排除 edit 工具）
+        if tool_name == "file":
+            op_type = args.get("type")
+            # delete 操作可能是多个路径，跳过
+            # edit 操作是精确修改，不需要切换目录
+            if op_type not in ("delete", "edit"):
+                path = args.get("file_path") or args.get("path")
+                if path:
+                    parent = os.path.dirname(os.path.abspath(path))
+                    if os.path.isdir(parent):
+                        self.state.working_dir = parent
+
     def _update_todo_from_response(self, reply: str) -> None:
         """
         从 LLM 响应中解析 TODO 块并更新任务状态
